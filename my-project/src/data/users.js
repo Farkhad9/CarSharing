@@ -1,0 +1,60 @@
+import { USER_ROLES } from "./statuses";
+
+export const users = [
+  {
+    id: "user-001",
+    role: USER_ROLES.RIDER,
+    fullName: "Leyla Mammadova",
+    email: "leyla.mammadova@example.com",
+    phone: "+994501112233",
+    verificationStatus: "verified",
+    balance: {
+      amount: 48.75,
+      currency: "AZN",
+      pendingHold: 0,
+    },
+    activeReservationId: null,
+    activeTripId: null,
+  },
+  {
+    id: "user-002",
+    role: USER_ROLES.RIDER,
+    fullName: "Rashad Aliyev",
+    email: "rashad.aliyev@example.com",
+    phone: "+994552224466",
+    verificationStatus: "verified",
+    balance: {
+      amount: 31.2,
+      currency: "AZN",
+      pendingHold: 4,
+    },
+    activeReservationId: "trip-002",
+    activeTripId: null,
+  },
+  {
+    id: "user-003",
+    role: USER_ROLES.RIDER,
+    fullName: "Nigar Huseynli",
+    email: "nigar.huseynli@example.com",
+    phone: "+994703335577",
+    verificationStatus: "verified",
+    balance: {
+      amount: 64.4,
+      currency: "AZN",
+      pendingHold: 0,
+    },
+    activeReservationId: null,
+    activeTripId: "trip-003",
+  },
+  {
+    id: "admin-001",
+    role: USER_ROLES.ADMIN,
+    fullName: "ElectroStreet Operations",
+    email: "ops@electrostreet.example",
+    phone: "+994123000000",
+    verificationStatus: "internal",
+    balance: null,
+    activeReservationId: null,
+    activeTripId: null,
+  },
+];
