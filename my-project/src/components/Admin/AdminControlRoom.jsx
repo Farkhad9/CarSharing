@@ -141,25 +141,34 @@ const parkingZones = [
 const pricingRulesSeed = [
   {
     id: "rule-friday-center",
-    name: "Friday rush in Center",
+    name: "Пятничный час пик в центре",
+    icon: FiClock,
+    priceLabel: "x1.25",
     zone: "Central",
-    condition: "Fri 18:00-21:00, fewer than 3 available cars",
+    condition: "Пятница 18:00-21:00, меньше 3 свободных машин",
+    description: "Повышает цену в центре в самый загруженный вечер недели, когда спрос высокий, а свободных машин почти нет.",
     multiplier: 1.25,
     enabled: true,
   },
   {
     id: "rule-low-supply",
-    name: "Low supply near Boulevard",
+    name: "Мало машин у бульвара",
+    icon: FiTrendingUp,
+    priceLabel: "x1.15",
     zone: "Seaside",
-    condition: "Available fleet below 20%",
+    condition: "Свободный парк ниже 20%",
+    description: "Включается у бульвара, когда рядом мало доступных автомобилей и нужно сбалансировать спрос.",
     multiplier: 1.15,
     enabled: true,
   },
   {
     id: "rule-night",
-    name: "Night comfort tariff",
+    name: "Ночной комфорт",
+    icon: FiNavigation,
+    priceLabel: "x0.92",
     zone: "All zones",
     condition: "00:00-06:00",
+    description: "Снижает цену ночью для спокойных поездок, когда спрос ниже и машины простаивают.",
     multiplier: 0.92,
     enabled: false,
   },
@@ -178,6 +187,13 @@ const staffSeed = [
     name: "Ayan Karimova",
     role: "KYC Lead",
     kycRating: 9.4,
+    ordersCompleted: 46,
+    avgCompletionMinutes: 7.8,
+    rating: 9.6,
+    complaints: 1,
+    praises: 14,
+    activeShiftHours: 7.4,
+    weeklyChange: 12,
     applicationsProcessed: [
       { id: "kyc-101", title: "Leyla Mammadova", result: "Паспорт и права подтверждены", time: "09:18" },
       { id: "kyc-102", title: "Rashad Aliyev", result: "Запрошено повторное фото паспорта", time: "10:05" },
@@ -195,6 +211,13 @@ const staffSeed = [
     name: "Murad Aliyev",
     role: "Dispatcher",
     kycRating: 8.1,
+    ordersCompleted: 39,
+    avgCompletionMinutes: 10.5,
+    rating: 8.7,
+    complaints: 3,
+    praises: 9,
+    activeShiftHours: 6.9,
+    weeklyChange: 4,
     applicationsProcessed: [
       { id: "kyc-201", title: "Gunel Rzayeva", result: "Анкета одобрена после проверки адреса", time: "09:35" },
       { id: "kyc-202", title: "Emin Safarov", result: "Проверка перенесена на ручную модерацию", time: "12:10" },
@@ -212,6 +235,13 @@ const staffSeed = [
     name: "Sabina Rustamli",
     role: "Support",
     kycRating: 8.8,
+    ordersCompleted: 36,
+    avgCompletionMinutes: 9.2,
+    rating: 9.1,
+    complaints: 2,
+    praises: 12,
+    activeShiftHours: 7.1,
+    weeklyChange: 8,
     applicationsProcessed: [
       { id: "kyc-301", title: "Kamran Nabiyev", result: "Фото прав принято, профиль активирован", time: "10:16" },
       { id: "kyc-302", title: "Laman Aliyeva", result: "Отклонено из-за просроченных прав", time: "12:58" },
@@ -229,6 +259,13 @@ const staffSeed = [
     role: "Полевой сотрудник",
     specialty: "Мойка автомобилей",
     kycRating: 7.6,
+    ordersCompleted: 28,
+    avgCompletionMinutes: 18.6,
+    rating: 8.4,
+    complaints: 2,
+    praises: 8,
+    activeShiftHours: 6.2,
+    weeklyChange: -3,
     applicationsProcessed: [
       { id: "kyc-401", title: "Осмотр Tesla Model 3", result: "Фото салона добавлены к карточке авто", time: "09:40" },
       { id: "kyc-402", title: "Осмотр Chevrolet Cruze", result: "Отмечена готовность после мойки", time: "13:05" },
@@ -245,6 +282,13 @@ const staffSeed = [
     role: "Полевой сотрудник",
     specialty: "Ремонт и отвоз сломанных автомобилей в сервис",
     kycRating: 7.9,
+    ordersCompleted: 24,
+    avgCompletionMinutes: 27.4,
+    rating: 8.6,
+    complaints: 1,
+    praises: 7,
+    activeShiftHours: 6.8,
+    weeklyChange: 6,
     applicationsProcessed: [
       { id: "kyc-501", title: "Осмотр Kia EV6", result: "Зафиксирована техническая проблема замка", time: "10:22" },
       { id: "kyc-502", title: "Осмотр RR", result: "Проверена телематика и сигнал GPS", time: "14:05" },
@@ -261,6 +305,13 @@ const staffSeed = [
     role: "Полевой сотрудник",
     specialty: "Отвоз автомобилей на зарядку",
     kycRating: 8.3,
+    ordersCompleted: 31,
+    avgCompletionMinutes: 22.1,
+    rating: 8.9,
+    complaints: 1,
+    praises: 10,
+    activeShiftHours: 7.6,
+    weeklyChange: 10,
     applicationsProcessed: [
       { id: "kyc-601", title: "Проверка Volkswagen ID.4", result: "Подтвержден низкий заряд перед перегоном", time: "09:55" },
       { id: "kyc-602", title: "Проверка Tesla Model 3", result: "Запланирован перегон к станции CCS2", time: "15:18" },
@@ -284,6 +335,19 @@ const adminProfiles = {
     name: "Ayan Karimova",
   },
 };
+
+const ADMIN_ACCOUNTS = [
+  {
+    role: "admin",
+    login: "admin",
+    password: "admin123",
+  },
+  {
+    role: "super-admin",
+    login: "superadmin",
+    password: "super123",
+  },
+];
 
 const formatSenderTitle = ({ senderRole, senderName }) => {
   const profile = adminProfiles[senderRole];
@@ -442,6 +506,8 @@ const ticketsSeed = [
     id: "ticket-001",
     userId: "user-002",
     vehicleId: "ev-002",
+    status: "open",
+    updatedAt: "2026-06-16T10:28:00+04:00",
     subject: "Не открывается багажник",
     messages: ["Пробую открыть из приложения, но багажник не реагирует.", "Проверьте, пожалуйста, удаленно."],
   },
@@ -449,17 +515,19 @@ const ticketsSeed = [
     id: "ticket-002",
     userId: "user-003",
     vehicleId: "ev-003",
+    status: "waiting",
+    updatedAt: "2026-06-16T09:55:00+04:00",
     subject: "Не вставляется зарядный кабель",
     messages: ["Кабель заблокирован в станции, аренда активна."],
   },
 ];
 
 const maintenanceSeed = [
-  { vehicleId: "ev-001", serviceInKm: 480, batteryHealth: 91, profitability: 78, consumption: 16.8 },
-  { vehicleId: "ev-002", serviceInKm: 820, batteryHealth: 88, profitability: 63, consumption: 18.2 },
-  { vehicleId: "ev-003", serviceInKm: 310, batteryHealth: 84, profitability: 82, consumption: 20.6 },
-  { vehicleId: "ev-004", serviceInKm: 150, batteryHealth: 79, profitability: 41, consumption: 22.1 },
-  { vehicleId: "ev-005", serviceInKm: 610, batteryHealth: 93, profitability: 58, consumption: 7.9 },
+  { vehicleId: "ev-001", serviceInKm: 480, batteryHealth: 91, profitability: 78, consumption: 16.8, lastService: "2026-05-28", nextService: "через 480 км", odometerKm: 18420, maintenanceStatus: "healthy" },
+  { vehicleId: "ev-002", serviceInKm: 820, batteryHealth: 88, profitability: 63, consumption: 18.2, lastService: "2026-05-19", nextService: "через 820 км", odometerKm: 22190, maintenanceStatus: "healthy" },
+  { vehicleId: "ev-003", serviceInKm: 310, batteryHealth: 84, profitability: 82, consumption: 20.6, lastService: "2026-06-02", nextService: "через 310 км", odometerKm: 26740, maintenanceStatus: "needs_service" },
+  { vehicleId: "ev-004", serviceInKm: 150, batteryHealth: 79, profitability: 41, consumption: 22.1, lastService: "2026-05-12", nextService: "через 150 км", odometerKm: 31980, maintenanceStatus: "needs_service" },
+  { vehicleId: "ev-005", serviceInKm: 610, batteryHealth: 93, profitability: 58, consumption: 7.9, lastService: "2026-06-08", nextService: "через 610 км", odometerKm: 14260, maintenanceStatus: "in_service" },
 ];
 
 const kycProfilesSeed = [
@@ -638,12 +706,110 @@ const ZoneDrawEvents = ({ enabled, onAddPoint }) => {
   return null;
 };
 
+const AdminLogin = ({ onLogin }) => {
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+
+    const account = ADMIN_ACCOUNTS.find(
+      (item) => item.login === login.trim() && item.password === password
+    );
+
+    if (!account) {
+      setError("Неверный логин или пароль.");
+      return;
+    }
+
+    const session = {
+      role: account.role,
+      login: account.login,
+      signedInAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem("electroStreetAdminSession", JSON.stringify(session));
+    onLogin(session);
+  };
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#08111f] px-4 py-8 text-slate-100">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.04] p-7 shadow-2xl shadow-black/30"
+      >
+        <div className="mb-7">
+          <p className="text-xs font-black uppercase tracking-[0.24em] text-red-300">ElectroStreet Admin</p>
+          <h1 className="mt-2 text-2xl font-black tracking-tight text-white">Вход в панель</h1>
+          <p className="mt-2 text-sm font-semibold text-slate-400">
+            Введите отдельный логин и пароль администратора.
+          </p>
+        </div>
+
+        <label className="grid gap-2 text-sm font-bold text-slate-300">
+          Логин
+          <input
+            type="text"
+            value={login}
+            onChange={(event) => {
+              setLogin(event.target.value);
+              setError("");
+            }}
+            className="rounded-xl border border-white/10 bg-[#0f1a2b] px-4 py-3 font-semibold text-white outline-none transition placeholder:text-slate-600 focus:border-red-400"
+            placeholder="admin или superadmin"
+            autoComplete="username"
+          />
+        </label>
+
+        <label className="mt-4 grid gap-2 text-sm font-bold text-slate-300">
+          Пароль
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => {
+              setPassword(event.target.value);
+              setError("");
+            }}
+            className="rounded-xl border border-white/10 bg-[#0f1a2b] px-4 py-3 font-semibold text-white outline-none transition placeholder:text-slate-600 focus:border-red-400"
+            placeholder="Введите пароль"
+            autoComplete="current-password"
+          />
+        </label>
+
+        {error && (
+          <div className="mt-4 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-200">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          className="mt-6 w-full rounded-xl bg-red-500 px-5 py-3 text-sm font-black uppercase tracking-wide text-white transition hover:bg-red-600"
+        >
+          Войти
+        </button>
+      </form>
+    </main>
+  );
+};
+
 const AdminControlRoom = () => {
+  const [adminSession, setAdminSession] = useState(() => {
+    try {
+      const storedSession = localStorage.getItem("electroStreetAdminSession");
+      const parsedSession = storedSession ? JSON.parse(storedSession) : null;
+      return ADMIN_ACCOUNTS.some((account) => account.role === parsedSession?.role) ? parsedSession : null;
+    } catch {
+      return null;
+    }
+  });
   const [liveVehicles, setLiveVehicles] = useState(() => vehicles.map(makeLiveVehicle));
+  const [managedChargingStations, setManagedChargingStations] = useState(chargingStations);
   const [managedZones, setManagedZones] = useState(parkingZones);
   const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[2]?.id || vehicles[0]?.id);
   const [focusTarget, setFocusTarget] = useState(null);
-  const [adminRole, setAdminRole] = useState("super-admin");
+  const [adminRole, setAdminRole] = useState(() => adminSession?.role || "admin");
   const [activeSection, setActiveSection] = useState("control");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -654,26 +820,61 @@ const AdminControlRoom = () => {
   const [draftZoneType, setDraftZoneType] = useState("allowed");
   const [draftZonePoints, setDraftZonePoints] = useState([]);
   const [pricingRules, setPricingRules] = useState(pricingRulesSeed);
+  const [selectedPricingRuleId, setSelectedPricingRuleId] = useState(null);
   const [penaltySearchQuery, setPenaltySearchQuery] = useState("");
   const [penaltyTargetId, setPenaltyTargetId] = useState(null);
   const [penaltyReasonId, setPenaltyReasonId] = useState(penaltyReasons[0].id);
-  const [pendingPenalty, setPendingPenalty] = useState(null);
+  const [penaltyPeriodStartMs] = useState(() => Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [penalties, setPenalties] = useState([]);
   const [staff, setStaff] = useState(staffSeed);
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
+  const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
   const [incidents, setIncidents] = useState(incidentSeed);
   const [technicians, setTechnicians] = useState(techniciansSeed);
   const [serviceTasks, setServiceTasks] = useState(tasksSeed);
   const [tickets, setTickets] = useState(ticketsSeed);
   const [activeTicketId, setActiveTicketId] = useState(ticketsSeed[0].id);
+  const [ticketSearchQuery, setTicketSearchQuery] = useState("");
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
   const [chatDraft, setChatDraft] = useState("");
   const [adminNotice, setAdminNotice] = useState({ section: null, message: "" });
   const [riderNotifications, setRiderNotifications] = useState([]);
   const [plannedMaintenance, setPlannedMaintenance] = useState([]);
+  const [maintenanceFilter, setMaintenanceFilter] = useState("all");
+  const [chargingDraft, setChargingDraft] = useState({
+    name: "",
+    address: "",
+    chargerType: "CCS2",
+    status: CHARGING_STATION_STATUSES.ONLINE,
+    lat: "",
+    lng: "",
+    pickOnMap: false,
+  });
   const [events, setEvents] = useState(() =>
     vehicles.slice(0, 5).map((vehicle, index) => makeEvent(makeLiveVehicle(vehicle, index), index))
   );
   const [alertsEnabled, setAlertsEnabled] = useState(true);
+
+  useEffect(() => {
+    if (!adminSession) return;
+
+    setAdminRole(adminSession.role);
+    if (
+      adminSession.role === "admin" &&
+      sidebarItems.find((item) => item.id === activeSection)?.superOnly
+    ) {
+      setActiveSection("users");
+      setStatusFilter("all");
+    }
+  }, [activeSection, adminSession]);
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem("electroStreetAdminSession");
+    setAdminSession(null);
+    setAdminRole("admin");
+    setActiveSection("control");
+    setStatusFilter("all");
+  };
 
   const selectedVehicle = useMemo(
     () => liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || liveVehicles[0],
@@ -760,18 +961,18 @@ const AdminControlRoom = () => {
   }, [liveVehicles]);
 
   const stationStats = useMemo(() => {
-    const onlineStations = chargingStations.filter(
+    const onlineStations = managedChargingStations.filter(
       (station) => station.status === CHARGING_STATION_STATUSES.ONLINE
     ).length;
-    const availablePorts = chargingStations.reduce(
+    const availablePorts = managedChargingStations.reduce(
       (sum, station) => sum + station.availablePorts,
       0
     );
-    const totalPorts = chargingStations.reduce((sum, station) => sum + station.totalPorts, 0);
-    const maxPower = Math.max(...chargingStations.map((station) => station.powerKw));
+    const totalPorts = managedChargingStations.reduce((sum, station) => sum + station.totalPorts, 0);
+    const maxPower = Math.max(...managedChargingStations.map((station) => station.powerKw));
 
     return { onlineStations, availablePorts, totalPorts, maxPower };
-  }, []);
+  }, [managedChargingStations]);
 
   useEffect(() => {
     if (!alertsEnabled) return undefined;
@@ -1010,24 +1211,26 @@ const AdminControlRoom = () => {
       return;
     }
 
-    setPendingPenalty({ rider, reason });
-  };
-
-  const confirmPenalty = () => {
-    if (!pendingPenalty) return;
-
     setPenalties((items) => [
       {
         id: `penalty-${items.length + 1}`,
-        user: pendingPenalty.rider.fullName,
-        reason: pendingPenalty.reason.label,
-        amount: pendingPenalty.reason.amount,
+        user: rider.fullName,
+        userEmail: rider.email,
+        reason: reason.label,
+        amount: reason.amount,
         status: "Списано с карты",
+        createdAtIso: new Date().toISOString(),
+        createdAt: new Date().toLocaleString("ru-RU", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
       },
       ...items,
     ]);
-    showAdminNotice(`Списано ${pendingPenalty.reason.amount} AZN: ${pendingPenalty.rider.fullName}`);
-    setPendingPenalty(null);
+    showAdminNotice(`Списано ${reason.amount} AZN: ${rider.fullName}`);
   };
 
   const createServiceTask = (vehicleId) => {
@@ -1051,6 +1254,59 @@ const AdminControlRoom = () => {
       items.map((tech) => (tech.id === assignedTech.id ? { ...tech, status: "busy" } : tech))
     );
     showAdminNotice(`${assignment.type}: назначено ${assignedTech.name}`);
+  };
+
+  const updateChargingDraft = (field, value) => {
+    setChargingDraft((draft) => ({ ...draft, [field]: value }));
+  };
+
+  const setChargingDraftPoint = ([lat, lng]) => {
+    setChargingDraft((draft) => ({
+      ...draft,
+      lat: lat.toFixed(5),
+      lng: lng.toFixed(5),
+      address: draft.address || "Новая точка на карте",
+    }));
+    showAdminNotice("Координаты точки зарядки выбраны на карте", "chargers");
+  };
+
+  const saveChargingPoint = () => {
+    const lat = Number(chargingDraft.lat);
+    const lng = Number(chargingDraft.lng);
+
+    if (!chargingDraft.address.trim() || Number.isNaN(lat) || Number.isNaN(lng)) {
+      showAdminNotice("Укажите адрес и координаты точки зарядки", "chargers");
+      return;
+    }
+
+    const nextStation = {
+      id: `station-custom-${managedChargingStations.length + 1}`,
+      name: chargingDraft.name.trim() || chargingDraft.address.trim(),
+      status: chargingDraft.status,
+      location: {
+        label: chargingDraft.address.trim(),
+        zone: "Custom",
+        lat,
+        lng,
+      },
+      powerKw: chargingDraft.chargerType === "Type2" ? 22 : chargingDraft.chargerType === "CHAdeMO" ? 50 : 120,
+      totalPorts: 2,
+      availablePorts: chargingDraft.status === CHARGING_STATION_STATUSES.ONLINE ? 2 : 0,
+      connectorTypes: [chargingDraft.chargerType],
+    };
+
+    setManagedChargingStations((items) => [nextStation, ...items]);
+    setFocusTarget({ id: nextStation.id, lat, lng });
+    setChargingDraft({
+      name: "",
+      address: "",
+      chargerType: "CCS2",
+      status: CHARGING_STATION_STATUSES.ONLINE,
+      lat: "",
+      lng: "",
+      pickOnMap: false,
+    });
+    showAdminNotice(`Добавлена точка зарядки: ${nextStation.name}`, "chargers");
   };
 
   const advanceTask = (taskId) => {
@@ -1081,7 +1337,7 @@ const AdminControlRoom = () => {
     setTickets((items) =>
       items.map((ticket) =>
         ticket.id === activeTicket.id
-          ? { ...ticket, messages: [...ticket.messages, message] }
+          ? { ...ticket, status: "waiting", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
           : ticket
       )
     );
@@ -1097,11 +1353,26 @@ const AdminControlRoom = () => {
     setTickets((items) =>
       items.map((ticket) =>
         ticket.id === activeTicket.id
-          ? { ...ticket, messages: [...ticket.messages, message] }
+          ? { ...ticket, status: "waiting", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
         : ticket
       )
     );
     showAdminNotice(body);
+  };
+
+  const closeActiveTicket = () => {
+    if (!activeTicket) return;
+
+    const message = createTicketMessage("тикет закрыт оператором поддержки.", "system", "System");
+
+    setTickets((items) =>
+      items.map((ticket) =>
+        ticket.id === activeTicket.id
+          ? { ...ticket, status: "closed", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
+          : ticket
+      )
+    );
+    showAdminNotice(`Тикет закрыт: ${activeTicket.subject}`);
   };
 
   const renderPanelHeader = (eyebrow, title, action = null) => {
@@ -1202,17 +1473,46 @@ const AdminControlRoom = () => {
   );
 
   const renderUsersKycPanel = () => {
+    const statusMeta = {
+      pending: {
+        label: "На модерации",
+        dot: "bg-amber-400",
+        badge: "border-amber-400/35 bg-amber-500/12 text-amber-100",
+        active: "border-amber-400/60 bg-amber-500/15 text-amber-100",
+      },
+      verified: {
+        label: "Активные",
+        dot: "bg-emerald-400",
+        badge: "border-emerald-400/35 bg-emerald-500/12 text-emerald-100",
+        active: "border-emerald-400/60 bg-emerald-500/15 text-emerald-100",
+      },
+      blocked: {
+        label: "Заблокированные",
+        dot: "bg-red-400",
+        badge: "border-red-400/35 bg-red-500/12 text-red-100",
+        active: "border-red-400/60 bg-red-500/15 text-red-100",
+      },
+    };
+    const statusCounts = kycRows.reduce(
+      (acc, row) => {
+        acc[row.kyc.status] = (acc[row.kyc.status] || 0) + 1;
+        return acc;
+      },
+      { all: kycRows.length, pending: 0, verified: 0, blocked: 0 }
+    );
     const tabItems = [
-      ["all", "Все"],
-      ["pending", "На модерации"],
-      ["verified", "Активные"],
-      ["blocked", "Заблокированные"],
+      { id: "all", label: "Все", count: statusCounts.all },
+      ...Object.entries(statusMeta).map(([id, meta]) => ({
+        id,
+        label: meta.label,
+        count: statusCounts[id] || 0,
+      })),
     ];
-
-    const statusStyles = {
-      pending: "border-amber-400/30 bg-amber-500/10 text-amber-200",
-      verified: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
-      blocked: "border-red-400/30 bg-red-500/10 text-red-200",
+    const getStatusMeta = (status) => statusMeta[status] || {
+      label: status,
+      dot: "bg-slate-400",
+      badge: "border-white/10 bg-white/[0.06] text-slate-300",
+      active: "border-white/20 bg-white/[0.08] text-white",
     };
 
     return (
@@ -1226,24 +1526,43 @@ const AdminControlRoom = () => {
         )}
 
         <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 p-5">
-          <div className="flex gap-2 overflow-x-auto">
-            {tabItems.map(([id, label]) => (
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {tabItems.map((item) => {
+              const meta = getStatusMeta(item.id);
+              const activeClass = item.id === "all"
+                ? "border-red-400/60 bg-red-500/15 text-white"
+                : meta.active;
+
+              return (
               <button
-                key={id}
+                key={item.id}
                 type="button"
-                onClick={() => setKycFilter(id)}
-                className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black ${
-                  kycFilter === id ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300 hover:bg-white/[0.09]"
+                onClick={() => setKycFilter(item.id)}
+                className={`rounded-xl border px-3 py-3 text-left transition hover:bg-white/[0.09] ${
+                  kycFilter === item.id ? activeClass : "border-white/10 bg-white/[0.04] text-slate-300"
                 }`}
               >
-                {label}
+                <span className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2 text-xs font-black">
+                    {item.id !== "all" && <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />}
+                    {item.label}
+                  </span>
+                  <span className="rounded-lg bg-white/[0.08] px-2 py-1 text-xs font-black text-white">
+                    {item.count}
+                  </span>
+                </span>
               </button>
-            ))}
+              );
+            })}
           </div>
 
           <div className="grid min-h-0 gap-4 xl:grid-rows-[210px_minmax(0,1fr)]">
             <div className="grid gap-3 overflow-y-auto">
               {filteredKycRows.map((row) => (
+                (() => {
+                  const meta = getStatusMeta(row.kyc.status);
+
+                  return (
                 <button
                   key={row.id}
                   type="button"
@@ -1257,11 +1576,14 @@ const AdminControlRoom = () => {
                       <span className="block truncate text-sm font-black text-white">{row.fullName}</span>
                       <span className="mt-1 block truncate text-xs font-bold text-slate-500">{row.email}</span>
                     </span>
-                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusStyles[row.kyc.status] || "border-white/10 text-slate-300"}`}>
-                      {row.kyc.status}
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${meta.badge}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                      {meta.label}
                     </span>
                   </span>
                 </button>
+                  );
+                })()
               ))}
             </div>
 
@@ -1272,8 +1594,8 @@ const AdminControlRoom = () => {
                     <p className="text-lg font-black text-white">{selectedKycUser.fullName}</p>
                     <p className="mt-1 text-xs font-bold text-slate-500">{selectedKycUser.phone} · {selectedKycUser.email}</p>
                   </div>
-                  <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase ${statusStyles[selectedKycUser.kyc.status] || "border-white/10 text-slate-300"}`}>
-                    {selectedKycUser.kyc.risk} risk
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase ${getStatusMeta(selectedKycUser.kyc.status).badge}`}>
+                    {getStatusMeta(selectedKycUser.kyc.status).label} · {selectedKycUser.kyc.risk} risk
                   </span>
                 </div>
 
@@ -1344,7 +1666,11 @@ const AdminControlRoom = () => {
     );
   };
 
-  const renderPricingPanel = () => (
+  const renderPricingPanel = () => {
+    const selectedRule = pricingRules.find((rule) => rule.id === selectedPricingRuleId);
+    const SelectedRuleIcon = selectedRule?.icon || FiDollarSign;
+
+    return (
     <>
       {renderPanelHeader(
         "Geofencing",
@@ -1394,36 +1720,124 @@ const AdminControlRoom = () => {
           </div>
         </div>
 
-        <div className="grid gap-3">
-          {pricingRules.map((rule) => (
-            <button
-              key={rule.id}
-              type="button"
-              onClick={() =>
-                setPricingRules((items) => {
-                  const nextEnabled = !rule.enabled;
-                  showAdminNotice(`${rule.name}: ${nextEnabled ? "активирован" : "выключен"} · тариф x${rule.multiplier}`);
-                  return items.map((item) => (item.id === rule.id ? { ...item, enabled: nextEnabled } : item));
-                })
-              }
-              className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left hover:bg-white/[0.06]"
-            >
-              <span className="flex items-center justify-between gap-3">
-                <span className="text-sm font-black text-white">{rule.name}</span>
-                <span className={`h-6 w-11 rounded-full p-1 ${rule.enabled ? "bg-emerald-500" : "bg-slate-700"}`}>
-                  <span className={`block h-4 w-4 rounded-full bg-white transition ${rule.enabled ? "translate-x-5" : ""}`} />
+        {selectedRule && (
+          <div className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-500/20 text-blue-100">
+                  <SelectedRuleIcon />
                 </span>
-              </span>
-              <span className="mt-2 block text-xs font-semibold leading-5 text-slate-400">{rule.condition}</span>
-              <span className="mt-3 inline-flex rounded-full bg-blue-500/10 px-3 py-1 text-xs font-black text-blue-200">
-                {rule.zone} · x{rule.multiplier}
-              </span>
-            </button>
-          ))}
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-base font-black text-white">{selectedRule.name}</p>
+                    <span className="rounded-lg bg-blue-500/20 px-2 py-1 text-[10px] font-black text-blue-100">
+                      {selectedRule.priceLabel}
+                    </span>
+                    <span className={`rounded-lg px-2 py-1 text-[10px] font-black ${selectedRule.enabled ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-500/15 text-slate-300"}`}>
+                      {selectedRule.enabled ? "Активен" : "Отключен"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-slate-200">{selectedRule.description}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPricingRuleId(null)}
+                className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200"
+              >
+                Закрыть
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <div className="rounded-xl bg-white/[0.06] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Условия</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{selectedRule.condition}</p>
+              </div>
+              <div className="rounded-xl bg-white/[0.06] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Зона действия</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{selectedRule.zone}</p>
+              </div>
+              <div className="rounded-xl bg-white/[0.06] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Цена</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">Коэффициент тарифа {selectedRule.priceLabel}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => showAdminNotice(`${selectedRule.name}: режим редактирования открыт`)}
+                className="rounded-xl bg-blue-500 px-3 py-3 text-xs font-black text-white"
+              >
+                <FiEdit3 className="inline" /> Редактировать
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPricingRules((items) =>
+                    items.map((item) =>
+                      item.id === selectedRule.id ? { ...item, enabled: !item.enabled } : item
+                    )
+                  );
+                  showAdminNotice(`${selectedRule.name}: ${selectedRule.enabled ? "деактивирован" : "активирован"} · тариф ${selectedRule.priceLabel}`);
+                }}
+                className={`rounded-xl px-3 py-3 text-xs font-black ${selectedRule.enabled ? "bg-red-500 text-white" : "bg-emerald-500 text-white"}`}
+              >
+                {selectedRule.enabled ? "Деактивировать" : "Активировать"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-3">
+          {pricingRules.map((rule) => {
+            const RuleIcon = rule.icon || FiDollarSign;
+
+            return (
+              <button
+                key={rule.id}
+                type="button"
+                onClick={() => setSelectedPricingRuleId(rule.id)}
+                className={`rounded-2xl border p-4 text-left hover:bg-white/[0.06] ${
+                  selectedPricingRuleId === rule.id ? "border-blue-400/60 bg-blue-500/10" : "border-white/10 bg-white/[0.035]"
+                }`}
+              >
+                <span className="flex items-start justify-between gap-3">
+                  <span className="flex min-w-0 items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-200">
+                      <RuleIcon />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-black text-white">{rule.name}</span>
+                        <span className="rounded-lg bg-blue-500/15 px-2 py-1 text-[10px] font-black text-blue-200">
+                          {rule.priceLabel}
+                        </span>
+                      </span>
+                      <span className="mt-2 block text-xs font-semibold leading-5 text-slate-300">{rule.description}</span>
+                    </span>
+                  </span>
+                  <span className={`mt-1 h-6 w-11 shrink-0 rounded-full p-1 ${rule.enabled ? "bg-emerald-500" : "bg-slate-700"}`}>
+                    <span className={`block h-4 w-4 rounded-full bg-white transition ${rule.enabled ? "translate-x-5" : ""}`} />
+                  </span>
+                </span>
+                <span className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-black text-slate-300">
+                    {rule.zone}
+                  </span>
+                  <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-black text-slate-300">
+                    {rule.condition}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </>
-  );
+    );
+  };
 
   const renderBillingPanel = () => {
     const riders = users.filter((user) => user.role === "rider");
@@ -1443,11 +1857,41 @@ const AdminControlRoom = () => {
         )
       : [];
     const selectedPenaltyRider = riders.find((rider) => rider.id === penaltyTargetId);
+    const recentPenalties = penalties.filter((penalty) => {
+      const penaltyTime = penalty.createdAtIso ? new Date(penalty.createdAtIso).getTime() : penaltyPeriodStartMs;
+      return penaltyTime >= penaltyPeriodStartMs;
+    });
+    const totalPenaltyAmount = recentPenalties.reduce((sum, penalty) => sum + penalty.amount, 0);
+    const selectedReasonCount = penalties.filter((penalty) => penalty.reason === reason.label).length;
 
     return (
       <>
-        {renderPanelHeader("Billing", "Штрафы и списания")}
+        {renderPanelHeader(
+          "Billing",
+          "Штрафы и списания",
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+            <p className="text-[10px] font-black uppercase text-slate-500">Списано</p>
+            <p className="text-lg font-black text-white">{totalPenaltyAmount} AZN</p>
+          </div>
+        )}
         <div className="grid gap-4 overflow-y-auto p-5">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-[10px] font-black uppercase text-slate-500">Штрафов за 7 дней</p>
+              <p className="mt-2 text-2xl font-black text-white">{recentPenalties.length}</p>
+            </div>
+            <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-red-200">Итого за 7 дней</p>
+              <p className="mt-2 text-2xl font-black text-white">{totalPenaltyAmount} AZN</p>
+            </div>
+            <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-amber-200">Выбранная причина</p>
+              <p className="mt-2 text-lg font-black text-white">{reason.amount} AZN</p>
+              <p className="mt-1 text-xs font-semibold text-slate-300">{selectedReasonCount} списаний</p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <p className="text-sm font-black text-white">Выписать штраф</p>
             <p className="mt-4 text-[10px] font-black uppercase tracking-wide text-slate-500">Пользователь</p>
@@ -1459,7 +1903,6 @@ const AdminControlRoom = () => {
                 onChange={(event) => {
                   setPenaltySearchQuery(event.target.value);
                   setPenaltyTargetId(null);
-                  setPendingPenalty(null);
                 }}
                 placeholder="Введите имя и фамилию"
                 className="min-w-0 flex-1 bg-transparent font-semibold text-white outline-none placeholder:text-slate-500"
@@ -1516,40 +1959,69 @@ const AdminControlRoom = () => {
               ))}
             </div>
 
+            <div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-red-200">Сумма</p>
+              <p className="mt-1 text-2xl font-black text-white">{reason.amount} AZN</p>
+            </div>
+
             <button
               type="button"
               onClick={preparePenalty}
               disabled={!selectedPenaltyRider}
               className="mt-3 w-full rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
-              Подготовить списание {reason.amount} AZN
+              Выписать штраф
             </button>
           </div>
 
-          {pendingPenalty && (
-            <div className="rounded-2xl border border-amber-400/35 bg-amber-500/10 p-4">
-              <p className="text-sm font-black text-white">Подтвердить списание?</p>
-              <p className="mt-2 text-xs font-semibold leading-5 text-slate-300">
-                {pendingPenalty.rider.fullName} · {pendingPenalty.reason.label} · {pendingPenalty.reason.amount} AZN. Пользователю будет отправлен push.
-              </p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button type="button" onClick={confirmPenalty} className="rounded-xl bg-red-500 px-3 py-2 text-xs font-black text-white">
-                  Да, списать
-                </button>
-                <button type="button" onClick={() => setPendingPenalty(null)} className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200">
-                  Отмена
-                </button>
+          <div className="grid content-start gap-4">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-white">Штрафы за последние 7 дней</p>
+                <p className="mt-1 text-xs font-semibold text-slate-400">Имя, причина, сумма и дата списания</p>
+              </div>
+              <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-right">
+                <p className="text-[10px] font-black uppercase text-red-200">Итого</p>
+                <p className="text-lg font-black text-white">{totalPenaltyAmount} AZN</p>
               </div>
             </div>
-          )}
-
-          {penalties.map((penalty) => (
-            <div key={penalty.id} className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4">
-              <p className="text-sm font-black text-white">{penalty.user}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-400">{penalty.reason}</p>
-              <p className="mt-3 text-lg font-black text-red-200">{penalty.amount} AZN · {penalty.status}</p>
+            <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
+              {recentPenalties.length === 0 ? (
+                <div className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-4 text-sm font-semibold text-slate-400">
+                  За последние 7 дней штрафов нет. Найдите пользователя, выберите причину и нажмите “Выписать штраф”.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-left text-sm">
+                    <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Имя Фамилия</th>
+                        <th className="px-4 py-3">Причина</th>
+                        <th className="px-4 py-3">Сумма</th>
+                        <th className="px-4 py-3">Дата</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10">
+                      {recentPenalties.map((penalty) => (
+                        <tr key={penalty.id} className="bg-white/[0.02]">
+                          <td className="px-4 py-3">
+                            <p className="font-black text-white">{penalty.user}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">{penalty.userEmail}</p>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{penalty.reason}</td>
+                          <td className="px-4 py-3 font-black text-red-200">{penalty.amount} AZN</td>
+                          <td className="px-4 py-3 font-semibold text-slate-400">{penalty.createdAt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          ))}
+          </div>
+          </div>
+          </div>
         </div>
       </>
     );
@@ -1571,13 +2043,75 @@ const AdminControlRoom = () => {
     const selectedManager = staff.find((manager) => manager.id === selectedKpiDetail?.staffId);
     const selectedDetail = detailConfig[selectedKpiDetail?.type];
     const selectedItems = selectedManager && selectedDetail ? selectedManager[selectedDetail.itemKey] || [] : [];
+    const activeStaff = staff.filter((manager) => manager.active);
+    const kpiTotals = {
+      orders: staff.reduce((sum, manager) => sum + manager.ordersCompleted, 0),
+      avgTime: Math.round(staff.reduce((sum, manager) => sum + manager.avgCompletionMinutes, 0) / Math.max(staff.length, 1)),
+      rating: (staff.reduce((sum, manager) => sum + manager.rating, 0) / Math.max(staff.length, 1)).toFixed(1),
+      weekly: Math.round(staff.reduce((sum, manager) => sum + manager.weeklyChange, 0) / Math.max(staff.length, 1)),
+    };
+    const sortedStaff = [...staff].sort((first, second) => {
+      const firstValue = first[kpiSort.key];
+      const secondValue = second[kpiSort.key];
+      const direction = kpiSort.direction === "asc" ? 1 : -1;
+
+      if (typeof firstValue === "string") {
+        return firstValue.localeCompare(secondValue) * direction;
+      }
+
+      return (firstValue - secondValue) * direction;
+    });
+    const sortColumns = [
+      ["name", "Сотрудник"],
+      ["ordersCompleted", "Заказы"],
+      ["avgCompletionMinutes", "Среднее время"],
+      ["rating", "Рейтинг"],
+      ["complaints", "Жалобы"],
+      ["praises", "Похвалы"],
+      ["activeShiftHours", "Активное время"],
+      ["weeklyChange", "К прошлой неделе"],
+    ];
+    const toggleKpiSort = (key) => {
+      setKpiSort((current) => ({
+        key,
+        direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
+      }));
+    };
 
     return (
       <>
-        {renderPanelHeader("Manager KPI", "Эффективность персонала")}
-        <div className="grid gap-3 overflow-y-auto p-5">
+        {renderPanelHeader(
+          "Manager KPI",
+          "Эффективность персонала",
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+            <p className="text-[10px] font-black uppercase text-slate-500">Активны</p>
+            <p className="text-lg font-black text-white">{activeStaff.length}/{staff.length}</p>
+          </div>
+        )}
+        <div className="grid gap-4 overflow-y-auto p-5">
           <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4 text-xs font-semibold leading-5 text-slate-300">
-            <b className="text-blue-200">KYC рейтинг</b> — оценка скорости и качества проверки анкеты по шкале от 1 до 10, где 10 — лучший результат. <b className="text-blue-200">Заявки</b> — обработанные заявки за смену. <b className="text-blue-200">Тикеты</b> — закрытые обращения поддержки.
+            <b className="text-blue-200">KPI персонала</b> показывает выполненные заказы, среднее время выполнения, рейтинг, жалобы, похвалы, активное время за смену и динамику относительно прошлой недели.
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-[10px] font-black uppercase text-slate-500">Выполнено заказов</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.orders}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-[10px] font-black uppercase text-slate-500">Среднее время</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.avgTime} мин</p>
+            </div>
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-emerald-200">Средний рейтинг</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.rating}/10</p>
+            </div>
+            <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-blue-200">К прошлой неделе</p>
+              <p className={`mt-2 text-2xl font-black ${kpiTotals.weekly >= 0 ? "text-emerald-200" : "text-red-200"}`}>
+                {kpiTotals.weekly >= 0 ? "+" : ""}{kpiTotals.weekly}%
+              </p>
+            </div>
           </div>
 
           {selectedManager && selectedDetail && (
@@ -1609,55 +2143,118 @@ const AdminControlRoom = () => {
             </div>
           )}
 
-          {staff.map((manager) => {
-            const applicationsCount = manager.applicationsProcessed?.length || 0;
-            const ticketsCount = manager.supportTicketsClosed?.length || 0;
-            const applicationsSelected =
-              selectedKpiDetail?.staffId === manager.id && selectedKpiDetail?.type === "applications";
-            const ticketsSelected =
-              selectedKpiDetail?.staffId === manager.id && selectedKpiDetail?.type === "tickets";
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-white">Таблица KPI</p>
+              <p className="text-xs font-semibold text-slate-500">Клик по заголовку сортирует таблицу</p>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-white/10">
+              <table className="w-full min-w-[980px] text-left text-sm">
+                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    {sortColumns.map(([key, label]) => (
+                      <th key={key} className="px-4 py-3">
+                        <button type="button" onClick={() => toggleKpiSort(key)} className="flex items-center gap-1 hover:text-white">
+                          {label}
+                          {kpiSort.key === key && <span>{kpiSort.direction === "desc" ? "↓" : "↑"}</span>}
+                        </button>
+                      </th>
+                    ))}
+                    <th className="px-4 py-3">Детали</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {sortedStaff.map((manager) => (
+                    <tr key={manager.id} className={manager.active ? "bg-white/[0.02]" : "bg-red-500/5 opacity-75"}>
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{manager.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{manager.role}</p>
+                      </td>
+                      <td className="px-4 py-3 font-black text-white">{manager.ordersCompleted}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{manager.avgCompletionMinutes} мин</td>
+                      <td className="px-4 py-3 font-black text-emerald-200">{manager.rating}/10</td>
+                      <td className="px-4 py-3 font-black text-red-200">{manager.complaints}</td>
+                      <td className="px-4 py-3 font-black text-blue-200">{manager.praises}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{manager.activeShiftHours} ч</td>
+                      <td className={`px-4 py-3 font-black ${manager.weeklyChange >= 0 ? "text-emerald-200" : "text-red-200"}`}>
+                        {manager.weeklyChange >= 0 ? "+" : ""}{manager.weeklyChange}%
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
+                          className="rounded-lg bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200"
+                        >
+                          Открыть
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-            return (
-              <div key={manager.id} className={`rounded-2xl border p-4 ${manager.active ? "border-white/10 bg-white/[0.035]" : "border-red-400/25 bg-red-500/10 opacity-70"}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-black text-white">{manager.name}</p>
-                    <p className="text-xs font-bold text-slate-500">{manager.role}</p>
-                    {manager.specialty && (
-                      <p className="mt-1 text-xs font-semibold leading-5 text-slate-300">{manager.specialty}</p>
-                    )}
+          <div className="grid gap-3 xl:grid-cols-2">
+            {staff.map((manager) => {
+              const applicationsCount = manager.applicationsProcessed?.length || 0;
+              const ticketsCount = manager.supportTicketsClosed?.length || 0;
+              const applicationsSelected =
+                selectedKpiDetail?.staffId === manager.id && selectedKpiDetail?.type === "applications";
+              const ticketsSelected =
+                selectedKpiDetail?.staffId === manager.id && selectedKpiDetail?.type === "tickets";
+
+              return (
+                <div key={manager.id} className={`rounded-2xl border p-4 ${manager.active ? "border-white/10 bg-white/[0.035]" : "border-red-400/25 bg-red-500/10 opacity-70"}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black text-white">{manager.name}</p>
+                      <p className="text-xs font-bold text-slate-500">{manager.role}</p>
+                      {manager.specialty && (
+                        <p className="mt-1 text-xs font-semibold leading-5 text-slate-300">{manager.specialty}</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setStaff((items) => items.map((item) => (item.id === manager.id ? { ...item, active: !item.active } : item)))}
+                      className={`rounded-xl p-2 ${manager.active ? "bg-red-500/15 text-red-200" : "bg-emerald-500/15 text-emerald-200"}`}
+                      title={manager.active ? "Deactivate employee" : "Activate employee"}
+                    >
+                      {manager.active ? <FiUserX /> : <FiUserCheck />}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setStaff((items) => items.map((item) => (item.id === manager.id ? { ...item, active: !item.active } : item)))}
-                    className={`rounded-xl p-2 ${manager.active ? "bg-red-500/15 text-red-200" : "bg-emerald-500/15 text-emerald-200"}`}
-                    title={manager.active ? "Deactivate employee" : "Activate employee"}
-                  >
-                    {manager.active ? <FiUserX /> : <FiUserCheck />}
-                  </button>
+                  <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Заказы</p><p className="font-black text-white">{manager.ordersCompleted}</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Среднее</p><p className="font-black text-white">{manager.avgCompletionMinutes} мин</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Рейтинг</p><p className="font-black text-emerald-200">{manager.rating}/10</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Смена</p><p className="font-black text-white">{manager.activeShiftHours} ч</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Жалобы</p><p className="font-black text-red-200">{manager.complaints}</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Похвалы</p><p className="font-black text-blue-200">{manager.praises}</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Неделя</p><p className={`font-black ${manager.weeklyChange >= 0 ? "text-emerald-200" : "text-red-200"}`}>{manager.weeklyChange >= 0 ? "+" : ""}{manager.weeklyChange}%</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">KYC</p><p className="font-black text-white">{manager.kycRating}/10</p></div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
+                      className={`rounded-xl p-3 text-left transition hover:bg-blue-500/10 ${applicationsSelected ? "bg-blue-500/15 ring-1 ring-blue-300/30" : "bg-white/[0.05]"}`}
+                    >
+                      <p className="text-[10px] font-black text-slate-500">Заявки</p>
+                      <p className="font-black text-white">{applicationsCount}</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "tickets" })}
+                      className={`rounded-xl p-3 text-left transition hover:bg-blue-500/10 ${ticketsSelected ? "bg-blue-500/15 ring-1 ring-blue-300/30" : "bg-white/[0.05]"}`}
+                    >
+                      <p className="text-[10px] font-black text-slate-500">Тикеты</p>
+                      <p className="font-black text-white">{ticketsCount}</p>
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">KYC рейтинг</p><p className="font-black">{manager.kycRating}/10</p></div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
-                    className={`rounded-xl p-3 text-left transition hover:bg-blue-500/10 ${applicationsSelected ? "bg-blue-500/15 ring-1 ring-blue-300/30" : "bg-white/[0.05]"}`}
-                  >
-                    <p className="text-[10px] font-black text-slate-500">Заявки</p>
-                    <p className="font-black text-white">{applicationsCount}</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "tickets" })}
-                    className={`rounded-xl p-3 text-left transition hover:bg-blue-500/10 ${ticketsSelected ? "bg-blue-500/15 ring-1 ring-blue-300/30" : "bg-white/[0.05]"}`}
-                  >
-                    <p className="text-[10px] font-black text-slate-500">Тикеты</p>
-                    <p className="font-black text-white">{ticketsCount}</p>
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </>
     );
@@ -1737,7 +2334,7 @@ const AdminControlRoom = () => {
         {serviceTasks.map((task) => {
           const vehicle = getVehicle(task.vehicleId);
           const tech = technicians.find((item) => item.id === task.technicianId);
-          const station = chargingStations.find((item) => item.id === task.chargingStationId);
+          const station = managedChargingStations.find((item) => item.id === task.chargingStationId);
           return (
             <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
               <p className="text-sm font-black text-white">
@@ -1770,16 +2367,77 @@ const AdminControlRoom = () => {
       {renderPanelHeader(
         "Charging Map",
         "Карта зарядок",
-        <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
-          <p className="text-[10px] font-black uppercase text-slate-500">Порты</p>
-          <p className="text-lg font-black text-white">{stationStats.availablePorts}/{stationStats.totalPorts}</p>
-        </div>
+        <button
+          type="button"
+          onClick={() => updateChargingDraft("pickOnMap", !chargingDraft.pickOnMap)}
+          className={`rounded-xl px-3 py-2 text-xs font-black ${chargingDraft.pickOnMap ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}
+        >
+          <FiPlus className="inline" /> Добавить точку зарядки
+        </button>
       )}
       <div className="grid gap-3 overflow-y-auto p-5">
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
           Отдельная карта зарядной инфраструктуры: здесь видны только станции, их статус, мощность и свободные порты для планирования перегонов.
         </div>
-        {chargingStations.map((station) => {
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-black text-white">Новая точка зарядки</p>
+            <span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">
+              {chargingDraft.pickOnMap ? "Кликните по карте" : "Форма"}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2">
+            <input
+              value={chargingDraft.name}
+              onChange={(event) => updateChargingDraft("name", event.target.value)}
+              placeholder="Название точки"
+              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <input
+              value={chargingDraft.address}
+              onChange={(event) => updateChargingDraft("address", event.target.value)}
+              placeholder="Адрес"
+              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                value={chargingDraft.lat}
+                onChange={(event) => updateChargingDraft("lat", event.target.value)}
+                placeholder="Lat или клик по карте"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+              <input
+                value={chargingDraft.lng}
+                onChange={(event) => updateChargingDraft("lng", event.target.value)}
+                placeholder="Lng или клик по карте"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={chargingDraft.chargerType}
+                onChange={(event) => updateChargingDraft("chargerType", event.target.value)}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value="CCS2">CCS2 fast</option>
+                <option value="Type2">Type2 city</option>
+                <option value="CHAdeMO">CHAdeMO</option>
+              </select>
+              <select
+                value={chargingDraft.status}
+                onChange={(event) => updateChargingDraft("status", event.target.value)}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value={CHARGING_STATION_STATUSES.ONLINE}>Работает</option>
+                <option value={CHARGING_STATION_STATUSES.MAINTENANCE}>Не работает</option>
+              </select>
+            </div>
+            <button type="button" onClick={saveChargingPoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">
+              Сохранить точку зарядки
+            </button>
+          </div>
+        </div>
+        {managedChargingStations.map((station) => {
           const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
 
           return (
@@ -1818,63 +2476,161 @@ const AdminControlRoom = () => {
     </>
   );
 
-  const renderHelpdeskPanel = () => (
+  const renderHelpdeskPanel = () => {
+    const ticketStatusMeta = {
+      open: { label: "Открыт", className: "bg-emerald-500/15 text-emerald-200" },
+      waiting: { label: "Ожидает", className: "bg-amber-500/15 text-amber-200" },
+      closed: { label: "Закрыт", className: "bg-slate-500/20 text-slate-300" },
+    };
+    const sortedTickets = [...tickets]
+      .filter((ticket) => {
+        const rider = users.find((user) => user.id === ticket.userId);
+        const vehicle = getVehicle(ticket.vehicleId);
+        const searchable = [
+          ticket.subject,
+          ticket.status,
+          rider?.fullName,
+          vehicle?.brand,
+          vehicle?.model,
+          vehicle?.plateNumber,
+          ...ticket.messages.map((message) => (typeof message === "string" ? message : message.body)),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        const matchesSearch = !ticketSearchQuery.trim() || searchable.includes(ticketSearchQuery.trim().toLowerCase());
+        const matchesStatus = ticketStatusFilter === "all" || ticket.status === ticketStatusFilter;
+
+        return matchesSearch && matchesStatus;
+      })
+      .sort((first, second) => new Date(second.updatedAt || 0) - new Date(first.updatedAt || 0));
+
+    return (
     <>
       {renderPanelHeader("Helpdesk", "Чат поддержки")}
-      <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr_auto] gap-3 p-5">
-        <div className="flex gap-2 overflow-x-auto">
-          {tickets.map((ticket) => (
-            <button key={ticket.id} type="button" onClick={() => setActiveTicketId(ticket.id)} className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black ${activeTicketId === ticket.id ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"}`}>
-              {ticket.subject}
-            </button>
-          ))}
-        </div>
-        <div className="overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          {activeTicket?.messages.map((message, index) => {
-            const normalizedMessage = normalizeTicketMessage(message, activeTicket);
+      <div className="grid min-h-0 flex-1 gap-0 overflow-hidden p-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="min-h-0 overflow-y-auto rounded-l-2xl border border-white/10 bg-white/[0.035]">
+          <div className="border-b border-white/10 p-4">
+            <p className="text-sm font-black text-white">Диалоги</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">Сортировка по времени последнего сообщения</p>
+            <label className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400">
+              <FiSearch className="shrink-0 text-slate-500" />
+              <input
+                value={ticketSearchQuery}
+                onChange={(event) => setTicketSearchQuery(event.target.value)}
+                placeholder="Поиск по чатам"
+                className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+            </label>
+            <div className="mt-3 grid grid-cols-4 gap-1">
+              {["all", "open", "waiting", "closed"].map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setTicketStatusFilter(status)}
+                  className={`rounded-lg px-2 py-2 text-[10px] font-black ${
+                    ticketStatusFilter === status ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"
+                  }`}
+                >
+                  {status === "all" ? "Все" : ticketStatusMeta[status].label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {sortedTickets.map((ticket) => {
+            const vehicle = getVehicle(ticket.vehicleId);
+            const rider = users.find((user) => user.id === ticket.userId);
+            const active = activeTicketId === ticket.id;
+            const lastMessage = normalizeTicketMessage(ticket.messages[ticket.messages.length - 1], ticket);
+            const status = ticketStatusMeta[ticket.status] || ticketStatusMeta.open;
 
             return (
-              <article key={normalizedMessage.id || `${activeTicket.id}-${index}`} className="mb-3 rounded-xl bg-white/[0.06] px-3 py-2">
-                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-200">
-                  {formatSenderTitle(normalizedMessage)}
-                </p>
-                <p className="mt-1 text-sm font-semibold leading-5 text-slate-200">
-                  {normalizedMessage.body}
-                </p>
-              </article>
+              <button
+                key={ticket.id}
+                type="button"
+                onClick={() => setActiveTicketId(ticket.id)}
+                className={`w-full border-b border-white/10 p-4 text-left transition last:border-b-0 ${active ? "bg-red-500/15" : "hover:bg-white/[0.06]"}`}
+              >
+                <span className="flex items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-black text-white">{ticket.subject}</span>
+                    <span className="mt-1 block truncate text-xs font-semibold text-slate-400">
+                      {rider?.fullName} · {vehicle?.plateNumber}
+                    </span>
+                  </span>
+                  <span className={`rounded-lg px-2 py-1 text-[10px] font-black ${status.className}`}>
+                    {status.label}
+                  </span>
+                </span>
+                <span className="mt-3 block truncate text-xs font-semibold text-slate-500">{lastMessage?.body}</span>
+              </button>
             );
           })}
         </div>
-        <div className="grid gap-2">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => appendTicketMessage("добавлено +5 бесплатных минут компенсации.")}
-              className="rounded-xl bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200"
-            >
-              +5 бесплатных минут
-            </button>
-            <button
-              type="button"
-              onClick={() => appendTicketMessage("аренда завершена удаленно без штрафа.")}
-              className="rounded-xl bg-emerald-500/15 px-3 py-2 text-xs font-black text-emerald-200"
-            >
-              Завершить без штрафа
-            </button>
+
+        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-r-2xl border border-l-0 border-white/10 bg-white/[0.025]">
+          <div className="border-b border-white/10 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-white">{activeTicket?.subject}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Переписка с клиентом и системные действия</p>
+              </div>
+              <button type="button" onClick={closeActiveTicket} className="rounded-xl bg-red-500/15 px-3 py-2 text-xs font-black text-red-200">
+                Закрыть тикет
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ответ админа..." className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none" />
-            <button type="button" onClick={sendChatMessage} className="rounded-xl bg-red-500 px-4 text-white"><FiSend /></button>
+          <div className="min-h-0 overflow-y-auto p-4">
+            {activeTicket?.messages.map((message, index) => {
+              const normalizedMessage = normalizeTicketMessage(message, activeTicket);
+              const fromAdmin = normalizedMessage.senderRole !== "rider";
+
+              return (
+                <article
+                  key={normalizedMessage.id || `${activeTicket.id}-${index}`}
+                  className={`mb-3 max-w-[78%] rounded-2xl px-4 py-3 ${fromAdmin ? "ml-auto bg-red-500/15" : "bg-white/[0.06]"}`}
+                >
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-200">
+                    {formatSenderTitle(normalizedMessage)}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold leading-5 text-slate-200">{normalizedMessage.body}</p>
+                </article>
+              );
+            })}
+          </div>
+          <div className="border-t border-white/10 p-4">
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => appendTicketMessage("добавлено +5 бесплатных минут компенсации.")} className="rounded-xl bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200">
+                +5 бесплатных минут
+              </button>
+              <button type="button" onClick={() => appendTicketMessage("аренда завершена удаленно без штрафа.")} className="rounded-xl bg-emerald-500/15 px-3 py-2 text-xs font-black text-emerald-200">
+                Завершить без штрафа
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ответ админа..." className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none" />
+              <button type="button" onClick={sendChatMessage} className="rounded-xl bg-red-500 px-4 text-white"><FiSend /></button>
+            </div>
           </div>
         </div>
       </div>
     </>
-  );
+    );
+  };
 
   const renderAnalyticsPanel = () => {
     const plannedMaintenanceVehicles = plannedMaintenance
       .map((vehicleId) => getVehicle(vehicleId))
       .filter(Boolean);
+    const maintenanceStatusMeta = {
+      healthy: { label: "Исправен", color: "bg-emerald-500", row: "border-emerald-400/25 bg-emerald-500/10" },
+      in_service: { label: "На ТО", color: "bg-blue-500", row: "border-blue-400/25 bg-blue-500/10" },
+      needs_service: { label: "Требует ТО", color: "bg-amber-600", row: "border-amber-500/30 bg-amber-600/10" },
+    };
+    const filteredMaintenanceRows = maintenanceSeed.filter((row) =>
+      maintenanceFilter === "all" ? true : row.maintenanceStatus === maintenanceFilter
+    );
 
     return (
     <>
@@ -1901,6 +2657,35 @@ const AdminControlRoom = () => {
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
           Этот блок показывает, какие машины скоро уйдут на обслуживание, где падает battery health, какие авто много расходуют и какие реально окупаются.
         </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-sm font-black text-white">Легенда цветов машин</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {Object.entries(maintenanceStatusMeta).map(([status, meta]) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setMaintenanceFilter(status)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-black ${maintenanceFilter === status ? "border-red-400 bg-red-500/15 text-white" : "border-white/10 bg-white/[0.04] text-slate-300"}`}
+                >
+                  <span className={`mr-2 inline-block h-2.5 w-2.5 rounded-full ${meta.color}`} />
+                  {meta.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setMaintenanceFilter("all")}
+                className={`rounded-xl border px-3 py-2 text-xs font-black ${maintenanceFilter === "all" ? "border-red-400 bg-red-500/15 text-white" : "border-white/10 bg-white/[0.04] text-slate-300"}`}
+              >
+                Все
+              </button>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-[10px] font-black uppercase text-slate-500">В фильтре</p>
+            <p className="mt-2 text-2xl font-black text-white">{filteredMaintenanceRows.length}</p>
+          </div>
+        </div>
         {plannedMaintenanceVehicles.length > 0 && (
           <div className="grid gap-2 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4">
             <p className="text-xs font-black uppercase text-emerald-200">Запланированные ТО</p>
@@ -1912,7 +2697,68 @@ const AdminControlRoom = () => {
             ))}
           </div>
         )}
-        {maintenanceSeed.map((row) => {
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Машина</th>
+                  <th className="px-4 py-3">Статус</th>
+                  <th className="px-4 py-3">Последнее ТО</th>
+                  <th className="px-4 py-3">Следующее ТО</th>
+                  <th className="px-4 py-3">Пробег</th>
+                  <th className="px-4 py-3">SOH</th>
+                  <th className="px-4 py-3">Действие</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {filteredMaintenanceRows.map((row) => {
+                  const vehicle = getVehicle(row.vehicleId);
+                  const meta = maintenanceStatusMeta[row.maintenanceStatus] || maintenanceStatusMeta.healthy;
+
+                  return (
+                    <tr key={row.vehicleId} className={meta.row}>
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{vehicle?.brand} {vehicle?.model}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{vehicle?.plateNumber}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center rounded-full bg-white/[0.08] px-3 py-1 text-xs font-black text-slate-200">
+                          <span className={`mr-2 h-2.5 w-2.5 rounded-full ${meta.color}`} />
+                          {meta.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{row.lastService}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{row.nextService}</td>
+                      <td className="px-4 py-3 font-black text-white">{row.odometerKm.toLocaleString("ru-RU")} км</td>
+                      <td className="px-4 py-3 font-black text-emerald-200">{row.batteryHealth}%</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlannedMaintenance((items) =>
+                              items.includes(row.vehicleId) ? items : [...items, row.vehicleId]
+                            );
+                            showAdminNotice(`ТО запланировано: ${vehicle?.brand} ${vehicle?.model}`);
+                          }}
+                          className={`rounded-xl px-3 py-2 text-xs font-black ${
+                            plannedMaintenance.includes(row.vehicleId)
+                              ? "bg-emerald-500/15 text-emerald-200"
+                              : "bg-white/[0.06] text-slate-200"
+                          }`}
+                        >
+                          {plannedMaintenance.includes(row.vehicleId) ? "ТО запланировано" : "Запланировать ТО"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="grid gap-3 xl:grid-cols-2">
+        {filteredMaintenanceRows.map((row) => {
           const vehicle = getVehicle(row.vehicleId);
           const risk = row.serviceInKm < 500 || row.batteryHealth < 85;
           return (
@@ -1949,6 +2795,7 @@ const AdminControlRoom = () => {
           );
         })}
       </div>
+      </div>
     </>
     );
   };
@@ -1968,10 +2815,20 @@ const AdminControlRoom = () => {
     };
 
     const Panel = panels[activeSection] || renderControlPanel;
-    return <Panel />;
+    return Panel();
   };
 
   const isChargingMap = activeSection === "chargers";
+  const isFullWidthPanel =
+    activeSection === "users" ||
+    activeSection === "billing" ||
+    activeSection === "kpi" ||
+    activeSection === "helpdesk" ||
+    activeSection === "analytics";
+
+  if (!adminSession) {
+    return <AdminLogin onLogin={setAdminSession} />;
+  }
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#08111f] text-slate-100">
@@ -2205,28 +3062,17 @@ const AdminControlRoom = () => {
               </div>
 
               <div className="flex flex-1 items-center justify-end gap-3">
-                <div className="hidden rounded-xl border border-white/10 bg-white/[0.04] p-1 md:flex">
-                  {[
-                    ["admin", "Admin"],
-                    ["super-admin", "Super"],
-                  ].map(([role, label]) => (
-                    <button
-                      key={role}
-                      type="button"
-                      onClick={() => {
-                        setAdminRole(role);
-                        if (role === "admin" && sidebarItems.find((item) => item.id === activeSection)?.superOnly) {
-                          setActiveSection("users");
-                          setStatusFilter("all");
-                        }
-                      }}
-                      className={`rounded-lg px-3 py-2 text-xs font-black transition ${
-                        adminRole === role ? "bg-red-500 text-white" : "text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="hidden items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 md:flex">
+                  <span className="rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white">
+                    {currentAdminProfile.roleLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAdminLogout}
+                    className="rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition hover:text-white"
+                  >
+                    Выйти
+                  </button>
                 </div>
                 <label className="hidden min-w-[280px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-400 md:flex">
                   <FiSearch className="text-slate-500" />
@@ -2290,7 +3136,8 @@ const AdminControlRoom = () => {
             </div>
           </header>
 
-          <div className="admin-control-grid grid flex-1 min-w-0 gap-0 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <div className={`admin-control-grid grid flex-1 min-w-0 gap-0 ${isFullWidthPanel ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_390px]"}`}>
+            {!isFullWidthPanel && (
             <section className="relative min-h-[620px] min-w-0">
               <div className="admin-map absolute inset-0">
                 <MapContainer center={BAKU_CENTER} zoom={13} scrollWheelZoom className="h-full w-full">
@@ -2341,7 +3188,7 @@ const AdminControlRoom = () => {
                     />
                   )}
 
-                  {isChargingMap && chargingStations.map((station) => {
+                  {isChargingMap && managedChargingStations.map((station) => {
                     const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
 
                     return (
@@ -2423,8 +3270,12 @@ const AdminControlRoom = () => {
 
                   <MapFocus focusTarget={focusTarget} />
                   <ZoneDrawEvents
-                    enabled={!isChargingMap && activeSection === "pricing" && isDrawingZone}
-                    onAddPoint={(point) => setDraftZonePoints((points) => [...points, point])}
+                    enabled={(!isChargingMap && activeSection === "pricing" && isDrawingZone) || (isChargingMap && chargingDraft.pickOnMap)}
+                    onAddPoint={(point) =>
+                      isChargingMap
+                        ? setChargingDraftPoint(point)
+                        : setDraftZonePoints((points) => [...points, point])
+                    }
                   />
                 </MapContainer>
               </div>
@@ -2432,7 +3283,7 @@ const AdminControlRoom = () => {
               <div className="pointer-events-none absolute left-4 right-4 top-4 z-[500] grid gap-3 md:left-6 md:right-auto md:grid-cols-4">
                 {(isChargingMap
                   ? [
-                      ["Станций", chargingStations.length, FiZap, "text-cyan-200"],
+                      ["Станций", managedChargingStations.length, FiZap, "text-cyan-200"],
                       ["Онлайн", stationStats.onlineStations, FiActivity, "text-emerald-200"],
                       ["Порты", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"],
                       ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"],
@@ -2495,8 +3346,9 @@ const AdminControlRoom = () => {
               </div>
               )}
             </section>
+            )}
 
-            <aside className="z-[520] flex min-h-[560px] flex-col border-l border-white/10 bg-[#0b1424]/96 shadow-2xl shadow-black/30 backdrop-blur-xl">
+            <aside className={`z-[520] flex min-h-[560px] flex-col bg-[#0b1424]/96 shadow-2xl shadow-black/30 backdrop-blur-xl ${isFullWidthPanel ? "" : "border-l border-white/10"}`}>
               {activeSection !== "control" ? (
                 renderRightPanel()
               ) : (

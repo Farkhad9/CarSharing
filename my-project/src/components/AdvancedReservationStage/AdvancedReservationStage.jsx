@@ -1,7 +1,5 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Canvas } from "@react-three/fiber";
-import { Bounds, Center, ContactShadows, Environment, Html, useGLTF } from "@react-three/drei";
 import {
     FiAlertTriangle,
     FiClock,
@@ -46,6 +44,8 @@ const userIcon = L.divIcon({
 L.Marker.prototype.options.icon = defaultIcon;
 
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
+const MAX_ACTIVE_RESERVATIONS = 2;
+const MIN_PROFILE_BALANCE_AZN = 10;
 
 const toRadians = (degrees) => degrees * (Math.PI / 180);
 
@@ -139,159 +139,67 @@ const getWalkingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
 const getDistanceToUser = (userLocation, vehicle) =>
     getDistanceMeters(userLocation, getVehiclePosition(vehicle));
 
-const INTERIOR_MATERIAL_PATTERN = /seat|carpet|mirror_inside|steering|dashboard|interior|cabin|material_20|material_21/i;
-const GLASS_MATERIAL_PATTERN = /material_5|material_22|glass|window|windshield/i;
+const getStoredReservations = () => {
+    try {
+        const reservedVehicles = JSON.parse(localStorage.getItem("reservedVehicles") || "null");
 
-const VehicleModel = ({ modelPath, rotationY }) => {
-    const { scene } = useGLTF(modelPath);
-    const groupRef = useRef(null);
-    const exteriorScene = useMemo(() => scene.clone(true), [scene]);
-
-    useEffect(() => {
-        if (groupRef.current) {
-            groupRef.current.rotation.y = Math.PI + rotationY;
+        if (Array.isArray(reservedVehicles)) {
+            return reservedVehicles;
         }
-    }, [rotationY]);
 
-    useEffect(() => {
-        exteriorScene.traverse((object) => {
-            if (!object.isMesh) {
-                return;
-            }
-
-            object.castShadow = true;
-            object.receiveShadow = true;
-            object.material = Array.isArray(object.material)
-                ? object.material.map((material) => material.clone())
-                : object.material.clone();
-
-            const materials = Array.isArray(object.material) ? object.material : [object.material];
-            const materialNames = materials.map((material) => material?.name || "").join(" ");
-            const lookupName = `${object.name || ""} ${materialNames}`;
-
-            if (INTERIOR_MATERIAL_PATTERN.test(lookupName)) {
-                object.visible = false;
-                return;
-            }
-
-            materials.forEach((material) => {
-                if (!material || !GLASS_MATERIAL_PATTERN.test(material.name || "")) {
-                    return;
-                }
-
-                material.transparent = false;
-                material.opacity = 1;
-                material.map = null;
-                material.alphaMap = null;
-
-                if (material.color) {
-                    material.color.set("#07111f");
-                }
-
-                if ("roughness" in material) {
-                    material.roughness = 0.28;
-                }
-
-                if ("metalness" in material) {
-                    material.metalness = 0.18;
-                }
-
-                material.needsUpdate = true;
-            });
-        });
-    }, [exteriorScene]);
-
-    return (
-        <Bounds fit clip observe margin={0.87}>
-            <Center>
-                <group ref={groupRef} rotation={[0, Math.PI, 0]}>
-                    <primitive object={exteriorScene} />
-                </group>
-            </Center>
-        </Bounds>
-    );
+        const legacyReservation = JSON.parse(localStorage.getItem("reservedVehicle") || "null");
+        return legacyReservation ? [legacyReservation] : [];
+    } catch {
+        return [];
+    }
 };
 
-const VehicleModelViewer = ({ vehicle }) => {
-    const [rotationY, setRotationY] = useState(0);
-    const [isDragging, setIsDragging] = useState(false);
-    const dragStateRef = useRef({ x: 0, rotation: 0 });
+const VehicleGalleryViewer = ({ vehicle }) => {
+    const galleryImages = Array.isArray(vehicle.galleryImages) && vehicle.galleryImages.length
+        ? vehicle.galleryImages.slice(0, 4)
+        : [vehicle.image, vehicle.image, vehicle.image, vehicle.image];
+    const normalizedGallery = [...galleryImages, ...Array.from({ length: Math.max(0, 4 - galleryImages.length) }, () => vehicle.image)].slice(0, 4);
+    const [activeImageIndex, setActiveImageIndex] = useState(0);
+    const activeImage = normalizedGallery[activeImageIndex] || vehicle.image;
 
-    const handlePointerDown = (event) => {
-        if (!vehicle.model3d) {
-            return;
-        }
-
-        setIsDragging(true);
-        dragStateRef.current = {
-            x: event.clientX,
-            rotation: rotationY,
-        };
-        event.currentTarget.setPointerCapture(event.pointerId);
-    };
-
-    const handlePointerMove = (event) => {
-        if (!isDragging || !vehicle.model3d) {
-            return;
-        }
-
-        const deltaX = event.clientX - dragStateRef.current.x;
-        setRotationY(dragStateRef.current.rotation + deltaX * 0.01);
-    };
-
-    const handlePointerUp = (event) => {
-        setIsDragging(false);
-
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-    };
-
-    if (!vehicle.model3d) {
-        return (
-            <div className="relative flex h-full w-full items-center justify-center">
+    return (
+        <div className="flex h-full w-full flex-col">
+            <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_50%_40%,#ffffff_0%,#f8fafc_58%,#eef2f7_100%)]">
                 <img
-                    src={vehicle.image}
+                    src={activeImage}
                     alt={`${vehicle.brand} ${vehicle.model}`}
-                    className="relative z-10 mx-auto aspect-[16/9] w-full max-w-2xl object-contain"
+                    className="relative z-10 mx-auto aspect-[16/9] h-full w-full object-contain p-6"
                 />
                 <div className="absolute bottom-8 h-5 w-4/5 rounded-[100%] bg-zinc-950/10 blur-xl" />
             </div>
-        );
-    }
 
-    return (
-        <div
-            className="h-full w-full touch-none"
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-        >
-            <Canvas
-                dpr={[1, 1.75]}
-                shadows
-                camera={{ position: [6.5, 2.1, 7.5], fov: 30 }}
-                gl={{ antialias: true, alpha: true }}
-            >
-                <color attach="background" args={["#ffffff"]} />
-                <ambientLight intensity={1.4} />
-                <directionalLight position={[4, 6, 4]} intensity={2.4} castShadow />
-                <directionalLight position={[-5, 3, -3]} intensity={0.8} />
-                <Suspense
-                    fallback={
-                        <Html center>
-                            <div className="rounded-full bg-white/90 px-4 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-gray-500 shadow-lg">
-                                Loading 3D model
+            <div className="mt-4 grid grid-cols-4 gap-3">
+                {normalizedGallery.map((image, index) => {
+                    const isActive = index === activeImageIndex;
+
+                    return (
+                        <button
+                            key={`${vehicle.id}-gallery-${index}`}
+                            type="button"
+                            onClick={() => setActiveImageIndex(index)}
+                            className={`overflow-hidden rounded-2xl border bg-white transition ${
+                                isActive ? "border-red-500 shadow-md shadow-red-200/50" : "border-gray-200 hover:border-gray-400"
+                            }`}
+                        >
+                            <div className="aspect-[4/3] w-full bg-[linear-gradient(180deg,#fafafa,#f4f4f5)]">
+                                <img
+                                    src={image}
+                                    alt={`${vehicle.brand} ${vehicle.model} view ${index + 1}`}
+                                    className="h-full w-full object-contain p-2"
+                                />
                             </div>
-                        </Html>
-                    }
-                >
-                    <VehicleModel modelPath={vehicle.model3d} rotationY={rotationY} />
-                    <Environment preset="city" />
-                    <ContactShadows position={[0, -1.05, 0]} opacity={0.28} scale={8} blur={2.8} far={3.5} />
-                </Suspense>
-            </Canvas>
+                            <div className="border-t border-gray-100 px-2 py-2 text-center text-[10px] font-black uppercase tracking-wide text-gray-500">
+                                {index === 0 ? "Main photo" : `Photo ${index + 1}`}
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
         </div>
     );
 };
@@ -344,10 +252,12 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
 
     const carLocation = useMemo(() => getVehiclePosition(vehicle), [vehicle]);
     const distanceMeters = getDistanceMeters(currentUserLocation, carLocation);
-    const routeDistanceMeters = routeState.distanceMeters || distanceMeters;
-    const routeRemainingPercent = routeState.initialDistanceMeters
-        ? Math.max(0, Math.min(100, (routeDistanceMeters / routeState.initialDistanceMeters) * 100))
-        : 100;
+    const routeDistanceMeters =
+        typeof routeState.distanceMeters === "number" ? routeState.distanceMeters : distanceMeters;
+    const routeRemainingPercent =
+        typeof routeState.distanceMeters === "number" && typeof routeState.initialDistanceMeters === "number"
+            ? Math.max(0, Math.min(100, (routeState.distanceMeters / routeState.initialDistanceMeters) * 100))
+            : 100;
     const walkMinutes = routeState.durationSeconds
         ? Math.max(1, Math.round(routeState.durationSeconds / 60))
         : getWalkMinutes(routeDistanceMeters);
@@ -445,6 +355,23 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return;
         }
 
+        if (selectedPaymentMethod === "profile_balance" && Number(currentUser?.balance || 0) < MIN_PROFILE_BALANCE_AZN) {
+            setReservationError("Выберите другой способ оплаты либо увеличьте баланс минимум на 10 AZN.");
+            return;
+        }
+
+        const existingReservations = getStoredReservations();
+
+        if (existingReservations.some((reservation) => reservation.vehicleId === vehicle.id)) {
+            setReservationError("This car is already in your cabinet.");
+            return;
+        }
+
+        if (existingReservations.length >= MAX_ACTIVE_RESERVATIONS) {
+            setReservationError("You can keep up to 2 active reservations in your cabinet.");
+            return;
+        }
+
         if (isOverCapacity) {
             return;
         }
@@ -454,19 +381,22 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
     };
 
     const handleSuccessOk = () => {
-        localStorage.setItem(
-            "reservedVehicle",
-            JSON.stringify({
-                vehicleId: vehicle.id,
-                brand: vehicle.brand,
-                model: vehicle.model,
-                plateNumber: vehicle.plateNumber,
-                image: vehicle.image,
-                rate: finalRate,
-                paymentMethod: selectedPaymentMethod,
-                reservedAt: new Date().toISOString(),
-            })
-        );
+        const nextReservation = {
+            id: `reservation-${Date.now()}`,
+            vehicleId: vehicle.id,
+            brand: vehicle.brand,
+            model: vehicle.model,
+            plateNumber: vehicle.plateNumber,
+            image: vehicle.image,
+            rate: finalRate,
+            paymentMethod: selectedPaymentMethod,
+            reservedAt: new Date().toISOString(),
+        };
+        const existingReservations = getStoredReservations();
+        const nextReservations = [...existingReservations, nextReservation];
+
+        localStorage.setItem("reservedVehicles", JSON.stringify(nextReservations));
+        localStorage.removeItem("reservedVehicle");
 
         window.location.href = "/dashboard";
     };
@@ -527,7 +457,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                     ...currentRoute,
                     positions: coordinates.map(([lng, lat]) => [lat, lng]),
                     distanceMeters: route.distance,
-                    initialDistanceMeters: currentRoute.initialDistanceMeters || route.distance,
+                    initialDistanceMeters:
+                        typeof currentRoute.initialDistanceMeters === "number"
+                            ? Math.max(currentRoute.initialDistanceMeters, route.distance)
+                            : route.distance,
                     durationSeconds: route.duration,
                     status: "ready",
                     error: "",
@@ -1130,13 +1063,13 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                             variants={cardReveal}
                             transition={{ duration: 0.46, ease: "easeOut" }}
                         >
-                            <div className="relative h-[420px] w-full cursor-grab overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_50%_40%,#ffffff_0%,#f8fafc_58%,#eef2f7_100%)] active:cursor-grabbing md:h-[520px]">
-                                <VehicleModelViewer vehicle={vehicle} />
+                            <div className="relative w-full overflow-hidden rounded-[18px] bg-white md:min-h-[620px]">
+                                <VehicleGalleryViewer vehicle={vehicle} />
                             </div>
 
                             <div className="mt-8 w-full max-w-md">
                                 <p className="text-center text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
-                                    Drag to rotate exterior 3D body
+                                    Main photo plus 3 extra photo slots ready for your future uploads
                                 </p>
                             </div>
                         </motion.div>
@@ -1308,7 +1241,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                             <span className="mt-3 block h-1.5 w-36 overflow-hidden rounded-full bg-gray-100">
                                                 <span
                                                     className="block h-full rounded-full bg-[#E53E3E] transition-all duration-500"
-                                                    style={{ width: `${routeRemainingPercent}%` }}
+                                                    style={{ width: `${routeState.status === "ready" ? routeRemainingPercent : 100}%` }}
                                                 />
                                             </span>
                                         )}
@@ -1400,7 +1333,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                                 key={method.id}
                                                 type="button"
                                                 data-active={isSelected}
-                                                onClick={() => setSelectedPaymentMethod(method.id)}
+                                                onClick={() => {
+                                                    setSelectedPaymentMethod(method.id);
+                                                    setReservationError("");
+                                                }}
                                                 className="payment-method-option text-left"
                                                 aria-pressed={isSelected}
                                             >
