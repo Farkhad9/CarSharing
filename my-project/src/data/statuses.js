@@ -37,6 +37,7 @@ export const VEHICLE_STATUS_DETAILS = Object.freeze({
 export const USER_ROLES = Object.freeze({
   RIDER: "rider",
   ADMIN: "admin",
+  EMPLOYEE: "employee",
 });
 
 export const TRIP_STATUSES = Object.freeze({

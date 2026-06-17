@@ -22,6 +22,7 @@ import {
   FiShield,
   FiTool,
   FiTrendingUp,
+  FiTrash2,
   FiUserCheck,
   FiUserX,
   FiUsers,
@@ -33,10 +34,47 @@ import { trips } from "../../data/trips";
 import { users } from "../../data/users";
 import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
+import { staffApi } from "../../api/staffApi";
+import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
 
 const BAKU_CENTER = [40.3777, 49.8499];
 const CRITICAL_BATTERY_PERCENT = 10;
 const CHARGING_TECHNICIAN_ID = "tech-003";
+const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
+const CHARGING_STATIONS_STORAGE_KEY = "electroStreetChargingStations";
+const SERVICE_POINTS_STORAGE_KEY = "electroStreetServicePoints";
+
+const servicePointsSeed = [
+  {
+    id: "service-point-001",
+    name: "ElectroStreet Service Garage",
+    location: {
+      label: "Babek Avenue",
+      zone: "Service",
+      lat: 40.3942,
+      lng: 49.8914,
+    },
+  },
+  {
+    id: "service-point-002",
+    name: "Central Diagnostics Bay",
+    location: {
+      label: "28 May District",
+      zone: "Service",
+      lat: 40.3796,
+      lng: 49.8467,
+    },
+  },
+];
+
+const isTestTeoChargingStation = (station) => {
+  const searchable = [station?.name, station?.location?.label, station?.location?.zone]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return searchable.includes("тэо") || searchable.includes("тео") || searchable.includes("teo");
+};
 
 const STATUS_META = {
   available: {
@@ -661,6 +699,20 @@ const createChargingStationIcon = (station) => {
   });
 };
 
+const createServicePointIcon = () =>
+  L.divIcon({
+    className: "admin-service-point-marker",
+    html: `
+      <div class="admin-service-point-marker__core">
+        <span>+</span>
+        <b>SVC</b>
+      </div>
+    `,
+    iconSize: [48, 58],
+    iconAnchor: [24, 52],
+    popupAnchor: [0, -48],
+  });
+
 const makeEvent = (vehicle, index) => {
   const rider = users[index % users.length] || users[0];
   const actions = {
@@ -805,7 +857,31 @@ const AdminControlRoom = () => {
     }
   });
   const [liveVehicles, setLiveVehicles] = useState(() => vehicles.map(makeLiveVehicle));
-  const [managedChargingStations, setManagedChargingStations] = useState(chargingStations);
+  const [managedChargingStations, setManagedChargingStations] = useState(() => {
+    try {
+      const storedStations = localStorage.getItem(CHARGING_STATIONS_STORAGE_KEY);
+      const parsedStations = storedStations ? JSON.parse(storedStations) : null;
+      if (!Array.isArray(parsedStations)) return chargingStations;
+
+      const cleanedStations = parsedStations.filter((station) => !isTestTeoChargingStation(station));
+      if (cleanedStations.length !== parsedStations.length) {
+        localStorage.setItem(CHARGING_STATIONS_STORAGE_KEY, JSON.stringify(cleanedStations));
+      }
+
+      return cleanedStations;
+    } catch {
+      return chargingStations;
+    }
+  });
+  const [managedServicePoints, setManagedServicePoints] = useState(() => {
+    try {
+      const storedPoints = localStorage.getItem(SERVICE_POINTS_STORAGE_KEY);
+      const parsedPoints = storedPoints ? JSON.parse(storedPoints) : null;
+      return Array.isArray(parsedPoints) ? parsedPoints : servicePointsSeed;
+    } catch {
+      return servicePointsSeed;
+    }
+  });
   const [managedZones, setManagedZones] = useState(parkingZones);
   const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[2]?.id || vehicles[0]?.id);
   const [focusTarget, setFocusTarget] = useState(null);
@@ -813,6 +889,8 @@ const AdminControlRoom = () => {
   const [activeSection, setActiveSection] = useState("control");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [userTableSearchQuery, setUserTableSearchQuery] = useState("");
+  const [userTableSort, setUserTableSort] = useState({ key: "registeredAt", direction: "desc" });
   const [kycProfiles, setKycProfiles] = useState(kycProfilesSeed);
   const [kycFilter, setKycFilter] = useState("all");
   const [selectedKycUserId, setSelectedKycUserId] = useState(kycProfilesSeed[1]?.userId || kycProfilesSeed[0]?.userId);
@@ -832,6 +910,14 @@ const AdminControlRoom = () => {
   const [incidents, setIncidents] = useState(incidentSeed);
   const [technicians, setTechnicians] = useState(techniciansSeed);
   const [serviceTasks, setServiceTasks] = useState(tasksSeed);
+  const [staffTasks, setStaffTasks] = useState(() => staffApi.getTasks());
+  const [staffTaskDraft, setStaffTaskDraft] = useState({
+    title: "",
+    description: "",
+    assigneeId: "staff-nihat",
+    priority: "Средний",
+    dueAt: "Сегодня",
+  });
   const [tickets, setTickets] = useState(ticketsSeed);
   const [activeTicketId, setActiveTicketId] = useState(ticketsSeed[0].id);
   const [ticketSearchQuery, setTicketSearchQuery] = useState("");
@@ -845,7 +931,15 @@ const AdminControlRoom = () => {
     name: "",
     address: "",
     chargerType: "CCS2",
+    ports: 2,
     status: CHARGING_STATION_STATUSES.ONLINE,
+    lat: "",
+    lng: "",
+    pickOnMap: false,
+  });
+  const [servicePointDraft, setServicePointDraft] = useState({
+    name: "",
+    address: "",
     lat: "",
     lng: "",
     pickOnMap: false,
@@ -854,6 +948,8 @@ const AdminControlRoom = () => {
     vehicles.slice(0, 5).map((vehicle, index) => makeEvent(makeLiveVehicle(vehicle, index), index))
   );
   const [alertsEnabled, setAlertsEnabled] = useState(true);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const staffEmployees = useMemo(() => staffApi.getEmployees(), []);
 
   useEffect(() => {
     if (!adminSession) return;
@@ -867,6 +963,16 @@ const AdminControlRoom = () => {
       setStatusFilter("all");
     }
   }, [activeSection, adminSession]);
+
+  useEffect(() => {
+    localStorage.setItem(CHARGING_STATIONS_STORAGE_KEY, JSON.stringify(managedChargingStations));
+  }, [managedChargingStations]);
+
+  useEffect(() => {
+    localStorage.setItem(SERVICE_POINTS_STORAGE_KEY, JSON.stringify(managedServicePoints));
+  }, [managedServicePoints]);
+
+  useEffect(() => staffApi.subscribe(setStaffTasks), []);
 
   const handleAdminLogout = () => {
     localStorage.removeItem("electroStreetAdminSession");
@@ -942,6 +1048,65 @@ const AdminControlRoom = () => {
     [kycRows, selectedKycUserId]
   );
 
+  const userTableRows = useMemo(() => {
+    const registeredAtSeed = [
+      "2026-01-08",
+      "2026-02-17",
+      "2026-03-26",
+      "2025-11-12",
+    ];
+
+    return users.map((user, index) => {
+      const registeredAt = user.registeredAt || registeredAtSeed[index % registeredAtSeed.length];
+      const accountStatus = user.verificationStatus === "blocked"
+        ? "blocked"
+        : user.verificationStatus === "internal"
+          ? "internal"
+          : user.activeTripId
+            ? "active_trip"
+            : user.activeReservationId
+              ? "reserved"
+              : user.verificationStatus || "pending";
+
+      return {
+        id: user.id,
+        username: user.fullName || user.username || user.email,
+        email: user.email,
+        phone: user.phone || "—",
+        balanceAmount: user.balance?.amount ?? 0,
+        balanceCurrency: user.balance?.currency || "AZN",
+        registeredAt,
+        accountStatus,
+        role: user.role,
+      };
+    });
+  }, []);
+
+  const visibleUserTableRows = useMemo(() => {
+    const query = userTableSearchQuery.trim().toLowerCase();
+    const sortedRows = [...userTableRows].sort((first, second) => {
+      const firstValue = first[userTableSort.key];
+      const secondValue = second[userTableSort.key];
+      const direction = userTableSort.direction === "asc" ? 1 : -1;
+
+      if (userTableSort.key === "balanceAmount") {
+        return (Number(firstValue) - Number(secondValue)) * direction;
+      }
+
+      return String(firstValue || "").localeCompare(String(secondValue || "")) * direction;
+    });
+
+    if (!query) return sortedRows;
+
+    return sortedRows.filter((row) =>
+      [row.username, row.email, row.phone, row.balanceAmount, row.registeredAt, row.accountStatus, row.role]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [userTableRows, userTableSearchQuery, userTableSort]);
+
   const fleetStats = useMemo(() => {
     const statusCounts = liveVehicles.reduce(
       (acc, vehicle) => {
@@ -969,7 +1134,9 @@ const AdminControlRoom = () => {
       0
     );
     const totalPorts = managedChargingStations.reduce((sum, station) => sum + station.totalPorts, 0);
-    const maxPower = Math.max(...managedChargingStations.map((station) => station.powerKw));
+    const maxPower = managedChargingStations.length
+      ? Math.max(...managedChargingStations.map((station) => station.powerKw))
+      : 0;
 
     return { onlineStations, availablePorts, totalPorts, maxPower };
   }, [managedChargingStations]);
@@ -1152,6 +1319,7 @@ const AdminControlRoom = () => {
     { id: "incidents", label: "Incident Feed", icon: FiShield, filter: "service" },
     { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
     { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
+    { id: "service-points", label: "Service Points", icon: FiTool, filter: "all" },
     { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "in_use" },
     { id: "analytics", label: "Resource Analytics", icon: FiTrendingUp, filter: "all", superOnly: true },
   ], []);
@@ -1162,6 +1330,14 @@ const AdminControlRoom = () => {
   const activeTicket = tickets.find((ticket) => ticket.id === activeTicketId) || tickets[0];
   const showAdminNotice = (message, section = activeSection) => {
     setAdminNotice({ section, message });
+  };
+  const openVehicleNotification = (notice) => {
+    if (notice.vehicleId) {
+      focusVehicle(notice.vehicleId);
+    }
+
+    setNotificationsOpen(false);
+    showAdminNotice(notice.title || "Notification opened", "control");
   };
 
   const saveDraftZone = () => {
@@ -1256,6 +1432,39 @@ const AdminControlRoom = () => {
     showAdminNotice(`${assignment.type}: назначено ${assignedTech.name}`);
   };
 
+  const createStaffTask = () => {
+    if (!staffTaskDraft.title.trim()) {
+      showAdminNotice("Укажите название задания", "tasks");
+      return;
+    }
+
+    const nextTasks = staffApi.createTask({
+      title: staffTaskDraft.title.trim(),
+      description: staffTaskDraft.description.trim() || "Задание создано администратором.",
+      assigneeId: staffTaskDraft.assigneeId,
+      priority: staffTaskDraft.priority,
+      dueAt: staffTaskDraft.dueAt.trim() || "Сегодня",
+      vehicleId: selectedVehicleId,
+      status: STAFF_TASK_STATUSES.WAITING,
+    });
+    const employee = staffEmployees.find((item) => item.id === staffTaskDraft.assigneeId);
+
+    setStaffTasks(nextTasks);
+    setStaffTaskDraft({
+      title: "",
+      description: "",
+      assigneeId: staffTaskDraft.assigneeId,
+      priority: "Средний",
+      dueAt: "Сегодня",
+    });
+    showAdminNotice(`Задание назначено: ${employee?.name || "сотрудник"}`, "tasks");
+  };
+
+  const updateStaffTaskStatus = (taskId, status) => {
+    setStaffTasks(staffApi.updateTaskStatus(taskId, status));
+    showAdminNotice(`Статус обновлен: ${STAFF_TASK_STATUS_LABELS[status]}`, "tasks");
+  };
+
   const updateChargingDraft = (field, value) => {
     setChargingDraft((draft) => ({ ...draft, [field]: value }));
   };
@@ -1273,6 +1482,7 @@ const AdminControlRoom = () => {
   const saveChargingPoint = () => {
     const lat = Number(chargingDraft.lat);
     const lng = Number(chargingDraft.lng);
+    const ports = Number(chargingDraft.ports);
 
     if (!chargingDraft.address.trim() || Number.isNaN(lat) || Number.isNaN(lng)) {
       showAdminNotice("Укажите адрес и координаты точки зарядки", "chargers");
@@ -1290,8 +1500,8 @@ const AdminControlRoom = () => {
         lng,
       },
       powerKw: chargingDraft.chargerType === "Type2" ? 22 : chargingDraft.chargerType === "CHAdeMO" ? 50 : 120,
-      totalPorts: 2,
-      availablePorts: chargingDraft.status === CHARGING_STATION_STATUSES.ONLINE ? 2 : 0,
+      totalPorts: ports,
+      availablePorts: chargingDraft.status === CHARGING_STATION_STATUSES.ONLINE ? ports : 0,
       connectorTypes: [chargingDraft.chargerType],
     };
 
@@ -1301,12 +1511,78 @@ const AdminControlRoom = () => {
       name: "",
       address: "",
       chargerType: "CCS2",
+      ports: 2,
       status: CHARGING_STATION_STATUSES.ONLINE,
       lat: "",
       lng: "",
       pickOnMap: false,
     });
     showAdminNotice(`Добавлена точка зарядки: ${nextStation.name}`, "chargers");
+  };
+
+  const deleteChargingPoint = (station) => {
+    const confirmed = window.confirm(`Удалить точку зарядки "${station.name}"?`);
+    if (!confirmed) return;
+
+    setManagedChargingStations((items) => items.filter((item) => item.id !== station.id));
+    setServiceTasks((items) =>
+      items.map((task) => (task.chargingStationId === station.id ? { ...task, chargingStationId: null } : task))
+    );
+    showAdminNotice(`Точка зарядки удалена: ${station.name}`, "chargers");
+  };
+
+  const updateServicePointDraft = (field, value) => {
+    setServicePointDraft((draft) => ({ ...draft, [field]: value }));
+  };
+
+  const setServicePointDraftPoint = ([lat, lng]) => {
+    setServicePointDraft((draft) => ({
+      ...draft,
+      lat: lat.toFixed(5),
+      lng: lng.toFixed(5),
+      address: draft.address || "Новая сервисная точка на карте",
+    }));
+    showAdminNotice("Координаты сервисной точки выбраны на карте", "service-points");
+  };
+
+  const saveServicePoint = () => {
+    const lat = Number(servicePointDraft.lat);
+    const lng = Number(servicePointDraft.lng);
+
+    if (!servicePointDraft.address.trim() || Number.isNaN(lat) || Number.isNaN(lng)) {
+      showAdminNotice("Укажите адрес и координаты сервисной точки", "service-points");
+      return;
+    }
+
+    const nextPoint = {
+      id: `service-point-custom-${managedServicePoints.length + 1}`,
+      name: servicePointDraft.name.trim() || servicePointDraft.address.trim(),
+      location: {
+        label: servicePointDraft.address.trim(),
+        zone: "Service",
+        lat,
+        lng,
+      },
+    };
+
+    setManagedServicePoints((items) => [nextPoint, ...items]);
+    setFocusTarget({ id: nextPoint.id, lat, lng });
+    setServicePointDraft({
+      name: "",
+      address: "",
+      lat: "",
+      lng: "",
+      pickOnMap: false,
+    });
+    showAdminNotice(`Сервисная точка добавлена: ${nextPoint.name}`, "service-points");
+  };
+
+  const deleteServicePoint = (point) => {
+    const confirmed = window.confirm(`Удалить сервисную точку "${point.name}"?`);
+    if (!confirmed) return;
+
+    setManagedServicePoints((items) => items.filter((item) => item.id !== point.id));
+    showAdminNotice(`Сервисная точка удалена: ${point.name}`, "service-points");
   };
 
   const advanceTask = (taskId) => {
@@ -1405,7 +1681,10 @@ const AdminControlRoom = () => {
       {renderPanelHeader(
         "Live Feed",
         "Стрим событий",
-        <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+        <div
+          className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right"
+          title="Utilization is the percentage of fleet cars currently in an active ride or reservation."
+        >
           <p className="text-[10px] font-black uppercase text-slate-500">Utilization</p>
           <p className="text-lg font-black text-white">{fleetStats.utilization}%</p>
         </div>
@@ -1514,6 +1793,28 @@ const AdminControlRoom = () => {
       badge: "border-white/10 bg-white/[0.06] text-slate-300",
       active: "border-white/20 bg-white/[0.08] text-white",
     };
+    const userStatusMeta = {
+      verified: { label: "Verified", className: "bg-emerald-500/15 text-emerald-200" },
+      pending: { label: "Pending", className: "bg-amber-500/15 text-amber-200" },
+      blocked: { label: "Blocked", className: "bg-red-500/15 text-red-200" },
+      internal: { label: "Internal", className: "bg-blue-500/15 text-blue-200" },
+      active_trip: { label: "In trip", className: "bg-cyan-500/15 text-cyan-200" },
+      reserved: { label: "Reserved", className: "bg-violet-500/15 text-violet-200" },
+    };
+    const userTableColumns = [
+      ["username", "Username"],
+      ["email", "Email"],
+      ["phone", "Phone"],
+      ["balanceAmount", "Balance"],
+      ["registeredAt", "Registered"],
+      ["accountStatus", "Status"],
+    ];
+    const toggleUserTableSort = (key) => {
+      setUserTableSort((current) => ({
+        key,
+        direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+      }));
+    };
 
     return (
       <>
@@ -1525,7 +1826,65 @@ const AdminControlRoom = () => {
           </span>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 p-5">
+        <div className="grid min-h-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-4 p-5">
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+            <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-black text-white">All registered users</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {visibleUserTableRows.length}/{userTableRows.length} users across all time
+                </p>
+              </div>
+              <label className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400 md:w-[320px]">
+                <FiSearch className="shrink-0 text-slate-500" />
+                <input
+                  value={userTableSearchQuery}
+                  onChange={(event) => setUserTableSearchQuery(event.target.value)}
+                  placeholder="Search users"
+                  className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                />
+              </label>
+            </div>
+            <div className="max-h-[340px] overflow-auto">
+              <table className="w-full min-w-[860px] text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-[#10192a] text-[10px] font-black uppercase tracking-wide text-slate-500">
+                  <tr>
+                    {userTableColumns.map(([key, label]) => (
+                      <th key={key} className="px-4 py-3">
+                        <button type="button" onClick={() => toggleUserTableSort(key)} className="flex items-center gap-1 hover:text-white">
+                          {label}
+                          {userTableSort.key === key && <span>{userTableSort.direction === "asc" ? "↑" : "↓"}</span>}
+                        </button>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {visibleUserTableRows.map((row) => {
+                    const status = userStatusMeta[row.accountStatus] || userStatusMeta.pending;
+
+                    return (
+                      <tr key={row.id} className="hover:bg-white/[0.04]">
+                        <td className="px-4 py-3 font-black text-white">{row.username}</td>
+                        <td className="px-4 py-3 font-semibold text-slate-300">{row.email}</td>
+                        <td className="px-4 py-3 font-semibold text-slate-300">{row.phone}</td>
+                        <td className="px-4 py-3 font-black text-white">
+                          {row.balanceAmount.toFixed(2)} {row.balanceCurrency}
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-slate-300">{row.registeredAt}</td>
+                        <td className="px-4 py-3">
+                          <span className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase ${status.className}`}>
+                            {status.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {tabItems.map((item) => {
               const meta = getStatusMeta(item.id);
@@ -2322,6 +2681,93 @@ const AdminControlRoom = () => {
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
           Техники — полевая команда: мойка, зарядка, осмотр, мелкий ремонт. “Следующий статус” двигает задачу по цепочке: назначено → в пути → на месте → обслуживается → готово.
         </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+          <div className="grid gap-2">
+            <input
+              value={staffTaskDraft.title}
+              onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
+              placeholder="Название задания для сотрудника"
+              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <textarea
+              value={staffTaskDraft.description}
+              onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, description: event.target.value }))}
+              placeholder="Описание"
+              rows={3}
+              className="resize-none rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <div className="grid gap-2 md:grid-cols-3">
+              <select
+                value={staffTaskDraft.assigneeId}
+                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, assigneeId: event.target.value }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                {staffEmployees.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={staffTaskDraft.priority}
+                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, priority: event.target.value }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value="Высокий">Высокий</option>
+                <option value="Средний">Средний</option>
+                <option value="Низкий">Низкий</option>
+              </select>
+              <input
+                value={staffTaskDraft.dueAt}
+                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, dueAt: event.target.value }))}
+                placeholder="Срок"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <button type="button" onClick={createStaffTask} className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600">
+              Назначить сотруднику
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          {staffTasks.map((task) => {
+            const employee = staffEmployees.find((item) => item.id === task.assigneeId);
+            return (
+              <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-white">{task.title}</p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{task.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
+                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{employee?.name || "Employee"}</span>
+                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.priority}</span>
+                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.dueAt}</span>
+                      <span className="rounded-full bg-blue-500/10 px-3 py-1 text-blue-200">
+                        {STAFF_TASK_STATUS_LABELS[task.status]}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid shrink-0 grid-cols-3 gap-2">
+                    {Object.entries(STAFF_TASK_STATUS_LABELS).map(([status, label]) => (
+                      <button
+                        key={status}
+                        type="button"
+                        onClick={() => updateStaffTaskStatus(task.id, status)}
+                        className={`rounded-xl px-3 py-2 text-[10px] font-black ${
+                          task.status === status ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         <div className="grid grid-cols-3 gap-2">
           {technicians.map((tech) => (
             <div key={tech.id} className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
@@ -2432,6 +2878,20 @@ const AdminControlRoom = () => {
                 <option value={CHARGING_STATION_STATUSES.MAINTENANCE}>Не работает</option>
               </select>
             </div>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">Количество портов</span>
+              <select
+                value={chargingDraft.ports}
+                onChange={(event) => updateChargingDraft("ports", Number(event.target.value))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                {CHARGING_PORT_OPTIONS.map((ports) => (
+                  <option key={ports} value={ports}>
+                    {ports}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button type="button" onClick={saveChargingPoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">
               Сохранить точку зарядки
             </button>
@@ -2472,6 +2932,92 @@ const AdminControlRoom = () => {
             </button>
           );
         })}
+      </div>
+    </>
+  );
+
+  const renderServicePointsPanel = () => (
+    <>
+      {renderPanelHeader(
+        "Service Points",
+        "Карта сервисов",
+        <button
+          type="button"
+          onClick={() => updateServicePointDraft("pickOnMap", !servicePointDraft.pickOnMap)}
+          className={`rounded-xl px-3 py-2 text-xs font-black ${servicePointDraft.pickOnMap ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}
+        >
+          <FiPlus className="inline" /> Добавить сервис
+        </button>
+      )}
+      <div className="grid gap-3 overflow-y-auto p-5">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
+          Здесь отображаются сервисные точки: гаражи, диагностические боксы и места обслуживания автопарка. Точку можно добавить вручную или выбрать координаты кликом по карте.
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-black text-white">Новая сервисная точка</p>
+            <span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">
+              {servicePointDraft.pickOnMap ? "Кликните по карте" : "Форма"}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2">
+            <input
+              value={servicePointDraft.name}
+              onChange={(event) => updateServicePointDraft("name", event.target.value)}
+              placeholder="Название сервиса"
+              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <input
+              value={servicePointDraft.address}
+              onChange={(event) => updateServicePointDraft("address", event.target.value)}
+              placeholder="Адрес"
+              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                value={servicePointDraft.lat}
+                onChange={(event) => updateServicePointDraft("lat", event.target.value)}
+                placeholder="Lat или клик по карте"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+              <input
+                value={servicePointDraft.lng}
+                onChange={(event) => updateServicePointDraft("lng", event.target.value)}
+                placeholder="Lng или клик по карте"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <button type="button" onClick={saveServicePoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">
+              Сохранить сервис
+            </button>
+          </div>
+        </div>
+        {managedServicePoints.map((point) => (
+          <button
+            key={point.id}
+            type="button"
+            onClick={() =>
+              setFocusTarget({
+                id: point.id,
+                lat: point.location.lat,
+                lng: point.location.lng,
+              })
+            }
+            className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left transition hover:bg-white/[0.07]"
+          >
+            <span className="flex items-start justify-between gap-3">
+              <span>
+                <span className="block text-sm font-black text-white">{point.name}</span>
+                <span className="mt-1 block text-xs font-semibold text-slate-400">
+                  {point.location.label} · {point.location.zone}
+                </span>
+              </span>
+              <span className="rounded-xl bg-cyan-500/15 px-2 py-1 text-[10px] font-black text-cyan-200">
+                Service
+              </span>
+            </span>
+          </button>
+        ))}
       </div>
     </>
   );
@@ -2810,6 +3356,7 @@ const AdminControlRoom = () => {
       incidents: renderIncidentPanel,
       tasks: renderTasksPanel,
       chargers: renderChargersPanel,
+      "service-points": renderServicePointsPanel,
       helpdesk: renderHelpdeskPanel,
       analytics: renderAnalyticsPanel,
     };
@@ -2819,6 +3366,28 @@ const AdminControlRoom = () => {
   };
 
   const isChargingMap = activeSection === "chargers";
+  const isServicePointsMap = activeSection === "service-points";
+  const isOperationsMap = isChargingMap || isServicePointsMap;
+  const mapSummaryCards = isChargingMap
+    ? [
+        ["Станций", managedChargingStations.length, FiZap, "text-cyan-200"],
+        ["Онлайн", stationStats.onlineStations, FiActivity, "text-emerald-200"],
+        ["Порты", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"],
+        ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"],
+      ]
+    : isServicePointsMap
+      ? [
+          ["Сервисов", managedServicePoints.length, FiTool, "text-cyan-200"],
+          ["Активные", managedServicePoints.length, FiActivity, "text-emerald-200"],
+          ["Карта", "Service", FiMap, "text-blue-200"],
+          ["Задачи", serviceTasks.length, FiShield, "text-amber-200"],
+        ]
+      : [
+          ["Онлайн", liveVehicles.length, FiZap, "text-cyan-200"],
+          ["Свободны", fleetStats.available, FiMap, "text-emerald-200"],
+          ["В пути", fleetStats.activeTrips, FiNavigation, "text-blue-200"],
+          ["Заряд", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"],
+        ];
   const isFullWidthPanel =
     activeSection === "users" ||
     activeSection === "billing" ||
@@ -2864,6 +3433,11 @@ const AdminControlRoom = () => {
             border: 0;
           }
 
+          .admin-service-point-marker {
+            background: transparent;
+            border: 0;
+          }
+
           .admin-station-marker__core {
             align-items: center;
             background: rgba(8, 17, 31, 0.94);
@@ -2893,6 +3467,41 @@ const AdminControlRoom = () => {
           }
 
           .admin-station-marker__core b {
+            color: #e2e8f0;
+            font-size: 9px;
+            font-weight: 900;
+            line-height: 1;
+          }
+
+          .admin-service-point-marker__core {
+            align-items: center;
+            background: rgba(8, 17, 31, 0.94);
+            border: 2px solid #22d3ee;
+            border-radius: 16px 16px 16px 4px;
+            box-shadow: 0 0 24px rgba(34, 211, 238, 0.38), 0 12px 26px rgba(0, 0, 0, 0.4);
+            color: #ffffff;
+            display: grid;
+            height: 48px;
+            justify-items: center;
+            padding: 5px;
+            position: relative;
+            transform: rotate(-45deg);
+            width: 48px;
+          }
+
+          .admin-service-point-marker__core span,
+          .admin-service-point-marker__core b {
+            transform: rotate(45deg);
+          }
+
+          .admin-service-point-marker__core span {
+            color: #67e8f9;
+            font-size: 18px;
+            font-weight: 900;
+            line-height: 1;
+          }
+
+          .admin-service-point-marker__core b {
             color: #e2e8f0;
             font-size: 9px;
             font-weight: 900;
@@ -3125,13 +3734,62 @@ const AdminControlRoom = () => {
                   <FiRadio className={alertsEnabled ? "animate-pulse" : ""} />
                   Live
                 </button>
-                <button
-                  type="button"
-                  className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300"
-                  aria-label="Notifications"
-                >
-                  <FiBell />
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setNotificationsOpen((value) => !value)}
+                    className={`relative flex h-11 w-11 items-center justify-center rounded-xl border transition ${
+                      notificationsOpen
+                        ? "border-red-300/35 bg-red-500/15 text-red-100"
+                        : "border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/20 hover:text-white"
+                    }`}
+                    aria-label="Notifications"
+                    aria-expanded={notificationsOpen}
+                  >
+                    <FiBell />
+                    {riderNotifications.length > 0 && (
+                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white">
+                        {Math.min(riderNotifications.length, 9)}
+                      </span>
+                    )}
+                  </button>
+
+                  {notificationsOpen && (
+                    <div className="absolute right-0 top-12 z-[900] w-[320px] overflow-hidden rounded-2xl border border-white/10 bg-[#0b1424] shadow-2xl shadow-black/40">
+                      <div className="border-b border-white/10 px-4 py-3">
+                        <p className="text-xs font-black uppercase tracking-[0.2em] text-red-300">Notifications</p>
+                        <p className="mt-1 text-xs font-bold text-slate-500">New fleet and rider events</p>
+                      </div>
+                      <div className="max-h-[360px] overflow-y-auto">
+                        {riderNotifications.length ? (
+                          riderNotifications.slice(0, 6).map((notice) => {
+                            const vehicle = getVehicle(notice.vehicleId);
+
+                            return (
+                              <button
+                                key={notice.id}
+                                type="button"
+                                onClick={() => openVehicleNotification(notice)}
+                                className="block w-full border-b border-white/5 px-4 py-3 text-left last:border-b-0 hover:bg-white/[0.06]"
+                              >
+                                <span className="block text-sm font-black leading-5 text-white">{notice.title}</span>
+                                <span className="mt-1 block text-xs font-semibold leading-5 text-slate-400">{notice.body}</span>
+                                <span className="mt-2 flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                                  <span className="truncate">{vehicle ? `${vehicle.brand} ${vehicle.model}` : "Fleet event"}</span>
+                                  <span>{notice.time}</span>
+                                </span>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="px-4 py-5 text-sm font-bold text-slate-400">
+                            No new notifications. Critical rider and fleet alerts will appear here.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </header>
@@ -3146,7 +3804,7 @@ const AdminControlRoom = () => {
                     url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                   />
 
-                  {!isChargingMap && managedZones.map((zone) => {
+                  {!isOperationsMap && managedZones.map((zone) => {
                     const restricted = zone.type === "restricted";
                     const limited = zone.type === "limited";
                     const zoneColor = restricted ? "#ef4444" : limited ? "#f59e0b" : "#22c55e";
@@ -3167,7 +3825,7 @@ const AdminControlRoom = () => {
                     );
                   })}
 
-                  {!isChargingMap && selectedVehicle?.liveStatus === "service" && (
+                  {!isOperationsMap && selectedVehicle?.liveStatus === "service" && (
                     <Circle
                       center={[selectedVehicle.location.lat, selectedVehicle.location.lng]}
                       radius={420}
@@ -3175,7 +3833,7 @@ const AdminControlRoom = () => {
                     />
                   )}
 
-                  {!isChargingMap && draftZonePoints.length > 1 && (
+                  {!isOperationsMap && draftZonePoints.length > 1 && (
                     <Polygon
                       positions={draftZonePoints}
                       pathOptions={{
@@ -3217,13 +3875,46 @@ const AdminControlRoom = () => {
                                 {station.connectorTypes.join(", ")}
                               </span>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteChargingPoint(station)}
+                              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white transition hover:bg-red-600"
+                            >
+                              <FiTrash2 />
+                              Удалить
+                            </button>
                           </div>
                         </Popup>
                       </Marker>
                     );
                   })}
 
-                  {!isChargingMap && filteredVehicles.map((vehicle) => {
+                  {isServicePointsMap && managedServicePoints.map((point) => (
+                    <Marker
+                      key={point.id}
+                      position={[point.location.lat, point.location.lng]}
+                      icon={createServicePointIcon()}
+                    >
+                      <Popup>
+                        <div className="min-w-[220px]">
+                          <p className="text-sm font-black text-slate-950">{point.name}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-500">
+                            {point.location.label} · {point.location.zone}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => deleteServicePoint(point)}
+                            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white transition hover:bg-red-600"
+                          >
+                            <FiTrash2 />
+                            Удалить
+                          </button>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  ))}
+
+                  {!isOperationsMap && filteredVehicles.map((vehicle) => {
                     const meta = STATUS_META[vehicle.liveStatus] || STATUS_META.available;
                     const active = selectedVehicleId === vehicle.id;
 
@@ -3252,7 +3943,7 @@ const AdminControlRoom = () => {
                     );
                   })}
 
-                  {!isChargingMap && activeSection === "tasks" &&
+                  {!isOperationsMap && activeSection === "tasks" &&
                     technicians.map((technician) => (
                       <Marker
                         key={technician.id}
@@ -3270,31 +3961,24 @@ const AdminControlRoom = () => {
 
                   <MapFocus focusTarget={focusTarget} />
                   <ZoneDrawEvents
-                    enabled={(!isChargingMap && activeSection === "pricing" && isDrawingZone) || (isChargingMap && chargingDraft.pickOnMap)}
+                    enabled={
+                      (!isOperationsMap && activeSection === "pricing" && isDrawingZone) ||
+                      (isChargingMap && chargingDraft.pickOnMap) ||
+                      (isServicePointsMap && servicePointDraft.pickOnMap)
+                    }
                     onAddPoint={(point) =>
                       isChargingMap
                         ? setChargingDraftPoint(point)
-                        : setDraftZonePoints((points) => [...points, point])
+                        : isServicePointsMap
+                          ? setServicePointDraftPoint(point)
+                          : setDraftZonePoints((points) => [...points, point])
                     }
                   />
                 </MapContainer>
               </div>
 
               <div className="pointer-events-none absolute left-4 right-4 top-4 z-[500] grid gap-3 md:left-6 md:right-auto md:grid-cols-4">
-                {(isChargingMap
-                  ? [
-                      ["Станций", managedChargingStations.length, FiZap, "text-cyan-200"],
-                      ["Онлайн", stationStats.onlineStations, FiActivity, "text-emerald-200"],
-                      ["Порты", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"],
-                      ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"],
-                    ]
-                  : [
-                      ["Онлайн", liveVehicles.length, FiZap, "text-cyan-200"],
-                      ["Свободны", fleetStats.available, FiMap, "text-emerald-200"],
-                      ["В пути", fleetStats.activeTrips, FiNavigation, "text-blue-200"],
-                      ["Заряд", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"],
-                    ]
-                ).map(([label, value, Icon, color]) => (
+                {mapSummaryCards.map(([label, value, Icon, color]) => (
                   <div key={label} className="rounded-2xl border border-white/10 bg-[#0b1424]/82 px-4 py-3 shadow-2xl shadow-black/20 backdrop-blur-xl">
                     <div className={`mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-wide ${color}`}>
                       <Icon />
@@ -3305,7 +3989,7 @@ const AdminControlRoom = () => {
                 ))}
               </div>
 
-              {!isChargingMap && (
+              {!isOperationsMap && (
               <div className="pointer-events-none absolute bottom-5 left-4 z-[500] w-[calc(100%-2rem)] rounded-2xl border border-white/10 bg-[#0b1424]/86 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl md:left-6 md:w-[410px]">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -3359,7 +4043,10 @@ const AdminControlRoom = () => {
                     <p className="text-xs font-black uppercase tracking-[0.22em] text-red-300">Live Feed</p>
                     <h2 className="mt-2 text-xl font-black text-white">Стрим событий</h2>
                   </div>
-                  <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+                  <div
+                    className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right"
+                    title="Utilization is the percentage of fleet cars currently in an active ride or reservation."
+                  >
                     <p className="text-[10px] font-black uppercase text-slate-500">Utilization</p>
                     <p className="text-lg font-black text-white">{fleetStats.utilization}%</p>
                   </div>

@@ -3,6 +3,17 @@ import { FaBolt } from "react-icons/fa6";
 import { FiCreditCard, FiLogOut, FiUser } from "react-icons/fi";
 
 const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) => {
+  const currentPath = window.location.pathname;
+  const currentHash = window.location.hash;
+
+  const isMenuItemActive = (item) => {
+    if (item.link === "/#fleet") {
+      return currentPath === "/" && (!currentHash || currentHash === "#fleet");
+    }
+
+    return item.link === currentPath;
+  };
+
   return (
     <AnimatePresence mode="wait">
       {open && (
@@ -36,17 +47,24 @@ const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) 
             </div>
 
             <ul className="flex flex-col gap-1">
-              {menuItems.map((item) => (
-                <li key={item.id}>
-                  <a
-                    href={item.link}
-                    className="flex items-center justify-between border-b-2 border-transparent px-3 py-3 text-base font-extrabold text-gray-700 transition hover:border-red-500 hover:text-red-500"
-                  >
-                    {item.title}
-                    <span className="h-2 w-2 rounded-full bg-red-500" />
-                  </a>
-                </li>
-              ))}
+              {menuItems.map((item) => {
+                const isActive = isMenuItemActive(item);
+
+                return (
+                  <li key={item.id}>
+                    <a
+                      href={item.link}
+                      className={`flex items-center justify-between border-b-2 px-3 py-3 text-base font-extrabold transition hover:border-red-500 hover:text-red-500 ${
+                        isActive ? "border-red-500 text-red-500" : "border-transparent text-gray-700"
+                      }`}
+                      aria-current={isActive ? "page" : undefined}
+                    >
+                      {item.title}
+                      <span className={`h-2 w-2 rounded-full transition ${isActive ? "scale-125 bg-red-500" : "bg-red-200"}`} />
+                    </a>
+                  </li>
+                );
+              })}
             </ul>
 
             {user ? (

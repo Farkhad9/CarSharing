@@ -8,7 +8,12 @@ import FleetSection from "./components/FleetSection/FleetSection";
 import WhyElectroStreet from "./components/WhyElectroStreet/WhyElectroStreet";
 import AuthModal from "./components/AuthModal/AuthModal";
 import Dashboard from "./components/Dashboard/Dashboard";
+import PricingPage from "./components/Pricing/PricingPage";
+import ChargingPage from "./components/Charging/ChargingPage";
+import AboutPage from "./components/About/AboutPage";
 import AdminControlRoom from "./components/Admin/AdminControlRoom";
+import StaffLogin from "./components/Staff/StaffLogin";
+import StaffDashboard from "./components/Staff/StaffDashboard";
 import AdvancedReservationStage from "./components/AdvancedReservationStage/AdvancedReservationStage";
 import AOS from "aos";
 import "aos/dist/aos.css";
@@ -16,7 +21,12 @@ import "aos/dist/aos.css";
 const App = () => {
   const isAuthPage = window.location.pathname === "/auth";
   const isDashboardPage = window.location.pathname === "/dashboard";
+  const isPricingPage = window.location.pathname === "/pricing";
+  const isChargingPage = window.location.pathname === "/charging";
+  const isAboutPage = window.location.pathname === "/about";
   const isAdminPage = window.location.pathname === "/admin";
+  const isStaffLoginPage = window.location.pathname === "/staff-login";
+  const isStaffPage = window.location.pathname === "/staff";
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [emailGateMessage, setEmailGateMessage] = useState("");
   const [user, setUser] = useState(() => {
@@ -107,8 +117,64 @@ const App = () => {
     return <Dashboard onLogout={handleLogout} />;
   }
 
+  if (isPricingPage) {
+    return (
+      <div className="overflow-x-hidden">
+        <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
+        <PricingPage />
+        <Footer />
+        {selectedVehicle && (
+          <AdvancedReservationStage
+            vehicle={selectedVehicle}
+            onClose={() => setSelectedVehicle(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (isChargingPage) {
+    return (
+      <div className="overflow-x-hidden">
+        <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
+        <ChargingPage />
+        <Footer />
+        {selectedVehicle && (
+          <AdvancedReservationStage
+            vehicle={selectedVehicle}
+            onClose={() => setSelectedVehicle(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (isAboutPage) {
+    return (
+      <div className="overflow-x-hidden">
+        <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
+        <AboutPage />
+        <Footer />
+        {selectedVehicle && (
+          <AdvancedReservationStage
+            vehicle={selectedVehicle}
+            onClose={() => setSelectedVehicle(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
   if (isAdminPage) {
     return <AdminControlRoom />;
+  }
+
+  if (isStaffLoginPage) {
+    return <StaffLogin />;
+  }
+
+  if (isStaffPage) {
+    return <StaffDashboard />;
   }
 
   return isAuthPage ? (

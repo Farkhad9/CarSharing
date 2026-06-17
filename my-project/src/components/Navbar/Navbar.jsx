@@ -11,6 +11,8 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
     const [open, setOpen] = useState(false);
     const [isAuthTransitioning, setIsAuthTransitioning] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
+    const currentPath = window.location.pathname;
+    const currentHash = window.location.hash;
     
     // Состояния для поиска
     const [searchOpen, setSearchOpen] = useState(false);
@@ -69,6 +71,14 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
         }, 520);
     };
 
+    const isMenuItemActive = (item) => {
+        if (item.link === "/#fleet") {
+            return currentPath === "/" && (!currentHash || currentHash === "#fleet");
+        }
+
+        return item.link === currentPath;
+    };
+
     return (
         <>
             <style>{`
@@ -114,18 +124,23 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                     {/* ===== ГЛАВНОЕ МЕНЮ ===== */}
                     <div className="hidden md:block">
                         <ul className="flex items-center gap-4 text-gray-700 lg:gap-6">
-                            {NavbarMenu.map((item) => (
-                                <li key={item.id}>
-                                    {/* Анимация: Выезжающая красная линия снизу */}
-                                    <a 
-                                        href={item.link} 
-                                        className="group relative inline-block px-3 py-1 font-bold transition-colors duration-300 hover:text-red-500"
-                                    >
-                                        {item.title}
-                                        <span className="absolute bottom-0 left-0 h-[2px] w-0 bg-red-500 transition-all duration-300 ease-in-out group-hover:w-full"></span>
-                                    </a>
-                                </li>
-                            ))}
+                            {NavbarMenu.map((item) => {
+                                const isActive = isMenuItemActive(item);
+
+                                return (
+                                    <li key={item.id}>
+                                        {/* Анимация: Выезжающая красная линия снизу */}
+                                        <a 
+                                            href={item.link} 
+                                            className={`group relative inline-block px-3 py-1 font-bold transition-colors duration-300 hover:text-red-500 ${isActive ? "text-red-500" : "text-gray-700"}`}
+                                            aria-current={isActive ? "page" : undefined}
+                                        >
+                                            {item.title}
+                                            <span className={`absolute bottom-0 left-0 h-[2px] bg-red-500 transition-all duration-300 ease-in-out ${isActive ? "w-full" : "w-0 group-hover:w-full"}`}></span>
+                                        </a>
+                                    </li>
+                                );
+                            })}
                         </ul>
                     </div>
 
