@@ -121,7 +121,7 @@ const App = () => {
     return (
       <div className="overflow-x-hidden">
         <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
-        <PricingPage />
+        <PricingPage user={user} onVehicleSelect={handleOpenVehicle} />
         <Footer />
         {selectedVehicle && (
           <AdvancedReservationStage
