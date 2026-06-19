@@ -37,11 +37,11 @@ const WhyElectroStreet = () => {
   ];
 
   return (
-    <section className="bg-[#fafafa] py-24">
-      <div className="container mx-auto px-4 md:px-6 max-w-7xl">
+    <section className="bg-[#fafafa] py-16 lg:py-20">
+      <div className="container mx-auto max-w-[1500px] px-4 md:px-6">
         
         {/* Хедер секции */}
-        <div className="max-w-3xl mb-16">
+        <div className="mb-12 max-w-3xl">
           <span className="mb-4 block text-sm font-bold uppercase tracking-widest text-red-500">
             Why ElectroStreet
           </span>
@@ -58,11 +58,11 @@ const WhyElectroStreet = () => {
         </div>
 
         {/* Сетка карточек */}
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:gap-8">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:gap-6">
           {benefits.map(({ number, Icon, title, text, note, badge }) => (
             <article
               key={title}
-              className="group relative overflow-hidden rounded-3xl border border-gray-100 bg-white p-8 lg:p-10 shadow-[0_2px_20px_-4px_rgba(0,0,0,0.03)] transition-all duration-500 hover:-translate-y-1 hover:shadow-[0_20px_40px_-4px_rgba(0,0,0,0.1)] border-l-4 border-l-transparent hover:border-l-red-500 flex flex-col"
+              className="group relative flex min-h-[410px] flex-col overflow-hidden rounded-2xl border border-gray-100 border-l-4 border-l-transparent bg-white p-6 shadow-[0_2px_20px_-4px_rgba(0,0,0,0.03)] transition-all duration-500 hover:-translate-y-1 hover:border-l-red-500 hover:shadow-[0_20px_40px_-4px_rgba(0,0,0,0.1)] lg:p-8"
             >
               
               {/* Фоновая цифра (настроена так, чтобы сидеть аккуратно внутри) */}
@@ -73,7 +73,7 @@ const WhyElectroStreet = () => {
               {/* Контент карточки */}
               <div className="relative z-10 flex flex-col h-full">
                 
-                <div className="mb-8 flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-500 shadow-inner transition-transform duration-500 group-hover:scale-110">
+                <div className="mb-7 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-500 shadow-inner transition-transform duration-500 group-hover:scale-110">
                   <Icon />
                 </div>
 
@@ -81,7 +81,7 @@ const WhyElectroStreet = () => {
                   {title}
                 </h3>
                 
-                <p className="mb-4 text-base leading-relaxed text-gray-600 flex-grow">
+                <p className="mb-4 flex-grow text-base leading-7 text-gray-600">
                   {text}
                 </p>
                 
@@ -89,7 +89,7 @@ const WhyElectroStreet = () => {
                   {note}
                 </p>
                 
-                <div className="mt-8">
+                <div className="mt-6">
                   <span className="inline-flex items-center rounded-full border border-red-100 bg-red-50 px-4 py-1.5 text-sm font-bold text-red-600">
                     {badge}
                   </span>

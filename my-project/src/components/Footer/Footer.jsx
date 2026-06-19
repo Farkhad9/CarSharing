@@ -111,7 +111,6 @@ const Footer = () => {
                         <h4 className="text-sm font-bold uppercase tracking-widest text-zinc-100 mb-6">Service</h4>
                         <ul className="space-y-4">
                             <li><a href="/pricing" className="text-zinc-400 hover:text-white transition-colors duration-200">Pricing</a></li>
-                            <li><a href="/#rent" className="text-zinc-400 hover:text-white transition-colors duration-200">Parking Zones</a></li>
                             <li><a href="/charging" className="text-zinc-400 hover:text-white transition-colors duration-200">Charging</a></li>
                             <li><button type="button" onClick={() => openModal('help')} className="text-left text-zinc-400 hover:text-white transition-colors duration-200">Help Center</button></li>
                         </ul>

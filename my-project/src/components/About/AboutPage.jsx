@@ -14,6 +14,7 @@ import {
 } from "react-icons/fi";
 import { FaCar } from "react-icons/fa";
 import headerImage from "../../assets/img/header-bg.png";
+import UserComments from "../UserComments/UserComments";
 import { vehicles } from "../../data/vehicles";
 
 const operatingLayers = [
@@ -383,6 +384,8 @@ const AboutPage = () => {
           </div>
         </div>
       </section>
+
+      <UserComments />
 
       <section className="bg-white py-20">
         <div className="container grid gap-8 lg:grid-cols-[0.8fr_1.2fr] lg:items-center">

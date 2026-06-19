@@ -6,6 +6,7 @@ import Location from "./components/Location/Location";
 import Footer from "./components/Footer/Footer";
 import FleetSection from "./components/FleetSection/FleetSection";
 import WhyElectroStreet from "./components/WhyElectroStreet/WhyElectroStreet";
+import UserComments from "./components/UserComments/UserComments";
 import AuthModal from "./components/AuthModal/AuthModal";
 import Dashboard from "./components/Dashboard/Dashboard";
 import PricingPage from "./components/Pricing/PricingPage";
@@ -213,6 +214,7 @@ const App = () => {
       <Location />
       <FleetSection onVehicleSelect={handleOpenVehicle} onUserChange={setUser} />
       <WhyElectroStreet />
+      <UserComments />
       <Footer />
       {selectedVehicle && (
         <AdvancedReservationStage
