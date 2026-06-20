@@ -1,0 +1,6 @@
+@CarSharing.WebApi_HostAddress = http://localhost:5019
+
+GET {{CarSharing.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
