@@ -77,7 +77,7 @@ const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) 
                   <span>Личный кабинет</span>
                 </a>
                 <a
-                  href="/dashboard"
+                  href="/dashboard?tab=payments"
                   className="flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 px-6 py-3 font-extrabold text-gray-700 duration-200 hover:border-red-200 hover:text-red-500"
                 >
                   <FiCreditCard />

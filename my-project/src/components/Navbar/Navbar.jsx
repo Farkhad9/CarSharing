@@ -263,7 +263,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                                             type="button"
                                             onClick={() => {
                                                 setProfileOpen(false);
-                                                window.location.href = "/dashboard";
+                                                window.location.href = "/dashboard?tab=payments";
                                             }}
                                             className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-bold text-gray-700 transition hover:bg-red-50 hover:text-red-600"
                                         >

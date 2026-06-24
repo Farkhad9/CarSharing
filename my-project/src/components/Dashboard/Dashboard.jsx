@@ -5,6 +5,7 @@ import {
   FiAlertCircle,
   FiArrowLeft,
   FiCheckCircle,
+  FiCamera,
   FiClock,
   FiCreditCard,
   FiDollarSign,
@@ -19,6 +20,7 @@ import {
   FiSend,
   FiShield,
   FiSmartphone,
+  FiStar,
   FiTrash2,
   FiUploadCloud,
   FiUserCheck,
@@ -33,10 +35,22 @@ import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 import { vehicles } from "../../data/vehicles";
 import { trips } from "../../data/trips";
+import { staffApi } from "../../api/staffApi";
+import {
+  TRIP_COMPLETION_UPDATED_EVENT,
+  TRIP_COMPLETION_STATUSES,
+  tripCompletionApi,
+} from "../../api/tripCompletionApi";
 
 const RESERVATION_SECONDS = 15 * 60;
 const MAX_ACTIVE_RESERVATIONS = 2;
 const DEFAULT_USER_LOCATION = [40.3772, 49.8475];
+const TRIP_PHOTO_ANGLES = [
+  { id: "front", label: "Front", hint: "Full front side of the car" },
+  { id: "rear", label: "Rear", hint: "Full rear side of the car" },
+  { id: "left", label: "Left side", hint: "Driver side from bumper to bumper" },
+  { id: "right", label: "Right side", hint: "Passenger side from bumper to bumper" },
+];
 
 const defaultIcon = L.icon({
   iconUrl: markerIcon,
@@ -131,6 +145,42 @@ const createSupportMessage = (body, sender = "user", author = "You") => ({
   createdAt: new Date().toISOString(),
 });
 
+const prepareTripPhoto = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file?.type.startsWith("image/")) {
+      reject(new Error("Please select an image file."));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The photo could not be read."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("The photo could not be processed."));
+      image.onload = () => {
+        const maxSide = 800;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("The photo could not be processed."));
+          return;
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        resolve({
+          name: file.name,
+          dataUrl: canvas.toDataURL("image/jpeg", 0.62),
+        });
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
 const getSupportReply = (text) => {
   const normalizedText = text.toLowerCase();
 
@@ -208,7 +258,10 @@ const ReservationMapBounds = ({ points }) => {
 };
 
 const Dashboard = ({ onLogout }) => {
-  const [activeTab, setActiveTab] = useState("trip");
+  const [activeTab, setActiveTab] = useState(() => {
+    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    return tabs.some((tab) => tab.id === requestedTab) ? requestedTab : "trip";
+  });
   const [user, setUser] = useState(() =>
     getStoredJson("electroStreetUser", {
       name: "Farhad",
@@ -224,7 +277,7 @@ const Dashboard = ({ onLogout }) => {
   const [topUpAmount, setTopUpAmount] = useState("50");
   const [cardForm, setCardForm] = useState({ number: "", holder: user.name || "Farhad" });
   const [paymentCards, setPaymentCards] = useState(() =>
-    getStoredJson("electroStreetCards", [{ id: "visa-4321", holder: "Farhad", brand: "Visa", last4: "4321" }])
+    getStoredJson("electroStreetCards", [])
   );
   const [documents, setDocuments] = useState(() =>
     getStoredJson("electroStreetDocuments", {
@@ -266,6 +319,19 @@ const Dashboard = ({ onLogout }) => {
   const [userLocation, setUserLocation] = useState(DEFAULT_USER_LOCATION);
   const [routeStates, setRouteStates] = useState({});
   const [cancelReservationTarget, setCancelReservationTarget] = useState(null);
+  const [completionTarget, setCompletionTarget] = useState(null);
+  const [completionPhotos, setCompletionPhotos] = useState({});
+  const [completionError, setCompletionError] = useState("");
+  const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
+  const [isSubmittingCompletion, setIsSubmittingCompletion] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [isPayingTrip, setIsPayingTrip] = useState(false);
+  const [finishPromoCode, setFinishPromoCode] = useState("");
+  const [finishPromoMessage, setFinishPromoMessage] = useState("");
+  const [reviewTrip, setReviewTrip] = useState(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewError, setReviewError] = useState("");
 
   const licenseInputRef = useRef(null);
   const passportInputRef = useRef(null);
@@ -277,13 +343,19 @@ const Dashboard = ({ onLogout }) => {
       const isVehicleUnlocked = Boolean(reservation?.unlockedAt);
       const rideStartedAt = reservation?.tripStartedAt || reservation?.unlockedAt || null;
       const isRideActive = Boolean(rideStartedAt);
+      const isFinishingRide = reservation?.tripStatus === "finishing";
+      const isCompletionPending = reservation?.tripStatus === "pending_review";
+      const isAwaitingPayment = reservation?.tripStatus === "awaiting_payment";
+      const rideTimerEnd = (isFinishingRide || isCompletionPending || isAwaitingPayment) && reservation?.finishRequestedAt
+        ? new Date(reservation.finishRequestedAt).getTime()
+        : timerNow;
       const reservationRemainingSeconds = Math.max(
         0,
         RESERVATION_SECONDS - Math.floor((timerNow - new Date(reservation.reservedAt).getTime()) / 1000)
       );
       const reservationProgress = Math.max(0, Math.min(100, (reservationRemainingSeconds / RESERVATION_SECONDS) * 100));
       const rideElapsedSeconds = rideStartedAt
-        ? Math.max(0, Math.floor((timerNow - new Date(rideStartedAt).getTime()) / 1000))
+        ? Math.max(0, Math.floor((rideTimerEnd - new Date(rideStartedAt).getTime()) / 1000))
         : 0;
       const rideCost = isRideActive
         ? Number((((rideElapsedSeconds || 0) / 60) * Number(vehicle?.rate || vehicle?.pricePerMinute || 0)).toFixed(2))
@@ -295,6 +367,9 @@ const Dashboard = ({ onLogout }) => {
         isVehicleUnlocked,
         rideStartedAt,
         isRideActive,
+        isFinishingRide,
+        isCompletionPending,
+        isAwaitingPayment,
         reservationRemainingSeconds,
         reservationProgress,
         rideElapsedSeconds,
@@ -303,6 +378,10 @@ const Dashboard = ({ onLogout }) => {
     });
   }, [reservations, timerNow]);
   const activeVehicle = activeReservations[0] || null;
+  const paymentVehicle = activeReservations.find((vehicle) => vehicle.isAwaitingPayment) || null;
+  const paymentRequest = paymentVehicle?.completionRequestId
+    ? tripCompletionApi.getRequest(paymentVehicle.completionRequestId)
+    : null;
   const activeSupportTicket = useMemo(
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
@@ -326,6 +405,22 @@ const Dashboard = ({ onLogout }) => {
     localStorage.removeItem("reservedVehicle");
     localStorage.setItem("reservedVehicles", JSON.stringify(reservations));
   }, [reservations]);
+
+  useEffect(() => {
+    const syncReservations = (event) => {
+      if (!event || event.type === TRIP_COMPLETION_UPDATED_EVENT || event.key === "reservedVehicles") {
+        setReservations(getStoredReservations());
+      }
+    };
+
+    window.addEventListener("storage", syncReservations);
+    window.addEventListener(TRIP_COMPLETION_UPDATED_EVENT, syncReservations);
+
+    return () => {
+      window.removeEventListener("storage", syncReservations);
+      window.removeEventListener(TRIP_COMPLETION_UPDATED_EVENT, syncReservations);
+    };
+  }, []);
 
   useEffect(() => {
     if (!reservations.length) return undefined;
@@ -495,24 +590,161 @@ const Dashboard = ({ onLogout }) => {
     setCancelReservationTarget(vehicle);
   };
 
-  const handleCompleteReservation = (reservationId) => {
-    const completedReservation = reservations.find(
-      (reservation) => (reservation.id || reservation.vehicleId) === reservationId
-    );
+  const openTripCompletion = (vehicle) => {
+    if (vehicle.isCompletionPending) return;
+
+    const finishRequestedAt = new Date().toISOString();
+    const frozenVehicle = {
+      ...vehicle,
+      finishRequestedAt,
+      rideCost: vehicle.rideCost,
+      rideElapsedSeconds: vehicle.rideElapsedSeconds,
+    };
 
     setReservations((currentReservations) =>
-      currentReservations.filter((reservation) => (reservation.id || reservation.vehicleId) !== reservationId)
+      currentReservations.map((reservation) =>
+        (reservation.id || reservation.vehicleId) === vehicle.reservationId
+          ? {
+              ...reservation,
+              tripStatus: "finishing",
+              finishRequestedAt,
+              frozenRideCost: vehicle.rideCost,
+            }
+          : reservation
+      )
     );
+    setCompletionTarget(frozenVehicle);
+    setCompletionPhotos({});
+    setCompletionError("");
+  };
 
-    if (completedReservation?.tripStartedAt || completedReservation?.unlockedAt) {
-      setTripNotice("The ride has been completed and the vehicle was removed from your cabinet.");
+  const closeTripCompletion = () => {
+    if (isSubmittingCompletion) return;
+    const reservationId = completionTarget?.reservationId;
+    setReservations((currentReservations) =>
+      currentReservations.map((reservation) =>
+        (reservation.id || reservation.vehicleId) === reservationId &&
+        reservation.tripStatus === "finishing"
+          ? {
+              ...reservation,
+              tripStatus: "active",
+              finishRequestedAt: null,
+              frozenRideCost: null,
+            }
+          : reservation
+      )
+    );
+    setCompletionTarget(null);
+    setCompletionPhotos({});
+    setCompletionError("");
+  };
+
+  const handleTripPhoto = async (angle, event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (file.size > 15 * 1024 * 1024) {
+      setCompletionError("Each photo must be smaller than 15 MB.");
       return;
     }
 
-    setTripNotice("The reservation has been completed and removed from your cabinet.");
+    setIsPreparingPhoto(true);
+    setCompletionError("");
+
+    try {
+      const photo = await prepareTripPhoto(file);
+      setCompletionPhotos((current) => ({ ...current, [angle]: photo }));
+    } catch (error) {
+      setCompletionError(error.message);
+    } finally {
+      setIsPreparingPhoto(false);
+    }
+  };
+
+  const submitTripCompletion = () => {
+    const missingAngle = TRIP_PHOTO_ANGLES.find((angle) => !completionPhotos[angle.id]);
+    if (missingAngle) {
+      setCompletionError(`Add the ${missingAngle.label.toLowerCase()} photo to continue.`);
+      return;
+    }
+
+    const reservation = reservations.find(
+      (item) => (item.id || item.vehicleId) === completionTarget?.reservationId
+    );
+    if (!reservation || !completionTarget) {
+      setCompletionError("The active ride could not be found.");
+      return;
+    }
+
+    if (!window.confirm("Send these four photos to an employee for review? You will not be able to finish the trip until they approve them.")) {
+      return;
+    }
+
+    setIsSubmittingCompletion(true);
+    setCompletionError("");
+
+    try {
+      const request = tripCompletionApi.submitRequest({
+        reservation,
+        vehicle: completionTarget,
+        user,
+        photos: completionPhotos,
+        rideCost: completionTarget.rideCost,
+      });
+
+      const hasReviewTask = staffApi
+        .getTasks()
+        .some((task) => task.completionRequestId === request.id);
+
+      if (!hasReviewTask) {
+        staffApi.createTask({
+          taskType: "trip_completion_review",
+          completionRequestId: request.id,
+          title: `Check trip photos: ${request.vehicleName}`,
+          description: `${request.userName} submitted four vehicle photos. Review every side and approve the trip completion.`,
+          assigneeId: request.assigneeId,
+          vehicleId: request.vehicleId,
+          priority: "High",
+          dueAt: "As soon as possible",
+        });
+      }
+
+      setReservations((currentReservations) =>
+        currentReservations.map((item) =>
+          (item.id || item.vehicleId) === request.reservationId
+            ? {
+                ...item,
+                tripStatus: "pending_review",
+                completionRequestId: request.id,
+                finishRequestedAt: completionTarget.finishRequestedAt,
+                frozenRideCost: completionTarget.rideCost,
+              }
+            : item
+        )
+      );
+      setTripNotice(
+        `Four photos were sent to ${request.assigneeName}. The ride will close after employee approval.`
+      );
+      setCompletionTarget(null);
+      setCompletionPhotos({});
+    } catch (error) {
+      const isStorageError =
+        error?.name === "QuotaExceededError" ||
+        String(error?.message || "").toLowerCase().includes("quota");
+      setCompletionError(
+        isStorageError
+          ? "The browser could not store these photos. Try smaller images or clear old site data."
+          : error.message || "The photos could not be submitted."
+      );
+    } finally {
+      setIsSubmittingCompletion(false);
+    }
   };
 
   const handleUnlockVehicle = (reservationId) => {
+    if (!window.confirm("Unlock the car and start the paid ride now?")) return;
+
     const unlockedAt = new Date().toISOString();
     setReservations((currentReservations) =>
       currentReservations.map((reservation) =>
@@ -529,7 +761,101 @@ const Dashboard = ({ onLogout }) => {
       )
     );
     setTimerNow(Date.now());
-    setTripNotice("The reservation timer is stopped. Ride time and billing started from the moment you unlocked the car.");
+    setTripNotice("");
+  };
+
+  const handlePayTrip = (targetVehicle = paymentVehicle) => {
+    if (!targetVehicle?.completionRequestId) return;
+
+    const request = tripCompletionApi.getRequest(targetVehicle.completionRequestId);
+    if (!request || request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
+      setPaymentError("Employee approval has not arrived yet.");
+      return;
+    }
+
+    const amount = Number(request.finalRideCost || request.rideCost || targetVehicle.finalRideCost || 0);
+    const paymentMethod = targetVehicle.paymentMethod || "card";
+
+    if (
+      !window.confirm(
+        `Confirm payment of ${amount.toFixed(2)} AZN using ${
+          paymentMethod === "profile_balance" ? "your profile balance" : paymentMethod
+        }?`
+      )
+    ) {
+      return;
+    }
+
+    if (paymentMethod === "profile_balance" && Number(user.balance || 0) < amount) {
+      setPaymentError("Your profile balance is not enough. Top it up or contact support.");
+      return;
+    }
+
+    setIsPayingTrip(true);
+    setPaymentError("");
+
+    try {
+      const paidRequest = tripCompletionApi.payRequest(request.id, paymentMethod);
+
+      if (paymentMethod === "profile_balance") {
+        persistUser({
+          ...user,
+          balance: Number((Number(user.balance || 0) - amount).toFixed(2)),
+        });
+      }
+
+      setReservations(getStoredReservations());
+      setTripNotice(`Payment of ${amount.toFixed(2)} AZN was successful. The ride is completed.`);
+      setReviewTrip(paidRequest);
+      setReviewRating(5);
+      setReviewComment("");
+      setReviewError("");
+    } catch (error) {
+      setPaymentError(error.message || "The payment could not be completed.");
+    } finally {
+      setIsPayingTrip(false);
+    }
+  };
+
+  const handleFinishPromo = () => {
+    if (!paymentRequest) return;
+
+    try {
+      const updatedRequest = tripCompletionApi.applyPromoCode(
+        paymentRequest.id,
+        finishPromoCode
+      );
+      setReservations(getStoredReservations());
+      setFinishPromoMessage(
+        `Promo "${updatedRequest.promoCode}" applied: ${updatedRequest.discountPercent}% off.`
+      );
+      setPaymentError("");
+    } catch (error) {
+      setFinishPromoMessage("");
+      setPaymentError(error.message || "Promo code could not be applied.");
+    }
+  };
+
+  const submitTripReview = () => {
+    if (!reviewTrip) return;
+
+    if (!reviewComment.trim()) {
+      setReviewError("Write a short comment about your trip.");
+      return;
+    }
+
+    try {
+      tripCompletionApi.addTripReview(reviewTrip.id, {
+        rating: reviewRating,
+        comment: reviewComment,
+      });
+      setTripNotice("Thank you! Your trip review was saved.");
+      setReviewTrip(null);
+      setReviewComment("");
+      setReviewError("");
+    } catch (error) {
+      setReviewError(error.message || "The review could not be saved.");
+    }
   };
 
   const handleTopUp = (event) => {
@@ -730,7 +1056,13 @@ const Dashboard = ({ onLogout }) => {
                       </h3>
                     </div>
                     <span className="rounded-full bg-zinc-950 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-white">
-                      {vehicle.isRideActive ? "In ride" : "Reserved"}
+                      {vehicle.isAwaitingPayment
+                        ? "Payment required"
+                        : vehicle.isCompletionPending
+                          ? "Under review"
+                          : vehicle.isRideActive
+                            ? "In ride"
+                            : "Reserved"}
                     </span>
                   </div>
 
@@ -740,7 +1072,11 @@ const Dashboard = ({ onLogout }) => {
                         {vehicle.isRideActive ? formatDuration(vehicle.rideElapsedSeconds) : formatTimer(vehicle.reservationRemainingSeconds)}
                       </span>
                       <span className="pb-1 text-xs font-black uppercase tracking-wide text-white/45">
-                        {vehicle.isRideActive ? "ride time" : "free walk"}
+                        {vehicle.isCompletionPending || vehicle.isAwaitingPayment
+                          ? "final ride time"
+                          : vehicle.isRideActive
+                            ? "ride time"
+                            : "free walk"}
                       </span>
                     </div>
                     {vehicle.isRideActive ? (
@@ -766,6 +1102,34 @@ const Dashboard = ({ onLogout }) => {
                     )}
                   </div>
 
+                  {vehicle.isCompletionPending && (
+                    <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <FiClock className="mt-0.5 shrink-0 text-amber-600" />
+                        <div>
+                          <p className="text-sm font-black text-amber-900">Waiting for employee approval</p>
+                          <p className="mt-1 text-xs font-semibold leading-5 text-amber-700">
+                            Your four vehicle photos were submitted. The ride remains in review and will close automatically after approval.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {vehicle.isAwaitingPayment && (
+                    <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <FiCheckCircle className="mt-0.5 shrink-0 text-emerald-600" />
+                        <div>
+                          <p className="text-sm font-black text-emerald-900">Photos approved — payment required</p>
+                          <p className="mt-1 text-xs font-semibold leading-5 text-emerald-700">
+                            The employee approved the vehicle condition. Confirm payment to complete the ride.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-5 grid grid-cols-2 gap-3">
                     <div className="rounded-2xl bg-zinc-50 p-4">
                       <FiMapPin className="text-red-500" />
@@ -788,26 +1152,42 @@ const Dashboard = ({ onLogout }) => {
                       type="button"
                       onClick={() =>
                         vehicle.isRideActive
-                          ? handleCompleteReservation(vehicle.reservationId)
+                          ? handleQuickSupportAction(supportQuickActions[2])
                           : requestCancelReservation(vehicle)
                       }
                       className="rounded-2xl border border-zinc-200 px-5 py-4 text-sm font-black text-zinc-700 transition hover:border-red-200 hover:text-red-600"
                     >
-                      {vehicle.isRideActive ? "Cancel reservation" : "Cancel reservation"}
+                      {vehicle.isRideActive ? "Contact support" : "Cancel reservation"}
                     </button>
                     <button
                       type="button"
                       onClick={() =>
-                        vehicle.isRideActive
-                          ? handleCompleteReservation(vehicle.reservationId)
+                        vehicle.isAwaitingPayment
+                          ? handlePayTrip(vehicle)
+                          : vehicle.isRideActive
+                          ? openTripCompletion(vehicle)
                           : handleUnlockVehicle(vehicle.reservationId)
                       }
                       className={`rounded-2xl px-5 py-4 text-sm font-black text-white transition ${
-                        vehicle.isRideActive ? "bg-zinc-950 hover:bg-zinc-800" : "bg-red-500 hover:bg-red-600"
+                        vehicle.isAwaitingPayment
+                          ? "bg-emerald-600 hover:bg-emerald-700"
+                          : vehicle.isCompletionPending
+                          ? "cursor-not-allowed bg-amber-500"
+                          : vehicle.isRideActive
+                            ? "bg-zinc-950 hover:bg-zinc-800"
+                            : "bg-red-500 hover:bg-red-600"
                       } ${vehicle.isVehicleUnlocked && !vehicle.isRideActive ? "cursor-not-allowed bg-zinc-100 text-zinc-400" : ""}`}
-                      disabled={vehicle.isVehicleUnlocked && !vehicle.isRideActive}
+                      disabled={vehicle.isCompletionPending || (vehicle.isVehicleUnlocked && !vehicle.isRideActive)}
                     >
-                      {vehicle.isRideActive ? "Finish ride" : vehicle.isVehicleUnlocked ? "Car unlocked" : "Unlock car"}
+                      {vehicle.isAwaitingPayment
+                        ? `Pay ${formatMoney(vehicle.finalRideCost || vehicle.rideCost)}`
+                        : vehicle.isCompletionPending
+                        ? "Awaiting approval"
+                        : vehicle.isRideActive
+                          ? "Finish ride"
+                          : vehicle.isVehicleUnlocked
+                            ? "Car unlocked"
+                            : "Unlock car"}
                     </button>
                   </div>
                 </div>
@@ -1449,6 +1829,322 @@ const Dashboard = ({ onLogout }) => {
               </button>
             </div>
           </motion.form>
+        </div>
+      )}
+
+      {paymentVehicle && (
+        <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur">
+          <motion.div
+            className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+          >
+            <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-2xl text-emerald-600">
+              <FiCheckCircle />
+            </span>
+            <p className="mt-5 text-xs font-black uppercase tracking-[0.18em] text-emerald-600">
+              Employee approved the photos
+            </p>
+            <h2 className="mt-2 text-3xl font-black text-zinc-950">Confirm trip payment</h2>
+            <p className="mt-3 text-sm font-semibold leading-6 text-zinc-500">
+              The vehicle condition was approved. Pay the final fare to complete the ride.
+            </p>
+
+            <div className="mt-6 rounded-3xl bg-zinc-950 p-5 text-white">
+              <div className="mb-5">
+                <span className="block text-xs font-black uppercase tracking-wide text-white/45">
+                  {paymentVehicle.brand} {paymentVehicle.model}
+                </span>
+                <span className="mt-1 block text-sm font-bold text-white/70">
+                  {paymentVehicle.paymentMethod === "profile_balance"
+                    ? "Profile balance"
+                    : paymentVehicle.paymentMethod || "Card"}
+                </span>
+              </div>
+              <div className="space-y-3 border-t border-white/10 pt-4 text-sm font-bold">
+                <div className="flex justify-between text-white/60">
+                  <span>Trip price</span>
+                  <span>{formatMoney(paymentRequest?.baseRideCost || paymentVehicle.baseRideCost || paymentVehicle.rideCost)}</span>
+                </div>
+                <div className="flex justify-between text-emerald-300">
+                  <span>
+                    Promo discount
+                    {paymentRequest?.discountPercent ? ` (${paymentRequest.discountPercent}%)` : ""}
+                  </span>
+                  <span>-{formatMoney(paymentRequest?.discountAmount || 0)}</span>
+                </div>
+                <div className="flex items-end justify-between border-t border-white/10 pt-4">
+                  <span className="text-white/70">Final price</span>
+                  <span className="text-3xl font-black">
+                    {formatMoney(paymentRequest?.finalRideCost || paymentVehicle.finalRideCost || paymentVehicle.rideCost)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {!paymentRequest?.promoCode && (
+              <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wide text-zinc-500">
+                  Have a promo code?
+                </p>
+                <p className="mt-1 text-xs font-semibold text-zinc-500">
+                  You did not apply one during reservation. Enter it before payment.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={finishPromoCode}
+                    onChange={(event) => {
+                      setFinishPromoCode(event.target.value);
+                      setPaymentError("");
+                    }}
+                    placeholder="Enter promo code"
+                    className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm font-bold outline-none focus:border-red-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleFinishPromo}
+                    disabled={!finishPromoCode.trim()}
+                    className="rounded-xl bg-zinc-950 px-4 py-3 text-sm font-black text-white disabled:bg-zinc-300"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {paymentRequest?.promoCode && (
+              <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
+                Promo “{paymentRequest.promoCode}” applied. You saved {formatMoney(paymentRequest.discountAmount)}.
+              </p>
+            )}
+
+            {finishPromoMessage && !paymentRequest?.promoCode && (
+              <p className="mt-4 text-sm font-bold text-emerald-700">{finishPromoMessage}</p>
+            )}
+
+            {paymentError && (
+              <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                {paymentError}
+              </p>
+            )}
+
+            <div className="mt-6">
+              <button
+                type="button"
+                onClick={() => handlePayTrip(paymentVehicle)}
+                disabled={isPayingTrip}
+                className="w-full rounded-2xl bg-emerald-600 px-5 py-4 text-sm font-black text-white transition hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {isPayingTrip ? "Paying..." : "Confirm and pay"}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {reviewTrip && (
+        <div className="fixed inset-0 z-[2300] flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur">
+          <motion.div
+            className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl"
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+          >
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-red-500">
+              Payment successful
+            </p>
+            <h2 className="mt-2 text-3xl font-black text-zinc-950">How was your trip?</h2>
+            <p className="mt-3 text-sm font-semibold leading-6 text-zinc-500">
+              Rate your ride in {reviewTrip.vehicleName} and leave a short comment.
+            </p>
+
+            <div className="mt-6 flex justify-center gap-2 rounded-3xl bg-zinc-50 p-5">
+              {Array.from({ length: 5 }).map((_, index) => {
+                const value = index + 1;
+
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setReviewRating(value)}
+                    className={`text-4xl transition hover:scale-110 ${
+                      value <= reviewRating ? "text-amber-400" : "text-zinc-200"
+                    }`}
+                    aria-label={`${value} star rating`}
+                  >
+                    <FiStar className={value <= reviewRating ? "fill-current" : ""} />
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              value={reviewComment}
+              onChange={(event) => {
+                setReviewComment(event.target.value);
+                setReviewError("");
+              }}
+              maxLength={500}
+              rows={5}
+              placeholder="Tell us what you liked or what we should improve..."
+              className="mt-4 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4 text-sm font-semibold text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-red-300 focus:bg-white"
+            />
+            <p className="mt-2 text-right text-xs font-bold text-zinc-400">
+              {reviewComment.length}/500
+            </p>
+
+            {reviewError && (
+              <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                {reviewError}
+              </p>
+            )}
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewTrip(null);
+                  setReviewComment("");
+                  setReviewError("");
+                }}
+                className="rounded-2xl border border-zinc-200 px-5 py-4 text-sm font-black text-zinc-600 transition hover:border-zinc-300"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={submitTripReview}
+                className="rounded-2xl bg-red-500 px-5 py-4 text-sm font-black text-white transition hover:bg-red-600"
+              >
+                Send comment
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {completionTarget && (
+        <div className="fixed inset-0 z-[2100] overflow-y-auto bg-zinc-950/75 p-4 backdrop-blur">
+          <div className="flex min-h-full items-center justify-center py-6">
+            <motion.div
+              className="w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl"
+              initial={{ opacity: 0, y: 24, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-zinc-100 p-6">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-red-500">Finish ride safely</p>
+                  <h2 className="mt-2 text-3xl font-black text-zinc-950">Add four vehicle photos</h2>
+                  <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-zinc-500">
+                    Photograph the complete front, rear, left, and right sides. An employee will review them before the ride is closed.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeTripCompletion}
+                  disabled={isSubmittingCompletion}
+                  className="rounded-full bg-zinc-100 p-3 text-zinc-500 transition hover:bg-zinc-200 hover:text-zinc-950 disabled:opacity-50"
+                  aria-label="Close photo upload"
+                >
+                  <FiX />
+                </button>
+              </div>
+
+              <div className="grid gap-4 p-6 sm:grid-cols-2">
+                {TRIP_PHOTO_ANGLES.map((angle) => {
+                  const photo = completionPhotos[angle.id];
+
+                  return (
+                    <label
+                      key={angle.id}
+                      className={`group relative min-h-[230px] cursor-pointer overflow-hidden rounded-3xl border-2 border-dashed transition ${
+                        photo
+                          ? "border-emerald-300 bg-emerald-50"
+                          : "border-zinc-200 bg-zinc-50 hover:border-red-300 hover:bg-red-50"
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="sr-only"
+                        onChange={(event) => handleTripPhoto(angle.id, event)}
+                        disabled={isPreparingPhoto || isSubmittingCompletion}
+                      />
+
+                      {photo ? (
+                        <>
+                          <img
+                            src={photo.dataUrl}
+                            alt={`${angle.label} vehicle view`}
+                            className="absolute inset-0 h-full w-full object-cover"
+                          />
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-zinc-950/90 to-transparent p-5 pt-12 text-white">
+                            <p className="flex items-center gap-2 text-sm font-black">
+                              <FiCheckCircle className="text-emerald-300" />
+                              {angle.label}
+                            </p>
+                            <p className="mt-1 truncate text-xs font-semibold text-white/65">
+                              {photo.name} · click to replace
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <span className="flex min-h-[230px] flex-col items-center justify-center p-6 text-center">
+                          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-2xl text-red-500 shadow-sm transition group-hover:scale-105">
+                            <FiCamera />
+                          </span>
+                          <span className="mt-4 text-lg font-black text-zinc-950">{angle.label}</span>
+                          <span className="mt-1 text-xs font-semibold text-zinc-500">{angle.hint}</span>
+                          <span className="mt-4 text-[11px] font-black uppercase tracking-wide text-red-500">
+                            Take or choose photo
+                          </span>
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-zinc-100 bg-zinc-50 p-6">
+                {completionError && (
+                  <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                    {completionError}
+                  </p>
+                )}
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm font-bold text-zinc-500">
+                    {Object.keys(completionPhotos).length} of 4 photos ready
+                    {isPreparingPhoto ? " · processing photo..." : ""}
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={closeTripCompletion}
+                      disabled={isSubmittingCompletion}
+                      className="rounded-2xl border border-zinc-200 bg-white px-5 py-4 text-sm font-black text-zinc-700 transition hover:border-zinc-300 disabled:opacity-50"
+                    >
+                      Not now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={submitTripCompletion}
+                      disabled={
+                        Object.keys(completionPhotos).length !== TRIP_PHOTO_ANGLES.length ||
+                        isPreparingPhoto ||
+                        isSubmittingCompletion
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-500 px-6 py-4 text-sm font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-zinc-300"
+                    >
+                      <FiUploadCloud />
+                      {isSubmittingCompletion ? "Sending..." : "Send for approval"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
         </div>
       )}
 

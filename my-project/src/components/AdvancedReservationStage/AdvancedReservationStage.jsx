@@ -229,6 +229,14 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return null;
         }
     }, []);
+    const savedCards = useMemo(() => {
+        try {
+            const cards = JSON.parse(localStorage.getItem("electroStreetCards") || "[]");
+            return Array.isArray(cards) ? cards : [];
+        } catch {
+            return [];
+        }
+    }, []);
     const [passengerCount, setPassengerCount] = useState(1);
     const [promoCode, setPromoCode] = useState("");
     const [promoMessage, setPromoMessage] = useState("");
@@ -360,6 +368,11 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return;
         }
 
+        if (selectedPaymentMethod === "card" && savedCards.length === 0) {
+            setReservationError("Add a bank card in your personal cabinet before reserving a vehicle.");
+            return;
+        }
+
         const existingReservations = getStoredReservations();
 
         if (existingReservations.some((reservation) => reservation.vehicleId === vehicle.id)) {
@@ -388,7 +401,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             model: vehicle.model,
             plateNumber: vehicle.plateNumber,
             image: vehicle.image,
-            rate: finalRate,
+            rate: baseRate,
+            displayedRate: finalRate,
+            promoCode: isPromoApplied ? promoCode.trim().toLowerCase() : null,
+            discountPercent: isPromoApplied ? 10 : 0,
             paymentMethod: selectedPaymentMethod,
             reservedAt: new Date().toISOString(),
         };
@@ -502,7 +518,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             id: "card",
             icon: FiCreditCard,
             label: "Card",
-            detail: "Visa ending 2048",
+            detail: savedCards.length
+                ? `${savedCards[0].brand || "Card"} ending ${savedCards[0].last4}`
+                : "No saved card — add one in your cabinet",
+            unavailable: savedCards.length === 0,
         },
         {
             id: "wallet",
@@ -1335,9 +1354,13 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                                 data-active={isSelected}
                                                 onClick={() => {
                                                     setSelectedPaymentMethod(method.id);
-                                                    setReservationError("");
+                                                    setReservationError(
+                                                        method.unavailable
+                                                            ? "Add a bank card in your personal cabinet before reserving a vehicle."
+                                                            : ""
+                                                    );
                                                 }}
-                                                className="payment-method-option text-left"
+                                                className={`payment-method-option text-left ${method.unavailable ? "opacity-60" : ""}`}
                                                 aria-pressed={isSelected}
                                             >
                                                 <span className="payment-method-option__icon">
@@ -1393,9 +1416,19 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                             )}
 
                             {reservationError && (
-                                <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
-                                    {reservationError}
-                                </p>
+                                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                                    <p className="text-xs font-bold text-amber-700">
+                                        {reservationError}
+                                    </p>
+                                    {selectedPaymentMethod === "card" && savedCards.length === 0 && (
+                                        <a
+                                            href="/dashboard?tab=payments"
+                                            className="mt-3 inline-flex rounded-lg bg-amber-600 px-4 py-2 text-xs font-black text-white transition hover:bg-amber-700"
+                                        >
+                                            Go to payment methods
+                                        </a>
+                                    )}
+                                </div>
                             )}
 
                             <button

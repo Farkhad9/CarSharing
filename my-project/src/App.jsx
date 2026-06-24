@@ -16,6 +16,8 @@ import AdminControlRoom from "./components/Admin/AdminControlRoom";
 import StaffLogin from "./components/Staff/StaffLogin";
 import StaffDashboard from "./components/Staff/StaffDashboard";
 import AdvancedReservationStage from "./components/AdvancedReservationStage/AdvancedReservationStage";
+import { FiArrowUp } from "react-icons/fi";
+import { AnimatePresence, motion } from "framer-motion";
 import AOS from "aos";
 import "aos/dist/aos.css";
 
@@ -30,6 +32,7 @@ const App = () => {
   const isStaffPage = window.location.pathname === "/staff";
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [emailGateMessage, setEmailGateMessage] = useState("");
+  const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [user, setUser] = useState(() => {
     try {
       const storedUser = localStorage.getItem("electroStreetUser");
@@ -45,6 +48,31 @@ const App = () => {
       once: true,
       offset: 50,
     });
+  }, []);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollToTop(window.scrollY > 500);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    if (window.location.pathname !== "/" || window.location.hash !== "#fleet") {
+      return;
+    }
+
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById("fleet")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 120);
+
+    return () => window.clearTimeout(scrollTimer);
   }, []);
 
   useEffect(() => {
@@ -216,6 +244,42 @@ const App = () => {
       <WhyElectroStreet />
       <UserComments />
       <Footer />
+      <AnimatePresence>
+        {showScrollToTop && (
+          <motion.button
+            type="button"
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            className="fixed bottom-5 right-5 z-[90] flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-red-500 text-2xl text-white shadow-[0_12px_28px_rgba(239,68,68,0.32)] outline-none backdrop-blur-sm focus-visible:ring-4 focus-visible:ring-red-200 sm:bottom-6 sm:right-6"
+            initial={{ opacity: 0, y: 20, scale: 0.72, rotate: -8 }}
+            animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
+            exit={{ opacity: 0, y: 18, scale: 0.78, rotate: 8 }}
+            whileHover={{
+              y: -4,
+              scale: 1.06,
+              backgroundColor: "#dc2626",
+              boxShadow: "0 18px 34px rgba(239,68,68,0.42)",
+            }}
+            whileTap={{ scale: 0.9, y: 1 }}
+            transition={{
+              type: "spring",
+              stiffness: 320,
+              damping: 24,
+              mass: 0.75,
+            }}
+            aria-label="Scroll to top"
+            title="Back to top"
+          >
+            <motion.span
+              className="flex items-center justify-center"
+              initial={{ y: 2 }}
+              animate={{ y: [2, -2, 2] }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+            >
+              <FiArrowUp strokeWidth={2.8} />
+            </motion.span>
+          </motion.button>
+        )}
+      </AnimatePresence>
       {selectedVehicle && (
         <AdvancedReservationStage
           vehicle={selectedVehicle}
