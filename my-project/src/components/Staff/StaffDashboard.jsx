@@ -6,6 +6,7 @@ import {
   tripCompletionApi,
 } from "../../api/tripCompletionApi";
 import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
+import { useConfirmDialog } from "../ui/useConfirmDialog";
 
 const statusStyles = {
   [STAFF_TASK_STATUSES.DONE]: "border-emerald-400/30 bg-emerald-500/10 text-emerald-700",
@@ -33,6 +34,7 @@ const StaffDashboard = () => {
     tripCompletionApi.getRequests()
   );
   const [actionError, setActionError] = useState("");
+  const { confirm, dialog } = useConfirmDialog();
 
   useEffect(() => {
     if (!session) {
@@ -68,14 +70,17 @@ const StaffDashboard = () => {
     setTasks(staffApi.updateTaskStatus(taskId, status));
   };
 
-  const approveTripCompletion = (task, request) => {
+  const approveTripCompletion = async (task, request) => {
     setActionError("");
 
-    if (
-      !window.confirm(
-        `Approve all four photos for ${request.vehicleName}? The customer will immediately receive a payment request for ${Number(request.rideCost || 0).toFixed(2)} AZN.`
-      )
-    ) {
+    const confirmed = await confirm({
+      title: "Approve trip photos?",
+      message: `Approve all four photos for ${request.vehicleName}? The customer will immediately receive a payment request for ${Number(request.rideCost || 0).toFixed(2)} AZN.`,
+      confirmLabel: "Approve",
+      tone: "success",
+    });
+
+    if (!confirmed) {
       return;
     }
 
@@ -277,6 +282,7 @@ const StaffDashboard = () => {
           </div>
         </section>
       </section>
+      {dialog}
     </main>
   );
 };

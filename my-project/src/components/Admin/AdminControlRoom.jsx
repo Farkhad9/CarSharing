@@ -36,6 +36,7 @@ import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
 import { staffApi } from "../../api/staffApi";
 import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
+import { useConfirmDialog } from "../ui/useConfirmDialog";
 
 const BAKU_CENTER = [40.3777, 49.8499];
 const CRITICAL_BATTERY_PERCENT = 10;
@@ -385,6 +386,20 @@ const ADMIN_ACCOUNTS = [
     login: "superadmin",
     password: "super123",
   },
+];
+
+const sidebarItems = [
+  { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
+  { id: "users", label: "Users & KYC", icon: FiUserCheck, filter: "all" },
+  { id: "pricing", label: "Geofencing & Pricing", icon: FiMap, filter: "all", superOnly: true },
+  { id: "billing", label: "Billing & Penalties", icon: FiDollarSign, filter: "all", superOnly: true },
+  { id: "kpi", label: "Manager KPI", icon: FiUsers, filter: "all", superOnly: true },
+  { id: "incidents", label: "Incident Feed", icon: FiShield, filter: "service" },
+  { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
+  { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
+  { id: "service-points", label: "Service Points", icon: FiTool, filter: "all" },
+  { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "in_use" },
+  { id: "analytics", label: "Resource Analytics", icon: FiTrendingUp, filter: "all", superOnly: true },
 ];
 
 const formatSenderTitle = ({ senderRole, senderName }) => {
@@ -885,7 +900,7 @@ const AdminControlRoom = () => {
   const [managedZones, setManagedZones] = useState(parkingZones);
   const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[2]?.id || vehicles[0]?.id);
   const [focusTarget, setFocusTarget] = useState(null);
-  const [adminRole, setAdminRole] = useState(() => adminSession?.role || "admin");
+  const adminRole = adminSession?.role || "admin";
   const [activeSection, setActiveSection] = useState("control");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -924,6 +939,7 @@ const AdminControlRoom = () => {
   const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
   const [chatDraft, setChatDraft] = useState("");
   const [adminNotice, setAdminNotice] = useState({ section: null, message: "" });
+  const { confirm, dialog } = useConfirmDialog();
   const [riderNotifications, setRiderNotifications] = useState([]);
   const [plannedMaintenance, setPlannedMaintenance] = useState([]);
   const [maintenanceFilter, setMaintenanceFilter] = useState("all");
@@ -954,14 +970,19 @@ const AdminControlRoom = () => {
   useEffect(() => {
     if (!adminSession) return;
 
-    setAdminRole(adminSession.role);
     if (
       adminSession.role === "admin" &&
       sidebarItems.find((item) => item.id === activeSection)?.superOnly
     ) {
-      setActiveSection("users");
-      setStatusFilter("all");
+      const adminSectionTimer = window.setTimeout(() => {
+        setActiveSection("users");
+        setStatusFilter("all");
+      }, 0);
+
+      return () => window.clearTimeout(adminSectionTimer);
     }
+
+    return undefined;
   }, [activeSection, adminSession]);
 
   useEffect(() => {
@@ -977,7 +998,6 @@ const AdminControlRoom = () => {
   const handleAdminLogout = () => {
     localStorage.removeItem("electroStreetAdminSession");
     setAdminSession(null);
-    setAdminRole("admin");
     setActiveSection("control");
     setStatusFilter("all");
   };
@@ -1310,20 +1330,6 @@ const AdminControlRoom = () => {
     }
   };
 
-  const sidebarItems = useMemo(() => [
-    { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
-    { id: "users", label: "Users & KYC", icon: FiUserCheck, filter: "all" },
-    { id: "pricing", label: "Geofencing & Pricing", icon: FiMap, filter: "all", superOnly: true },
-    { id: "billing", label: "Billing & Penalties", icon: FiDollarSign, filter: "all", superOnly: true },
-    { id: "kpi", label: "Manager KPI", icon: FiUsers, filter: "all", superOnly: true },
-    { id: "incidents", label: "Incident Feed", icon: FiShield, filter: "service" },
-    { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
-    { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
-    { id: "service-points", label: "Service Points", icon: FiTool, filter: "all" },
-    { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "in_use" },
-    { id: "analytics", label: "Resource Analytics", icon: FiTrendingUp, filter: "all", superOnly: true },
-  ], []);
-
   const visibleSidebarItems = sidebarItems.filter((item) => isSuperAdmin || !item.superOnly);
 
   const getVehicle = (vehicleId) => liveVehicles.find((vehicle) => vehicle.id === vehicleId) || vehicles.find((vehicle) => vehicle.id === vehicleId);
@@ -1520,8 +1526,14 @@ const AdminControlRoom = () => {
     showAdminNotice(`Добавлена точка зарядки: ${nextStation.name}`, "chargers");
   };
 
-  const deleteChargingPoint = (station) => {
-    const confirmed = window.confirm(`Удалить точку зарядки "${station.name}"?`);
+  const deleteChargingPoint = async (station) => {
+    const confirmed = await confirm({
+      title: "Удалить точку зарядки?",
+      message: `Точка "${station.name}" будет удалена с карты. Связанные задачи останутся без выбранной станции.`,
+      confirmLabel: "Удалить",
+      cancelLabel: "Оставить",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     setManagedChargingStations((items) => items.filter((item) => item.id !== station.id));
@@ -1577,8 +1589,14 @@ const AdminControlRoom = () => {
     showAdminNotice(`Сервисная точка добавлена: ${nextPoint.name}`, "service-points");
   };
 
-  const deleteServicePoint = (point) => {
-    const confirmed = window.confirm(`Удалить сервисную точку "${point.name}"?`);
+  const deleteServicePoint = async (point) => {
+    const confirmed = await confirm({
+      title: "Удалить сервисную точку?",
+      message: `Сервисная точка "${point.name}" будет удалена из панели.`,
+      confirmLabel: "Удалить",
+      cancelLabel: "Оставить",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     setManagedServicePoints((items) => items.filter((item) => item.id !== point.id));
@@ -4135,6 +4153,7 @@ const AdminControlRoom = () => {
           </div>
         </section>
       </div>
+      {dialog}
     </main>
   );
 };

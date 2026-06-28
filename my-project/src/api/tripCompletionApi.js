@@ -88,6 +88,7 @@ export const tripCompletionApi = {
       discountPercent,
       discountAmount,
       promoCode: reservation.promoCode || null,
+      holdAmount: Number(reservation.holdAmount || 0),
       photos,
     };
 
@@ -135,6 +136,7 @@ export const tripCompletionApi = {
                 discountPercent: request.discountPercent,
                 discountAmount: request.discountAmount,
                 finalRideCost: request.finalRideCost,
+                holdAmount: request.holdAmount,
               }
             : reservation
         )
@@ -215,6 +217,63 @@ export const tripCompletionApi = {
     );
 
     return paidRequest;
+  },
+
+  recordPartialPayment(requestId, paymentMethod, payment) {
+    const requests = this.getRequests();
+    const request = requests.find((item) => item.id === requestId);
+
+    if (!request) {
+      throw new Error("Trip payment request was not found.");
+    }
+
+    if (request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
+      throw new Error("The employee must approve the trip before payment.");
+    }
+
+    const paidAt = new Date().toISOString();
+    const previousPaidAmount = Number(request.amountPaid || 0);
+    const amountPaid = Number((previousPaidAmount + Number(payment.amountPaid || 0)).toFixed(2));
+    const debtAmount = Number(payment.debtAmount || 0);
+    const partialRequest = {
+      ...request,
+      amountPaid,
+      debtAmount,
+      partialPaidAt: paidAt,
+      paymentMethod,
+      paymentStatus: "partial",
+      capturedHoldAmount: Number(payment.capturedHoldAmount || request.capturedHoldAmount || 0),
+      extraBalancePayment: Number(payment.extraBalancePayment || 0),
+    };
+
+    writeRequests(requests.map((item) => (item.id === requestId ? partialRequest : item)));
+
+    const reservations = readJson(RESERVATIONS_STORAGE_KEY, []);
+    const nextReservations = Array.isArray(reservations)
+      ? reservations.map((reservation) =>
+          (reservation.id || reservation.vehicleId) === request.reservationId
+            ? {
+                ...reservation,
+                tripStatus: "awaiting_payment",
+                paymentStatus: "partial",
+                amountPaid,
+                debtAmount,
+                holdStatus: "captured",
+                capturedHoldAmount: Number(payment.capturedHoldAmount || 0),
+                extraBalancePayment: Number(payment.extraBalancePayment || 0),
+              }
+            : reservation
+        )
+      : [];
+    localStorage.setItem(RESERVATIONS_STORAGE_KEY, JSON.stringify(nextReservations));
+
+    window.dispatchEvent(
+      new CustomEvent(TRIP_COMPLETION_UPDATED_EVENT, {
+        detail: this.getRequests(),
+      })
+    );
+
+    return partialRequest;
   },
 
   applyPromoCode(requestId, promoCode) {

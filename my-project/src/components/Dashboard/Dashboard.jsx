@@ -41,9 +41,15 @@ import {
   TRIP_COMPLETION_STATUSES,
   tripCompletionApi,
 } from "../../api/tripCompletionApi";
+import { useConfirmDialog } from "../ui/useConfirmDialog";
+import {
+  RESERVATION_SECONDS,
+  RESERVATIONS_UPDATED_EVENT,
+  cleanupExpiredReservations,
+  isReservationExpired,
+} from "../../utils/reservations";
 
-const RESERVATION_SECONDS = 15 * 60;
-const MAX_ACTIVE_RESERVATIONS = 2;
+const PROFILE_BALANCE_HOLD_AZN = 20;
 const DEFAULT_USER_LOCATION = [40.3772, 49.8475];
 const TRIP_PHOTO_ANGLES = [
   { id: "front", label: "Front", hint: "Full front side of the car" },
@@ -131,6 +137,8 @@ const formatDuration = (seconds) => {
 
 const formatMoney = (amount) => `${Number(amount || 0).toFixed(2)} AZN`;
 
+const toMoney = (amount) => Number(Number(amount || 0).toFixed(2));
+
 const formatSupportTime = (value) =>
   new Date(value).toLocaleTimeString([], {
     hour: "2-digit",
@@ -215,15 +223,20 @@ const getReservationVehicle = (reservation) => {
 };
 
 const getStoredReservations = () => {
-  const storedReservations = getStoredJson("reservedVehicles");
-
-  if (Array.isArray(storedReservations)) {
-    return storedReservations;
-  }
-
-  const legacyReservation = getStoredJson("reservedVehicle");
-  return legacyReservation ? [legacyReservation] : [];
+  return cleanupExpiredReservations();
 };
+
+const migrateLegacyReservations = (reservations) =>
+  reservations.map((reservation) =>
+    reservation?.unlockedAt && !reservation?.tripStartedAt
+      ? {
+          ...reservation,
+          tripStartedAt: reservation.unlockedAt,
+          billingStartedAt: reservation.billingStartedAt || reservation.unlockedAt,
+          tripStatus: reservation.tripStatus || "active",
+        }
+      : reservation
+  );
 
 const getVehiclePosition = (vehicle) => [
   vehicle?.location?.lat || DEFAULT_USER_LOCATION[0],
@@ -267,11 +280,13 @@ const Dashboard = ({ onLogout }) => {
       name: "Farhad",
       email: "farhad@electrostreet.az",
       balance: 0,
+      pendingHold: 0,
+      debtAmount: 0,
       avatarInitial: "F",
       emailVerified: true,
     })
   );
-  const [reservations, setReservations] = useState(() => getStoredReservations());
+  const [reservations, setReservations] = useState(() => migrateLegacyReservations(getStoredReservations()));
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState("50");
@@ -332,6 +347,7 @@ const Dashboard = ({ onLogout }) => {
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState("");
   const [reviewError, setReviewError] = useState("");
+  const { confirm, dialog } = useConfirmDialog();
 
   const licenseInputRef = useRef(null);
   const passportInputRef = useRef(null);
@@ -386,6 +402,10 @@ const Dashboard = ({ onLogout }) => {
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
   );
+  const profileBalance = Number(user.balance || 0);
+  const profilePendingHold = Number(user.pendingHold || 0);
+  const profileDebt = Number(user.debtAmount || 0);
+  const availableProfileBalance = Math.max(0, profileBalance - profilePendingHold);
 
   const recentTrips = useMemo(
     () =>
@@ -396,19 +416,41 @@ const Dashboard = ({ onLogout }) => {
     []
   );
 
-  const pendingVerification = useMemo(
-    () => getStoredJson("electroStreetPendingEmailVerification"),
-    [user?.emailVerified]
-  );
+  const pendingVerification = getStoredJson("electroStreetPendingEmailVerification");
+
+  const persistUser = (nextUser) => {
+    setUser(nextUser);
+    localStorage.setItem("electroStreetUser", JSON.stringify(nextUser));
+  };
+
+  const persistCards = (nextCards) => {
+    setPaymentCards(nextCards);
+    localStorage.setItem("electroStreetCards", JSON.stringify(nextCards));
+  };
+
+  const persistDocuments = (nextDocuments) => {
+    setDocuments(nextDocuments);
+    localStorage.setItem("electroStreetDocuments", JSON.stringify(nextDocuments));
+  };
+
+  const persistSupportTickets = (nextTickets) => {
+    setSupportTickets(nextTickets);
+    localStorage.setItem("electroStreetSupportTickets", JSON.stringify(nextTickets));
+  };
 
   useEffect(() => {
     localStorage.removeItem("reservedVehicle");
     localStorage.setItem("reservedVehicles", JSON.stringify(reservations));
+    window.dispatchEvent(new CustomEvent(RESERVATIONS_UPDATED_EVENT));
   }, [reservations]);
 
   useEffect(() => {
     const syncReservations = (event) => {
-      if (!event || event.type === TRIP_COMPLETION_UPDATED_EVENT || event.key === "reservedVehicles") {
+      if (
+        !event ||
+        event.type === TRIP_COMPLETION_UPDATED_EVENT ||
+        event.key === "reservedVehicles"
+      ) {
         setReservations(getStoredReservations());
       }
     };
@@ -425,32 +467,43 @@ const Dashboard = ({ onLogout }) => {
   useEffect(() => {
     if (!reservations.length) return undefined;
 
-    const migrateLegacyReservations = reservations.map((reservation) =>
-      reservation?.unlockedAt && !reservation?.tripStartedAt
-        ? {
-            ...reservation,
-            tripStartedAt: reservation.unlockedAt,
-            billingStartedAt: reservation.billingStartedAt || reservation.unlockedAt,
-            tripStatus: reservation.tripStatus || "active",
-          }
-        : reservation
-    );
-
-    const changed = migrateLegacyReservations.some((reservation, index) => reservation !== reservations[index]);
-    if (changed) {
-      setReservations(migrateLegacyReservations);
-    }
-  }, [reservations]);
-
-  useEffect(() => {
-    if (!reservations.length) return undefined;
-
     const interval = window.setInterval(() => {
       setTimerNow(Date.now());
     }, 1000);
 
     return () => window.clearInterval(interval);
   }, [reservations.length]);
+
+  useEffect(() => {
+    if (!reservations.length) return;
+
+    const expiredReservations = reservations.filter((reservation) =>
+      isReservationExpired(reservation, timerNow)
+    );
+
+    if (!expiredReservations.length) return;
+
+    const releasedHoldAmount = expiredReservations.reduce(
+      (sum, reservation) => sum + Number(reservation.holdAmount || 0),
+      0
+    );
+
+    const expireTimer = window.setTimeout(() => {
+      if (releasedHoldAmount > 0) {
+        persistUser({
+          ...user,
+          pendingHold: Math.max(0, toMoney(profilePendingHold - releasedHoldAmount)),
+        });
+      }
+
+      setReservations((currentReservations) =>
+        currentReservations.filter((reservation) => !isReservationExpired(reservation, timerNow))
+      );
+      setTripNotice("Reservation time expired. The car is available again in the fleet.");
+    }, 0);
+
+    return () => window.clearTimeout(expireTimer);
+  }, [profilePendingHold, reservations, timerNow, user]);
 
   useEffect(() => {
     if (!("geolocation" in navigator)) return undefined;
@@ -474,8 +527,8 @@ const Dashboard = ({ onLogout }) => {
 
   useEffect(() => {
     if (!activeReservations.length) {
-      setRouteStates({});
-      return undefined;
+      const clearRouteTimer = window.setTimeout(() => setRouteStates({}), 0);
+      return () => window.clearTimeout(clearRouteTimer);
     }
 
     const controllers = [];
@@ -547,8 +600,11 @@ const Dashboard = ({ onLogout }) => {
 
   useEffect(() => {
     if (!supportTickets.some((ticket) => ticket.id === activeSupportTicketId) && supportTickets[0]) {
-      setActiveSupportTicketId(supportTickets[0].id);
+      const selectTicketTimer = window.setTimeout(() => setActiveSupportTicketId(supportTickets[0].id), 0);
+      return () => window.clearTimeout(selectTicketTimer);
     }
+
+    return undefined;
   }, [activeSupportTicketId, supportTickets]);
 
   useEffect(
@@ -558,27 +614,19 @@ const Dashboard = ({ onLogout }) => {
     []
   );
 
-  const persistUser = (nextUser) => {
-    setUser(nextUser);
-    localStorage.setItem("electroStreetUser", JSON.stringify(nextUser));
-  };
-
-  const persistCards = (nextCards) => {
-    setPaymentCards(nextCards);
-    localStorage.setItem("electroStreetCards", JSON.stringify(nextCards));
-  };
-
-  const persistDocuments = (nextDocuments) => {
-    setDocuments(nextDocuments);
-    localStorage.setItem("electroStreetDocuments", JSON.stringify(nextDocuments));
-  };
-
-  const persistSupportTickets = (nextTickets) => {
-    setSupportTickets(nextTickets);
-    localStorage.setItem("electroStreetSupportTickets", JSON.stringify(nextTickets));
-  };
-
   const cancelReservation = (reservationId) => {
+    const reservationToCancel = reservations.find(
+      (reservation) => (reservation.id || reservation.vehicleId) === reservationId
+    );
+    const holdToRelease = Number(reservationToCancel?.holdAmount || 0);
+
+    if (holdToRelease > 0) {
+      persistUser({
+        ...user,
+        pendingHold: Math.max(0, toMoney(profilePendingHold - holdToRelease)),
+      });
+    }
+
     setReservations((currentReservations) =>
       currentReservations.filter((reservation) => (reservation.id || reservation.vehicleId) !== reservationId)
     );
@@ -662,7 +710,7 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const submitTripCompletion = () => {
+  const submitTripCompletion = async () => {
     const missingAngle = TRIP_PHOTO_ANGLES.find((angle) => !completionPhotos[angle.id]);
     if (missingAngle) {
       setCompletionError(`Add the ${missingAngle.label.toLowerCase()} photo to continue.`);
@@ -677,7 +725,14 @@ const Dashboard = ({ onLogout }) => {
       return;
     }
 
-    if (!window.confirm("Send these four photos to an employee for review? You will not be able to finish the trip until they approve them.")) {
+    const confirmed = await confirm({
+      title: "Send photos for review?",
+      message: "Send these four photos to an employee for review? You will not be able to finish the trip until they approve them.",
+      confirmLabel: "Send for review",
+      tone: "info",
+    });
+
+    if (!confirmed) {
       return;
     }
 
@@ -742,8 +797,15 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const handleUnlockVehicle = (reservationId) => {
-    if (!window.confirm("Unlock the car and start the paid ride now?")) return;
+  const handleUnlockVehicle = async (reservationId) => {
+    const confirmed = await confirm({
+      title: "Start paid ride?",
+      message: "Unlock the car and start the paid ride now?",
+      confirmLabel: "Unlock car",
+      tone: "success",
+    });
+
+    if (!confirmed) return;
 
     const unlockedAt = new Date().toISOString();
     setReservations((currentReservations) =>
@@ -760,11 +822,11 @@ const Dashboard = ({ onLogout }) => {
           : reservation
       )
     );
-    setTimerNow(Date.now());
+    setTimerNow(new Date(unlockedAt).getTime());
     setTripNotice("");
   };
 
-  const handlePayTrip = (targetVehicle = paymentVehicle) => {
+  const handlePayTrip = async (targetVehicle = paymentVehicle) => {
     if (!targetVehicle?.completionRequestId) return;
 
     const request = tripCompletionApi.getRequest(targetVehicle.completionRequestId);
@@ -773,21 +835,34 @@ const Dashboard = ({ onLogout }) => {
       return;
     }
 
-    const amount = Number(request.finalRideCost || request.rideCost || targetVehicle.finalRideCost || 0);
+    const fullAmount = toMoney(request.finalRideCost || request.rideCost || targetVehicle.finalRideCost || 0);
+    const existingDebt = toMoney(targetVehicle.debtAmount || request.debtAmount || 0);
+    const amount = existingDebt > 0 ? existingDebt : fullAmount;
     const paymentMethod = targetVehicle.paymentMethod || "card";
+    const holdAmount = paymentMethod === "profile_balance" && existingDebt <= 0
+      ? toMoney(targetVehicle.holdAmount || request.holdAmount || 0)
+      : 0;
+    const capturableHold = Math.min(holdAmount, amount);
+    const availableAfterHold = Math.max(0, profileBalance - profilePendingHold);
+    const remainingAfterHold = Math.max(0, amount - capturableHold);
+    const extraBalancePayment = paymentMethod === "profile_balance"
+      ? Math.min(availableAfterHold, remainingAfterHold)
+      : remainingAfterHold;
+    const totalPaidNow = toMoney(capturableHold + extraBalancePayment);
+    const debtAmount = paymentMethod === "profile_balance"
+      ? toMoney(amount - totalPaidNow)
+      : 0;
 
-    if (
-      !window.confirm(
-        `Confirm payment of ${amount.toFixed(2)} AZN using ${
-          paymentMethod === "profile_balance" ? "your profile balance" : paymentMethod
-        }?`
-      )
-    ) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: "Confirm payment",
+      message: `Confirm payment of ${amount.toFixed(2)} AZN using ${
+        paymentMethod === "profile_balance" ? "your profile balance" : paymentMethod
+      }?`,
+      confirmLabel: "Pay now",
+      tone: "success",
+    });
 
-    if (paymentMethod === "profile_balance" && Number(user.balance || 0) < amount) {
-      setPaymentError("Your profile balance is not enough. Top it up or contact support.");
+    if (!confirmed) {
       return;
     }
 
@@ -795,12 +870,38 @@ const Dashboard = ({ onLogout }) => {
     setPaymentError("");
 
     try {
+      if (paymentMethod === "profile_balance" && debtAmount > 0) {
+        const nextPendingHold = Math.max(0, toMoney(profilePendingHold - holdAmount));
+        const nextUser = {
+          ...user,
+          balance: Math.max(0, toMoney(profileBalance - totalPaidNow)),
+          pendingHold: nextPendingHold,
+          debtAmount,
+        };
+
+        tripCompletionApi.recordPartialPayment(request.id, paymentMethod, {
+          amountPaid: totalPaidNow,
+          debtAmount,
+          capturedHoldAmount: capturableHold,
+          extraBalancePayment,
+        });
+        persistUser(nextUser);
+        setReservations(getStoredReservations());
+        setPaymentError(
+          `Paid ${totalPaidNow.toFixed(2)} AZN. Outstanding debt: ${debtAmount.toFixed(2)} AZN. Top up your balance to complete the ride.`
+        );
+        setTripNotice(`Trip payment is partially covered. Outstanding debt: ${debtAmount.toFixed(2)} AZN.`);
+        return;
+      }
+
       const paidRequest = tripCompletionApi.payRequest(request.id, paymentMethod);
 
       if (paymentMethod === "profile_balance") {
         persistUser({
           ...user,
-          balance: Number((Number(user.balance || 0) - amount).toFixed(2)),
+          balance: Math.max(0, toMoney(profileBalance - totalPaidNow)),
+          pendingHold: Math.max(0, toMoney(profilePendingHold - holdAmount)),
+          debtAmount: 0,
         });
       }
 
@@ -1130,6 +1231,22 @@ const Dashboard = ({ onLogout }) => {
                     </div>
                   )}
 
+                  {Number(vehicle.debtAmount || 0) > 0 && (
+                    <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <FiAlertCircle className="mt-0.5 shrink-0 text-red-600" />
+                        <div>
+                          <p className="text-sm font-black text-red-900">
+                            Outstanding payment: {formatMoney(vehicle.debtAmount)}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold leading-5 text-red-700">
+                            New reservations are blocked until this debt is paid from your profile balance.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-5 grid grid-cols-2 gap-3">
                     <div className="rounded-2xl bg-zinc-50 p-4">
                       <FiMapPin className="text-red-500" />
@@ -1322,13 +1439,34 @@ const Dashboard = ({ onLogout }) => {
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.22em] text-red-300">Profile balance</p>
-            <p className="mt-4 text-5xl font-black tracking-tight">{formatMoney(user.balance)}</p>
-            <p className="mt-3 text-sm font-semibold text-white/50">Choose a payment method and top up the wallet used for rides.</p>
+            <p className="mt-4 text-5xl font-black tracking-tight">{formatMoney(profileBalance)}</p>
+            <p className="mt-3 text-sm font-semibold text-white/50">
+              Available now: {formatMoney(availableProfileBalance)}
+            </p>
           </div>
           <div className="rounded-2xl bg-white/10 p-4">
             <FiSmartphone className="text-3xl" />
           </div>
         </div>
+
+        <div className="mt-6 grid gap-2 sm:grid-cols-3">
+          {[
+            ["Pending hold", formatMoney(profilePendingHold)],
+            ["Outstanding debt", formatMoney(profileDebt)],
+            ["Ride hold", formatMoney(PROFILE_BALANCE_HOLD_AZN)],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-2xl bg-white/10 px-4 py-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-white/40">{label}</p>
+              <p className="mt-1 text-sm font-black">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {profileDebt > 0 && (
+          <div className="mt-4 rounded-2xl border border-red-300/40 bg-red-500/15 px-4 py-3 text-sm font-bold text-red-100">
+            Pay the outstanding debt before creating another reservation.
+          </div>
+        )}
 
         <div className="mt-8 grid grid-cols-3 gap-2">
           {["25", "50", "100"].map((amount) => (
@@ -1873,6 +2011,24 @@ const Dashboard = ({ onLogout }) => {
                   </span>
                   <span>-{formatMoney(paymentRequest?.discountAmount || 0)}</span>
                 </div>
+                {(paymentRequest?.holdAmount || paymentVehicle.holdAmount) > 0 && (
+                  <div className="flex justify-between text-white/60">
+                    <span>Reserved hold</span>
+                    <span>{formatMoney(paymentRequest?.holdAmount || paymentVehicle.holdAmount)}</span>
+                  </div>
+                )}
+                {(paymentRequest?.amountPaid || paymentVehicle.amountPaid) > 0 && (
+                  <div className="flex justify-between text-white/60">
+                    <span>Already paid</span>
+                    <span>{formatMoney(paymentRequest?.amountPaid || paymentVehicle.amountPaid)}</span>
+                  </div>
+                )}
+                {(paymentRequest?.debtAmount || paymentVehicle.debtAmount) > 0 && (
+                  <div className="flex justify-between text-red-300">
+                    <span>Outstanding debt</span>
+                    <span>{formatMoney(paymentRequest?.debtAmount || paymentVehicle.debtAmount)}</span>
+                  </div>
+                )}
                 <div className="flex items-end justify-between border-t border-white/10 pt-4">
                   <span className="text-white/70">Final price</span>
                   <span className="text-3xl font-black">
@@ -1935,7 +2091,11 @@ const Dashboard = ({ onLogout }) => {
                 disabled={isPayingTrip}
                 className="w-full rounded-2xl bg-emerald-600 px-5 py-4 text-sm font-black text-white transition hover:bg-emerald-700 disabled:opacity-50"
               >
-                {isPayingTrip ? "Paying..." : "Confirm and pay"}
+                {isPayingTrip
+                  ? "Paying..."
+                  : Number(paymentVehicle.debtAmount || paymentRequest?.debtAmount || 0) > 0
+                    ? "Pay outstanding balance"
+                    : "Confirm and pay"}
               </button>
             </div>
           </motion.div>
@@ -2197,6 +2357,7 @@ const Dashboard = ({ onLogout }) => {
           </motion.div>
         </div>
       )}
+      {dialog}
     </main>
   );
 };

@@ -64,7 +64,12 @@ export const staffApi = {
   },
 
   getEmployees() {
-    return staffAccounts.map(({ password, ...account }) => account);
+    return staffAccounts.map((account) => ({
+      id: account.id,
+      name: account.name,
+      login: account.login,
+      role: account.role,
+    }));
   },
 
   getTasks() {

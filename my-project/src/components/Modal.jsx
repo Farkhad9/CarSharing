@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useConfirmDialog } from "./ui/useConfirmDialog";
 
 const Modal = ({ car, onClose, user }) => {
   const [form, setForm] = useState({
@@ -7,42 +8,45 @@ const Modal = ({ car, onClose, user }) => {
     phone: "",
     date: "",
   });
+  const { confirm, dialog } = useConfirmDialog();
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
 
-    // Имитируем успешную отправку формы на фронтенде без GraphQL
-    alert(`Успешно забронировано!\nМашина: ${car.carName}\nИмя: ${form.name}\nТелефон: ${form.phone}`);
+    await confirm({
+      title: "Booking confirmed",
+      message: `Car: ${car.carName}\nName: ${form.name}\nPhone: ${form.phone}`,
+      confirmLabel: "Done",
+      hideCancel: true,
+      tone: "success",
+    });
     onClose();
   };
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+  const handleChange = (event) => {
+    setForm({ ...form, [event.target.name]: event.target.value });
   };
 
   return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity duration-300 ease-in-out">
-      <div className="bg-white p-6 rounded-2xl shadow-xl flex gap-6 w-full max-w-3xl mx-4">
-        
-        {/* Left: Car Info (Твой родной дизайн) */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm transition-opacity duration-300 ease-in-out">
+      <div className="flex w-full max-w-3xl gap-6 rounded-2xl bg-white p-6 shadow-xl">
         <div className="flex-1">
           <img
-            src={car.image} // Изменено с car.image?.url на car.image под нашу локальную базу
-            alt={car.carName} // Изменено под car.carName
-            className="w-full h-52 object-contain"
+            src={car.image}
+            alt={car.carName}
+            className="h-52 w-full object-contain"
           />
-          <h2 className="text-xl font-bold mt-2">{car.carName}</h2> {/* Изменено под car.carName */}
+          <h2 className="mt-2 text-xl font-bold">{car.carName}</h2>
           <p className="text-gray-600">${car.price}/day</p>
         </div>
 
-        {/* Right: Form (Твой родной дизайн) */}
         <form className="flex-1 space-y-4" onSubmit={handleSubmit}>
           <input
             type="text"
             name="name"
             placeholder="Your Name"
             value={form.name}
-            className="w-full border p-2 rounded"
+            className="w-full rounded border p-2"
             required
             onChange={handleChange}
           />
@@ -51,7 +55,7 @@ const Modal = ({ car, onClose, user }) => {
             name="email"
             placeholder="Your Email"
             value={form.email}
-            className="w-full border p-2 rounded"
+            className="w-full rounded border p-2"
             required
             onChange={handleChange}
           />
@@ -60,7 +64,7 @@ const Modal = ({ car, onClose, user }) => {
             name="phone"
             placeholder="Phone Number"
             value={form.phone}
-            className="w-full border p-2 rounded"
+            className="w-full rounded border p-2"
             required
             onChange={handleChange}
           />
@@ -69,7 +73,7 @@ const Modal = ({ car, onClose, user }) => {
             name="date"
             placeholder="Booking Date"
             value={form.date}
-            className="w-full border p-2 rounded"
+            className="w-full rounded border p-2"
             required
             onChange={handleChange}
           />
@@ -78,19 +82,20 @@ const Modal = ({ car, onClose, user }) => {
             <button
               type="button"
               onClick={onClose}
-              className="w-full py-2 rounded border hover:bg-gray-50 transition"
+              className="w-full rounded border py-2 transition hover:bg-gray-50"
             >
               Close
             </button>
             <button
               type="submit"
-              className="w-full py-2 bg-red-500 text-white rounded hover:bg-red-600 transition"
+              className="w-full rounded bg-red-500 py-2 text-white transition hover:bg-red-600"
             >
               Book Ride
             </button>
           </div>
         </form>
       </div>
+      {dialog}
     </div>
   );
 };
