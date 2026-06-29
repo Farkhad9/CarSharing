@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 // ИСПРАВЛЕНО: Импортируем иконку батареи из правильного пакета /bs
 import { BsBatteryCharging } from "react-icons/bs"; 
 import { FiNavigation, FiSliders } from "react-icons/fi";
 import { vehicles } from "../../data/vehicles";
 import { VEHICLE_STATUSES } from "../../data/statuses";
 import AuthModal from "../AuthModal/AuthModal";
+import { RESERVATIONS_UPDATED_EVENT, cleanupExpiredReservations } from "../../utils/reservations";
 
 const USER_LOCATION = [40.3772, 49.8475];
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
@@ -88,6 +89,23 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const [activeFilter, setActiveFilter] = useState("all");
   const [activeBrandFilter, setActiveBrandFilter] = useState("all");
   const [authVehicle, setAuthVehicle] = useState(null);
+  const [reservationsRevision, setReservationsRevision] = useState(0);
+
+  useEffect(() => {
+    const refreshReservations = (event) => {
+      if (!event || event.type === RESERVATIONS_UPDATED_EVENT || event.key === "reservedVehicles") {
+        setReservationsRevision((revision) => revision + 1);
+      }
+    };
+
+    window.addEventListener("storage", refreshReservations);
+    window.addEventListener(RESERVATIONS_UPDATED_EVENT, refreshReservations);
+
+    return () => {
+      window.removeEventListener("storage", refreshReservations);
+      window.removeEventListener(RESERVATIONS_UPDATED_EVENT, refreshReservations);
+    };
+  }, []);
 
   const isUserAuthorized = () => Boolean(localStorage.getItem("electroStreetUser"));
 
@@ -118,12 +136,26 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   };
 
   const filteredAndSortedVehicles = useMemo(() => {
+    void reservationsRevision;
+
+    const activeReservationVehicleIds = new Set(
+      cleanupExpiredReservations()
+        .filter((reservation) => !reservation.unlockedAt && !reservation.tripStartedAt)
+        .map((reservation) => reservation.vehicleId)
+    );
+
     return vehicles
       .map((vehicle) => {
         const distanceMeters = getDistanceMeters(USER_LOCATION, vehicle);
+        const reservedByUser = activeReservationVehicleIds.has(vehicle.id);
+        const effectiveStatus =
+          reservedByUser && vehicle.status === VEHICLE_STATUSES.AVAILABLE
+            ? VEHICLE_STATUSES.RESERVED
+            : vehicle.status;
 
         return {
           ...vehicle,
+          status: effectiveStatus,
           distanceMeters,
           walkTimeMinutes: getWalkingMinutes(distanceMeters),
         };
@@ -134,7 +166,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         return matchesStatus && matchesBrand;
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [activeFilter, activeBrandFilter]);
+  }, [activeFilter, activeBrandFilter, reservationsRevision]);
 
   return (
     <section id="fleet" className="scroll-mt-24 bg-white py-16 md:py-24 border-b border-gray-100">

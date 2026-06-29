@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
     FiAlertTriangle,
@@ -23,6 +23,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { vehicles } from "../../data/vehicles";
 import { VEHICLE_STATUSES } from "../../data/statuses";
+import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
 
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
@@ -45,7 +46,7 @@ L.Marker.prototype.options.icon = defaultIcon;
 
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
 const MAX_ACTIVE_RESERVATIONS = 2;
-const MIN_PROFILE_BALANCE_AZN = 10;
+const PROFILE_BALANCE_HOLD_AZN = 20;
 
 const toRadians = (degrees) => degrees * (Math.PI / 180);
 
@@ -258,6 +259,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         error: "",
     });
 
+    const profileBalance = Number(currentUser?.balance || 0);
+    const profilePendingHold = Number(currentUser?.pendingHold || 0);
+    const profileDebt = Number(currentUser?.debtAmount || 0);
+    const availableProfileBalance = Math.max(0, profileBalance - profilePendingHold);
     const carLocation = useMemo(() => getVehiclePosition(vehicle), [vehicle]);
     const distanceMeters = getDistanceMeters(currentUserLocation, carLocation);
     const routeDistanceMeters =
@@ -363,8 +368,15 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return;
         }
 
-        if (selectedPaymentMethod === "profile_balance" && Number(currentUser?.balance || 0) < MIN_PROFILE_BALANCE_AZN) {
-            setReservationError("Выберите другой способ оплаты либо увеличьте баланс минимум на 10 AZN.");
+        if (profileDebt > 0) {
+            setReservationError(`Pay your outstanding ${profileDebt.toFixed(2)} AZN balance before creating a new reservation.`);
+            return;
+        }
+
+        if (selectedPaymentMethod === "profile_balance" && availableProfileBalance < PROFILE_BALANCE_HOLD_AZN) {
+            setReservationError(
+                `Profile balance needs at least ${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN available for the ride hold. Top up or choose card/wallet.`
+            );
             return;
         }
 
@@ -394,6 +406,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
     };
 
     const handleSuccessOk = () => {
+        const holdAmount = selectedPaymentMethod === "profile_balance" ? PROFILE_BALANCE_HOLD_AZN : 0;
         const nextReservation = {
             id: `reservation-${Date.now()}`,
             vehicleId: vehicle.id,
@@ -406,6 +419,8 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             promoCode: isPromoApplied ? promoCode.trim().toLowerCase() : null,
             discountPercent: isPromoApplied ? 10 : 0,
             paymentMethod: selectedPaymentMethod,
+            holdAmount,
+            holdStatus: holdAmount > 0 ? "held" : "none",
             reservedAt: new Date().toISOString(),
         };
         const existingReservations = getStoredReservations();
@@ -413,6 +428,17 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
 
         localStorage.setItem("reservedVehicles", JSON.stringify(nextReservations));
         localStorage.removeItem("reservedVehicle");
+        window.dispatchEvent(new CustomEvent(RESERVATIONS_UPDATED_EVENT));
+
+        if (holdAmount > 0 && currentUser) {
+            localStorage.setItem(
+                "electroStreetUser",
+                JSON.stringify({
+                    ...currentUser,
+                    pendingHold: Number((profilePendingHold + holdAmount).toFixed(2)),
+                })
+            );
+        }
 
         window.location.href = "/dashboard";
     };
@@ -532,8 +558,8 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         {
             id: "profile_balance",
             icon: FiDollarSign,
-            label: "Мой баланс",
-            detail: `${Number(currentUser?.balance || 0).toFixed(2)} AZN available`,
+            label: "Profile balance",
+            detail: `${availableProfileBalance.toFixed(2)} AZN available / ${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN hold`,
         },
     ];
 
@@ -1379,6 +1405,14 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                         );
                                     })}
                                 </div>
+
+                                {selectedPaymentMethod === "profile_balance" && (
+                                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-800">
+                                        {profileDebt > 0
+                                            ? `Outstanding debt: ${profileDebt.toFixed(2)} AZN. New reservations are blocked until it is paid.`
+                                            : `${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN will be held from your profile balance before the ride. If the final fare is higher, the remaining amount is charged at payment.`}
+                                    </div>
+                                )}
                             </motion.div>
                         </div>
 
