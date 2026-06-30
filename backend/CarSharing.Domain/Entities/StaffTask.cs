@@ -2,9 +2,8 @@ using CarSharing.Domain.Enums;
 
 namespace CarSharing.Domain.Entities;
 
-public class StaffTask
+public class StaffTask : BaseEntity
 {
-    public Guid Id { get; set; }
     public string Title { get; set; } = null!;
     public string Description { get; set; } = null!;
     public Guid AssigneeId { get; set; }

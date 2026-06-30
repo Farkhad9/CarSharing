@@ -2,9 +2,8 @@ using CarSharing.Domain.Enums;
 
 namespace CarSharing.Domain.Entities;
 
-public class TripCompletionRequest
+public class TripCompletionRequest : BaseEntity
 {
-    public Guid Id { get; set; }
     public Guid TripId { get; set; }
     public Guid UserId { get; set; }
     public Guid VehicleId { get; set; }
