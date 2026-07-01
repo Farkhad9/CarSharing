@@ -2,9 +2,8 @@ using CarSharing.Domain.Enums;
 
 namespace CarSharing.Domain.Entities;
 
-public class Reservation
+public class Reservation : BaseEntity
 {
-    public Guid Id { get; set; }
     public Guid UserId { get; set; }
     public Guid VehicleId { get; set; }
     public DateTime ReservedAt { get; set; }

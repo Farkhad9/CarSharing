@@ -2,9 +2,8 @@
 
 namespace CarSharing.Domain.Entities;
 
-public class ChargingStation
+public class ChargingStation : BaseEntity
 {
-    public Guid Id { get; set; }
     public string Name { get; set; } = null!;
     public ChargingStationStatus Status { get; set; } = ChargingStationStatus.Online;
     public string LocationLabel { get; set; } = null!;

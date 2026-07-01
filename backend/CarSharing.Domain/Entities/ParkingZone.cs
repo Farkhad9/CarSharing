@@ -2,9 +2,8 @@ using CarSharing.Domain.Enums;
 
 namespace CarSharing.Domain.Entities;
 
-public class ParkingZone
+public class ParkingZone : BaseEntity
 {
-    public Guid Id { get; set; }
     public string Name { get; set; } = null!;
     public ParkingZoneType Type { get; set; } = ParkingZoneType.Parking;
     public double CenterLatitude { get; set; }
