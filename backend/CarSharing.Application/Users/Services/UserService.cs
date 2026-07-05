@@ -3,7 +3,6 @@ using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Users.Dtos;
 using CarSharing.Domain.Entities;
-using CarSharing.Domain.Enums;
 using FluentValidation;
 
 namespace CarSharing.Application.Users.Services;
@@ -48,23 +47,13 @@ public class UserService : IUserService
             return Result<UserDto>.Failure(EmailNotUnique);
         }
 
-        var user = new User
-        {
-            Id = Guid.NewGuid(),
-            FirstName = request.FirstName.Trim(),
-            LastName = request.LastName.Trim(),
-            Email = normalizedEmail,
-            Phone = request.Phone.Trim(),
-            PasswordHash = _passwordHasher.Hash(request.Password),
-            Balance = 0,
-            PendingHold = 0,
-            DriverLicenseNumber = request.DriverLicenseNumber.Trim(),
-            EmailVerified = false,
-            VerificationStatus = UserVerificationStatus.Pending,
-            Role = UserRole.Rider,
-            CreatedAt = DateTime.UtcNow,
-            VerifiedAt = null
-        };
+        var user = User.CreateRider(
+            request.FirstName,
+            request.LastName,
+            normalizedEmail,
+            request.Phone,
+            _passwordHasher.Hash(request.Password),
+            request.DriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
 
