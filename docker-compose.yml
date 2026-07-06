@@ -1,0 +1,14 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: carsharing-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "CarSharing_2026!"
+    ports:
+      - "1433:1433"
+    volumes:
+      - carsharing-sqlserver-data:/var/opt/mssql
+
+volumes:
+  carsharing-sqlserver-data:

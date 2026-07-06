@@ -14,20 +14,26 @@ public class UserService : IUserService
     private static readonly Error NotFound = new("User.NotFound", "User was not found.");
 
     private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IMapper _mapper;
     private readonly IValidator<RegisterUserRequest> _registerUserValidator;
     private readonly IValidator<LoginUserRequest> _loginUserValidator;
 
     public UserService(
         IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
         IPasswordHasher passwordHasher,
+        IJwtTokenGenerator jwtTokenGenerator,
         IMapper mapper,
         IValidator<RegisterUserRequest> registerUserValidator,
         IValidator<LoginUserRequest> loginUserValidator)
     {
         _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
         _passwordHasher = passwordHasher;
+        _jwtTokenGenerator = jwtTokenGenerator;
         _mapper = mapper;
         _registerUserValidator = registerUserValidator;
         _loginUserValidator = loginUserValidator;
@@ -56,16 +62,17 @@ public class UserService : IUserService
             request.DriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
     }
 
-    public async Task<Result<UserDto>> LoginAsync(LoginUserRequest request, CancellationToken cancellationToken = default)
+    public async Task<Result<AuthResponse>> LoginAsync(LoginUserRequest request, CancellationToken cancellationToken = default)
     {
         var validationResult = await _loginUserValidator.ValidateAsync(request, cancellationToken);
         if (!validationResult.IsValid)
         {
-            return Result<UserDto>.Failure(ToValidationErrors(validationResult));
+            return Result<AuthResponse>.Failure(ToValidationErrors(validationResult));
         }
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
@@ -73,10 +80,17 @@ public class UserService : IUserService
 
         if (user is null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
         {
-            return Result<UserDto>.Failure(InvalidCredentials);
+            return Result<AuthResponse>.Failure(InvalidCredentials);
         }
 
-        return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
+        var userDto = _mapper.Map<UserDto>(user);
+        var response = new AuthResponse
+        {
+            AccessToken = _jwtTokenGenerator.GenerateToken(userDto),
+            User = userDto
+        };
+
+        return Result<AuthResponse>.Success(response);
     }
 
     public async Task<Result<UserDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -101,7 +115,7 @@ public class UserService : IUserService
         user.EmailVerified = true;
         user.VerifiedAt = DateTime.UtcNow;
 
-        await _userRepository.UpdateAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
     }
