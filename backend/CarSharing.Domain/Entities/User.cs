@@ -17,4 +17,31 @@ public class User : BaseEntity
     public UserRole Role { get; set; } = UserRole.Rider;
     public DateTime CreatedAt { get; set; }
     public DateTime? VerifiedAt { get; set; }
+
+    public static User CreateRider(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber)
+    {
+        return new User
+        {
+            Id = Guid.NewGuid(),
+            FirstName = firstName.Trim(),
+            LastName = lastName.Trim(),
+            Email = email.Trim().ToLowerInvariant(),
+            Phone = phone.Trim(),
+            PasswordHash = passwordHash,
+            Balance = 0,
+            PendingHold = 0,
+            DriverLicenseNumber = driverLicenseNumber.Trim(),
+            EmailVerified = false,
+            VerificationStatus = UserVerificationStatus.Pending,
+            Role = UserRole.Rider,
+            CreatedAt = DateTime.UtcNow,
+            VerifiedAt = null
+        };
+    }
 }
