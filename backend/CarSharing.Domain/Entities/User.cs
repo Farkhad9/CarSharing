@@ -4,19 +4,23 @@ namespace CarSharing.Domain.Entities;
 
 public class User : BaseEntity
 {
-    public string FirstName { get; set; } = null!;
-    public string LastName { get; set; } = null!;
-    public string Email { get; set; } = null!;
-    public string Phone { get; set; } = null!;
-    public string PasswordHash { get; set; } = null!;
-    public decimal Balance { get; set; }
-    public decimal PendingHold { get; set; }
-    public string DriverLicenseNumber { get; set; } = null!;
-    public bool EmailVerified { get; set; }
-    public UserVerificationStatus VerificationStatus { get; set; } = UserVerificationStatus.Pending;
-    public UserRole Role { get; set; } = UserRole.Rider;
-    public DateTime CreatedAt { get; set; }
-    public DateTime? VerifiedAt { get; set; }
+    private User()
+    {
+    }
+
+    public string FirstName { get; private set; } = null!;
+    public string LastName { get; private set; } = null!;
+    public string Email { get; private set; } = null!;
+    public string Phone { get; private set; } = null!;
+    public string PasswordHash { get; private set; } = null!;
+    public decimal Balance { get; private set; }
+    public decimal PendingHold { get; private set; }
+    public string DriverLicenseNumber { get; private set; } = null!;
+    public bool EmailVerified { get; private set; }
+    public UserVerificationStatus VerificationStatus { get; private set; } = UserVerificationStatus.Pending;
+    public UserRole Role { get; private set; } = UserRole.Rider;
+    public DateTime CreatedAt { get; private set; }
+    public DateTime? VerifiedAt { get; private set; }
 
     public static User CreateRider(
         string firstName,
@@ -43,5 +47,11 @@ public class User : BaseEntity
             CreatedAt = DateTime.UtcNow,
             VerifiedAt = null
         };
+    }
+
+    public void VerifyEmail()
+    {
+        EmailVerified = true;
+        VerifiedAt = DateTime.UtcNow;
     }
 }
