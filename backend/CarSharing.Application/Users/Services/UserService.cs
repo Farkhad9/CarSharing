@@ -112,8 +112,7 @@ public class UserService : IUserService
             return Result<UserDto>.Failure(NotFound);
         }
 
-        user.EmailVerified = true;
-        user.VerifiedAt = DateTime.UtcNow;
+        user.VerifyEmail();
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

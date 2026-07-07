@@ -28,7 +28,7 @@ public class AuthController : ControllerBase
             return ToErrorResponse(result.Errors);
         }
 
-        return CreatedAtAction(nameof(Register), result.Value);
+        return Created(string.Empty, result.Value);
     }
 
     [HttpPost("login")]
