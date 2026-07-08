@@ -25,6 +25,12 @@ public class UserRepository : IUserRepository
             .FirstOrDefaultAsync(user => user.Email == email, cancellationToken);
     }
 
+    public async Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Users
+            .FirstOrDefaultAsync(user => user.RefreshTokenHash == refreshTokenHash, cancellationToken);
+    }
+
     public async Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
         return await _dbContext.Users

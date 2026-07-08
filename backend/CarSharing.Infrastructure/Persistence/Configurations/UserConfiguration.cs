@@ -56,5 +56,8 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.Property(user => user.CreatedAt)
             .IsRequired();
+
+        builder.Property(user => user.RefreshTokenHash)
+            .HasMaxLength(128);
     }
 }

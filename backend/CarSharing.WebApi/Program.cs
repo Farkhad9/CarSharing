@@ -1,6 +1,10 @@
 using CarSharing.Application;
+using CarSharing.Application.Common.Interfaces;
 using CarSharing.Infrastructure;
 using CarSharing.Infrastructure.Security;
+using CarSharing.WebApi.Auth;
+using CarSharing.WebApi.Seeding;
+using CarSharing.Domain.Enums;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
@@ -12,9 +16,11 @@ const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration is missing.");
@@ -34,7 +40,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AuthorizationPolicies.AdminOnly, policy =>
+        policy.RequireRole(UserRole.Admin.ToString(), UserRole.SuperAdmin.ToString()));
+
+    options.AddPolicy(AuthorizationPolicies.RiderOnly, policy =>
+        policy.RequireRole(UserRole.Rider.ToString()));
+});
 
 builder.Services.AddCors(options =>
 {
@@ -62,5 +75,10 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+if (app.Environment.IsDevelopment())
+{
+    await app.SeedDevelopmentAdminAsync();
+}
 
 app.Run();

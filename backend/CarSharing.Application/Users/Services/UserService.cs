@@ -4,14 +4,20 @@ using CarSharing.Application.Common.Models;
 using CarSharing.Application.Users.Dtos;
 using CarSharing.Domain.Entities;
 using FluentValidation;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CarSharing.Application.Users.Services;
 
 public class UserService : IUserService
 {
+    private const int AccessTokenExpirationMinutes = 60;
+    private const int RefreshTokenExpirationDays = 14;
+
     private static readonly Error EmailNotUnique = new("User.EmailNotUnique", "User with this email already exists.");
     private static readonly Error InvalidCredentials = new("User.InvalidCredentials", "Invalid email or password.");
     private static readonly Error NotFound = new("User.NotFound", "User was not found.");
+    private static readonly Error InvalidRefreshToken = new("User.InvalidRefreshToken", "Refresh token is invalid or expired.");
 
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -83,14 +89,55 @@ public class UserService : IUserService
             return Result<AuthResponse>.Failure(InvalidCredentials);
         }
 
-        var userDto = _mapper.Map<UserDto>(user);
-        var response = new AuthResponse
-        {
-            AccessToken = _jwtTokenGenerator.GenerateToken(userDto),
-            User = userDto
-        };
+        var response = IssueTokens(user);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<AuthResponse>.Success(response);
+    }
+
+    public async Task<Result<AuthResponse>> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Result<AuthResponse>.Failure(InvalidRefreshToken);
+        }
+
+        var refreshTokenHash = HashRefreshToken(refreshToken);
+        var user = await _userRepository.GetByRefreshTokenHashAsync(refreshTokenHash, cancellationToken);
+
+        if (user is null || !user.HasValidRefreshToken(refreshTokenHash, DateTime.UtcNow))
+        {
+            return Result<AuthResponse>.Failure(InvalidRefreshToken);
+        }
+
+        var response = IssueTokens(user);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<AuthResponse>.Success(response);
+    }
+
+    public async Task<Result<bool>> LogoutAsync(string refreshToken, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Result<bool>.Success(true);
+        }
+
+        var refreshTokenHash = HashRefreshToken(refreshToken);
+        var user = await _userRepository.GetByRefreshTokenHashAsync(refreshTokenHash, cancellationToken);
+
+        if (user is null)
+        {
+            return Result<bool>.Success(true);
+        }
+
+        user.RevokeRefreshToken();
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<bool>.Success(true);
     }
 
     public async Task<Result<UserDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -124,5 +171,34 @@ public class UserService : IUserService
         return validationResult.Errors
             .Select(error => new Error($"Validation.{error.PropertyName}", error.ErrorMessage))
             .ToList();
+    }
+
+    private AuthResponse IssueTokens(User user)
+    {
+        var userDto = _mapper.Map<UserDto>(user);
+        var refreshToken = GenerateRefreshToken();
+        var refreshTokenExpiresAt = DateTime.UtcNow.AddDays(RefreshTokenExpirationDays);
+
+        user.SetRefreshToken(HashRefreshToken(refreshToken), refreshTokenExpiresAt);
+
+        return new AuthResponse
+        {
+            AccessToken = _jwtTokenGenerator.GenerateToken(userDto),
+            AccessTokenExpiresAt = DateTime.UtcNow.AddMinutes(AccessTokenExpirationMinutes),
+            RefreshToken = refreshToken,
+            RefreshTokenExpiresAt = refreshTokenExpiresAt,
+            User = userDto
+        };
+    }
+
+    private static string GenerateRefreshToken()
+    {
+        return Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+    }
+
+    private static string HashRefreshToken(string refreshToken)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken));
+        return Convert.ToHexString(bytes);
     }
 }

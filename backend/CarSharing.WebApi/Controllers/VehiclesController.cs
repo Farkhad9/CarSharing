@@ -1,6 +1,8 @@
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Application.Vehicles.Services;
+using CarSharing.WebApi.Auth;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CarSharing.WebApi.Controllers;
@@ -38,6 +40,7 @@ public class VehiclesController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
     public async Task<IActionResult> Create(
         CreateVehicleRequest request,
         CancellationToken cancellationToken)
@@ -53,6 +56,7 @@ public class VehiclesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
     public async Task<IActionResult> Update(
         Guid id,
         UpdateVehicleRequest request,
@@ -69,6 +73,7 @@ public class VehiclesController : ControllerBase
     }
 
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
         UpdateVehicleStatusRequest request,

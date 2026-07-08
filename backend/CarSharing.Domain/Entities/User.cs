@@ -21,6 +21,8 @@ public class User : BaseEntity
     public UserRole Role { get; private set; } = UserRole.Rider;
     public DateTime CreatedAt { get; private set; }
     public DateTime? VerifiedAt { get; private set; }
+    public string? RefreshTokenHash { get; private set; }
+    public DateTime? RefreshTokenExpiresAt { get; private set; }
 
     public static User CreateRider(
         string firstName,
@@ -49,9 +51,57 @@ public class User : BaseEntity
         };
     }
 
+    public static User CreateAdmin(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber)
+    {
+        var now = DateTime.UtcNow;
+
+        return new User
+        {
+            Id = Guid.NewGuid(),
+            FirstName = firstName.Trim(),
+            LastName = lastName.Trim(),
+            Email = email.Trim().ToLowerInvariant(),
+            Phone = phone.Trim(),
+            PasswordHash = passwordHash,
+            Balance = 0,
+            PendingHold = 0,
+            DriverLicenseNumber = driverLicenseNumber.Trim(),
+            EmailVerified = true,
+            VerificationStatus = UserVerificationStatus.Verified,
+            Role = UserRole.Admin,
+            CreatedAt = now,
+            VerifiedAt = now
+        };
+    }
+
     public void VerifyEmail()
     {
         EmailVerified = true;
         VerifiedAt = DateTime.UtcNow;
+    }
+
+    public void SetRefreshToken(string refreshTokenHash, DateTime expiresAt)
+    {
+        RefreshTokenHash = refreshTokenHash;
+        RefreshTokenExpiresAt = expiresAt;
+    }
+
+    public bool HasValidRefreshToken(string refreshTokenHash, DateTime utcNow)
+    {
+        return RefreshTokenHash == refreshTokenHash
+            && RefreshTokenExpiresAt.HasValue
+            && RefreshTokenExpiresAt.Value > utcNow;
+    }
+
+    public void RevokeRefreshToken()
+    {
+        RefreshTokenHash = null;
+        RefreshTokenExpiresAt = null;
     }
 }
