@@ -4,6 +4,7 @@ using CarSharing.Infrastructure;
 using CarSharing.Infrastructure.Security;
 using CarSharing.WebApi.Auth;
 using CarSharing.WebApi.Seeding;
+using CarSharing.WebApi.Services;
 using CarSharing.Domain.Enums;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -21,6 +22,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddHostedService<ReservationExpiryBackgroundService>();
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration is missing.");
