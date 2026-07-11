@@ -2,8 +2,7 @@ namespace CarSharing.Domain.Enums;
 
 public enum TripCompletionStatus
 {
-    Pending = 1,
+    PendingReview = 1,
     Approved = 2,
-    Paid = 3,
-    Rejected = 4
+    Rejected = 3
 }

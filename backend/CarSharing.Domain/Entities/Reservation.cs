@@ -53,4 +53,10 @@ public class Reservation : BaseEntity
         Status = ReservationStatus.Expired;
         ExpiredAt = expiredAt;
     }
+
+    public void ConvertToTrip(DateTime convertedAt)
+    {
+        Status = ReservationStatus.ConvertedToTrip;
+        ConvertedToTripAt = convertedAt;
+    }
 }
