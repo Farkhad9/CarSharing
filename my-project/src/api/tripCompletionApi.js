@@ -28,10 +28,10 @@ const writeRequests = (requests) => {
 };
 
 const getAssignee = (requests) => {
-  const pendingCounts = staffAccounts.reduce((counts, employee) => {
-    counts[employee.id] = requests.filter(
+  const pendingCounts = staffAccounts.reduce((counts, staff) => {
+    counts[staff.id] = requests.filter(
       (request) =>
-        request.assigneeId === employee.id &&
+        request.assigneeId === staff.id &&
         request.status === TRIP_COMPLETION_STATUSES.PENDING
     ).length;
     return counts;
@@ -96,7 +96,7 @@ export const tripCompletionApi = {
     return request;
   },
 
-  approveRequest(requestId, employeeId) {
+  approveRequest(requestId, staffId) {
     const requests = this.getRequests();
     const request = requests.find((item) => item.id === requestId);
 
@@ -104,8 +104,8 @@ export const tripCompletionApi = {
       throw new Error("Trip completion request was not found.");
     }
 
-    if (request.assigneeId !== employeeId) {
-      throw new Error("This request is assigned to another employee.");
+    if (request.assigneeId !== staffId) {
+      throw new Error("This request is assigned to another staff.");
     }
 
     if (request.status === TRIP_COMPLETION_STATUSES.APPROVED) {
@@ -117,7 +117,7 @@ export const tripCompletionApi = {
       ...request,
       status: TRIP_COMPLETION_STATUSES.APPROVED,
       approvedAt,
-      approvedBy: employeeId,
+      approvedBy: staffId,
     };
 
     writeRequests(
@@ -161,7 +161,7 @@ export const tripCompletionApi = {
     }
 
     if (request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      throw new Error("The employee must approve the trip before payment.");
+      throw new Error("The staff must approve the trip before payment.");
     }
 
     const paidAt = new Date().toISOString();
@@ -228,7 +228,7 @@ export const tripCompletionApi = {
     }
 
     if (request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      throw new Error("The employee must approve the trip before payment.");
+      throw new Error("The staff must approve the trip before payment.");
     }
 
     const paidAt = new Date().toISOString();

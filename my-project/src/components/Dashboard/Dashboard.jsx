@@ -727,7 +727,7 @@ const Dashboard = ({ onLogout }) => {
 
     const confirmed = await confirm({
       title: "Send photos for review?",
-      message: "Send these four photos to an employee for review? You will not be able to finish the trip until they approve them.",
+      message: "Send these four photos to a staff member for review? You will not be able to finish the trip until they approve them.",
       confirmLabel: "Send for review",
       tone: "info",
     });
@@ -779,7 +779,7 @@ const Dashboard = ({ onLogout }) => {
         )
       );
       setTripNotice(
-        `Four photos were sent to ${request.assigneeName}. The ride will close after employee approval.`
+        `Four photos were sent to ${request.assigneeName}. The ride will close after staff approval.`
       );
       setCompletionTarget(null);
       setCompletionPhotos({});
@@ -831,7 +831,7 @@ const Dashboard = ({ onLogout }) => {
 
     const request = tripCompletionApi.getRequest(targetVehicle.completionRequestId);
     if (!request || request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      setPaymentError("Employee approval has not arrived yet.");
+      setPaymentError("Staff approval has not arrived yet.");
       return;
     }
 
@@ -1208,7 +1208,7 @@ const Dashboard = ({ onLogout }) => {
                       <div className="flex items-start gap-3">
                         <FiClock className="mt-0.5 shrink-0 text-amber-600" />
                         <div>
-                          <p className="text-sm font-black text-amber-900">Waiting for employee approval</p>
+                          <p className="text-sm font-black text-amber-900">Waiting for staff approval</p>
                           <p className="mt-1 text-xs font-semibold leading-5 text-amber-700">
                             Your four vehicle photos were submitted. The ride remains in review and will close automatically after approval.
                           </p>
@@ -1224,7 +1224,7 @@ const Dashboard = ({ onLogout }) => {
                         <div>
                           <p className="text-sm font-black text-emerald-900">Photos approved — payment required</p>
                           <p className="mt-1 text-xs font-semibold leading-5 text-emerald-700">
-                            The employee approved the vehicle condition. Confirm payment to complete the ride.
+                            The staff approved the vehicle condition. Confirm payment to complete the ride.
                           </p>
                         </div>
                       </div>
@@ -1981,7 +1981,7 @@ const Dashboard = ({ onLogout }) => {
               <FiCheckCircle />
             </span>
             <p className="mt-5 text-xs font-black uppercase tracking-[0.18em] text-emerald-600">
-              Employee approved the photos
+              Staff approved the photos
             </p>
             <h2 className="mt-2 text-3xl font-black text-zinc-950">Confirm trip payment</h2>
             <p className="mt-3 text-sm font-semibold leading-6 text-zinc-500">
@@ -2196,7 +2196,7 @@ const Dashboard = ({ onLogout }) => {
                   <p className="text-xs font-black uppercase tracking-[0.2em] text-red-500">Finish ride safely</p>
                   <h2 className="mt-2 text-3xl font-black text-zinc-950">Add four vehicle photos</h2>
                   <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-zinc-500">
-                    Photograph the complete front, rear, left, and right sides. An employee will review them before the ride is closed.
+                    Photograph the complete front, rear, left, and right sides. A staff member will review them before the ride is closed.
                   </p>
                 </div>
                 <button
