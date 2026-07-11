@@ -3,9 +3,8 @@ namespace CarSharing.Domain.Enums;
 public enum TripStatus
 {
     Active = 1,
-    Paused = 2,
-    AwaitingApproval = 3,
-    AwaitingPayment = 4,
-    Completed = 5,
-    Cancelled = 6
+    PendingCompletionReview = 2,
+    AwaitingPayment = 3,
+    Completed = 4,
+    Cancelled = 5
 }

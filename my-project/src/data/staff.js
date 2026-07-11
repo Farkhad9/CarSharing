@@ -11,13 +11,13 @@ export const STAFF_TASK_STATUS_LABELS = Object.freeze({
 });
 
 export const staffAccounts = [
-  { id: "staff-nihat", name: "Nihat", login: "nihat", password: "staff123", role: "employee" },
-  { id: "staff-elvin", name: "Elvin", login: "elvin", password: "staff123", role: "employee" },
-  { id: "staff-tural", name: "Tural", login: "tural", password: "staff123", role: "employee" },
-  { id: "staff-ayan", name: "Ayan", login: "ayan", password: "staff123", role: "employee" },
-  { id: "staff-karimova", name: "Karimova", login: "karimova", password: "staff123", role: "employee" },
-  { id: "staff-sabina", name: "Sabina", login: "sabina", password: "staff123", role: "employee" },
-  { id: "staff-murad-aliev", name: "Murad Aliev", login: "murad", password: "staff123", role: "employee" },
+  { id: "staff-nihat", name: "Nihat", login: "nihat", password: "staff123", role: "staff" },
+  { id: "staff-elvin", name: "Elvin", login: "elvin", password: "staff123", role: "staff" },
+  { id: "staff-tural", name: "Tural", login: "tural", password: "staff123", role: "staff" },
+  { id: "staff-ayan", name: "Ayan", login: "ayan", password: "staff123", role: "staff" },
+  { id: "staff-karimova", name: "Karimova", login: "karimova", password: "staff123", role: "staff" },
+  { id: "staff-sabina", name: "Sabina", login: "sabina", password: "staff123", role: "staff" },
+  { id: "staff-murad-aliev", name: "Murad Aliev", login: "murad", password: "staff123", role: "staff" },
 ];
 
 export const staffTasksSeed = [

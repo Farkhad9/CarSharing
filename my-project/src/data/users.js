@@ -59,7 +59,7 @@ export const users = [
   },
   {
     id: "staff-nihat",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Nihat",
     email: "nihat@electrostreet.example",
     phone: "+994501000101",
@@ -70,7 +70,7 @@ export const users = [
   },
   {
     id: "staff-elvin",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Elvin",
     email: "elvin@electrostreet.example",
     phone: "+994501000102",
@@ -81,7 +81,7 @@ export const users = [
   },
   {
     id: "staff-tural",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Tural",
     email: "tural@electrostreet.example",
     phone: "+994501000103",
@@ -92,7 +92,7 @@ export const users = [
   },
   {
     id: "staff-ayan",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Ayan",
     email: "ayan@electrostreet.example",
     phone: "+994501000104",
@@ -103,7 +103,7 @@ export const users = [
   },
   {
     id: "staff-karimova",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Karimova",
     email: "karimova@electrostreet.example",
     phone: "+994501000105",
@@ -114,7 +114,7 @@ export const users = [
   },
   {
     id: "staff-sabina",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Sabina",
     email: "sabina@electrostreet.example",
     phone: "+994501000106",
@@ -125,7 +125,7 @@ export const users = [
   },
   {
     id: "staff-murad-aliev",
-    role: USER_ROLES.EMPLOYEE,
+    role: USER_ROLES.STAFF,
     fullName: "Murad Aliev",
     email: "murad.aliev@electrostreet.example",
     phone: "+994501000107",

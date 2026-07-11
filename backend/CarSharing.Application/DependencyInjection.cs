@@ -5,6 +5,9 @@ using CarSharing.Application.Users.Validators;
 using CarSharing.Application.Reservations.Dtos;
 using CarSharing.Application.Reservations.Services;
 using CarSharing.Application.Reservations.Validators;
+using CarSharing.Application.Trips.Dtos;
+using CarSharing.Application.Trips.Services;
+using CarSharing.Application.Trips.Validators;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Application.Vehicles.Services;
 using CarSharing.Application.Vehicles.Validators;
@@ -19,6 +22,7 @@ public static class DependencyInjection
     {
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IReservationService, ReservationService>();
+        services.AddScoped<ITripService, TripService>();
         services.AddScoped<IVehicleService, VehicleService>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
@@ -27,6 +31,8 @@ public static class DependencyInjection
         services.AddScoped<IValidator<LoginUserRequest>, LoginUserRequestValidator>();
         services.AddScoped<IValidator<CreateReservationRequest>, CreateReservationRequestValidator>();
         services.AddScoped<IValidator<CancelReservationRequest>, CancelReservationRequestValidator>();
+        services.AddScoped<IValidator<StartTripRequest>, StartTripRequestValidator>();
+        services.AddScoped<IValidator<RejectTripCompletionRequest>, RejectTripCompletionRequestValidator>();
         services.AddScoped<IValidator<CreateVehicleRequest>, CreateVehicleRequestValidator>();
         services.AddScoped<IValidator<UpdateVehicleRequest>, UpdateVehicleRequestValidator>();
         services.AddScoped<IValidator<UpdateVehicleStatusRequest>, UpdateVehicleStatusRequestValidator>();

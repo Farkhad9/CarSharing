@@ -205,7 +205,7 @@ public class ReservationService : IReservationService
             return true;
         }
 
-        return _currentUserService.Role is UserRole.Admin or UserRole.SuperAdmin or UserRole.Staff or UserRole.Employee;
+        return _currentUserService.Role is UserRole.Admin or UserRole.SuperAdmin or UserRole.Staff;
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)

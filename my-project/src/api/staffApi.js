@@ -63,7 +63,7 @@ export const staffApi = {
     localStorage.removeItem(SESSION_STORAGE_KEY);
   },
 
-  getEmployees() {
+  getStaff() {
     return staffAccounts.map((account) => ({
       id: account.id,
       name: account.name,
@@ -76,8 +76,8 @@ export const staffApi = {
     return readTasks();
   },
 
-  getTasksForEmployee(employeeId) {
-    return readTasks().filter((task) => task.assigneeId === employeeId);
+  getTasksForStaff(staffId) {
+    return readTasks().filter((task) => task.assigneeId === staffId);
   },
 
   createTask(task) {

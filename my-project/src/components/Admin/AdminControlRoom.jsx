@@ -965,7 +965,7 @@ const AdminControlRoom = () => {
   );
   const [alertsEnabled, setAlertsEnabled] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const staffEmployees = useMemo(() => staffApi.getEmployees(), []);
+  const staffMembers = useMemo(() => staffApi.getStaff(), []);
 
   useEffect(() => {
     if (!adminSession) return;
@@ -1453,7 +1453,7 @@ const AdminControlRoom = () => {
       vehicleId: selectedVehicleId,
       status: STAFF_TASK_STATUSES.WAITING,
     });
-    const employee = staffEmployees.find((item) => item.id === staffTaskDraft.assigneeId);
+    const staff = staffMembers.find((item) => item.id === staffTaskDraft.assigneeId);
 
     setStaffTasks(nextTasks);
     setStaffTaskDraft({
@@ -1463,7 +1463,7 @@ const AdminControlRoom = () => {
       priority: "Средний",
       dueAt: "Сегодня",
     });
-    showAdminNotice(`Задание назначено: ${employee?.name || "сотрудник"}`, "tasks");
+    showAdminNotice(`Задание назначено: ${staff?.name || "сотрудник"}`, "tasks");
   };
 
   const updateStaffTaskStatus = (taskId, status) => {
@@ -2595,7 +2595,7 @@ const AdminControlRoom = () => {
                       type="button"
                       onClick={() => setStaff((items) => items.map((item) => (item.id === manager.id ? { ...item, active: !item.active } : item)))}
                       className={`rounded-xl p-2 ${manager.active ? "bg-red-500/15 text-red-200" : "bg-emerald-500/15 text-emerald-200"}`}
-                      title={manager.active ? "Deactivate employee" : "Activate employee"}
+                      title={manager.active ? "Deactivate staff" : "Activate staff"}
                     >
                       {manager.active ? <FiUserX /> : <FiUserCheck />}
                     </button>
@@ -2720,9 +2720,9 @@ const AdminControlRoom = () => {
                 onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, assigneeId: event.target.value }))}
                 className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
               >
-                {staffEmployees.map((employee) => (
-                  <option key={employee.id} value={employee.id}>
-                    {employee.name}
+                {staffMembers.map((staff) => (
+                  <option key={staff.id} value={staff.id}>
+                    {staff.name}
                   </option>
                 ))}
               </select>
@@ -2750,7 +2750,7 @@ const AdminControlRoom = () => {
 
         <div className="grid gap-3">
           {staffTasks.map((task) => {
-            const employee = staffEmployees.find((item) => item.id === task.assigneeId);
+            const staff = staffMembers.find((item) => item.id === task.assigneeId);
             return (
               <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2758,7 +2758,7 @@ const AdminControlRoom = () => {
                     <p className="text-sm font-black text-white">{task.title}</p>
                     <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{task.description}</p>
                     <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
-                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{employee?.name || "Employee"}</span>
+                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{staff?.name || "staff"}</span>
                       <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.priority}</span>
                       <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.dueAt}</span>
                       <span className="rounded-full bg-blue-500/10 px-3 py-1 text-blue-200">
