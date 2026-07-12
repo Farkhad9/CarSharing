@@ -66,4 +66,15 @@ public class Trip : BaseEntity
     {
         Status = TripStatus.AwaitingPayment;
     }
+
+    public void CompletePayment()
+    {
+        if (Status != TripStatus.AwaitingPayment)
+        {
+            throw new InvalidOperationException("Only a trip awaiting payment can be completed.");
+        }
+
+        Status = TripStatus.Completed;
+        EndedAt ??= EndRequestedAt ?? DateTime.UtcNow;
+    }
 }

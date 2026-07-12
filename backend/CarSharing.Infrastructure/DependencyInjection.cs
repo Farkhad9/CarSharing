@@ -2,6 +2,7 @@ using CarSharing.Application.Common.Interfaces;
 using CarSharing.Infrastructure.Persistence;
 using CarSharing.Infrastructure.Persistence.Repositories;
 using CarSharing.Infrastructure.Security;
+using CarSharing.Infrastructure.Payments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,10 +25,13 @@ public static class DependencyInjection
         services.AddScoped<ITripRepository, TripRepository>();
         services.AddScoped<ITripCompletionRequestRepository, TripCompletionRequestRepository>();
         services.AddScoped<IVehicleRepository, VehicleRepository>();
+        services.AddScoped<IPaymentTransactionRepository, PaymentTransactionRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.Configure<JwtOptions>(configuration.GetSection("Jwt"));
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+        services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
+        services.AddScoped<IStripePaymentGateway, StripePaymentGateway>();
 
         return services;
     }

@@ -1,4 +1,4 @@
-name: Frontend CI
+name: Frontend CI/CD
 
 on:
   workflow_dispatch:
@@ -53,3 +53,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carsharing-frontend
+          path: my-project/dist
