@@ -23,7 +23,11 @@ public class Trip : BaseEntity
     public double? EndLongitude { get; private set; }
     public double DistanceKm { get; private set; }
     public int DurationMinutes { get; private set; }
+    public decimal BasePricePerMinute { get; private set; }
     public decimal PricePerMinute { get; private set; }
+    public decimal DemandMultiplier { get; private set; } = 1.00m;
+    public decimal ZoneMultiplier { get; private set; } = 1.00m;
+    public decimal BatteryMultiplier { get; private set; } = 1.00m;
     public decimal BasePrice { get; private set; }
     public int DiscountPercent { get; private set; }
     public decimal DiscountAmount { get; private set; }
@@ -31,7 +35,15 @@ public class Trip : BaseEntity
     public string Currency { get; private set; } = "AZN";
     public string? PromoCode { get; private set; }
 
-    public static Trip StartFromReservation(Reservation reservation, Vehicle vehicle, DateTime startedAt)
+    public static Trip StartFromReservation(
+        Reservation reservation,
+        Vehicle vehicle,
+        DateTime startedAt,
+        decimal basePricePerMinute,
+        decimal demandMultiplier,
+        decimal zoneMultiplier,
+        decimal batteryMultiplier,
+        decimal finalPricePerMinute)
     {
         return new Trip
         {
@@ -44,9 +56,26 @@ public class Trip : BaseEntity
             StartLocationLabel = vehicle.LocationLabel,
             StartLatitude = vehicle.Latitude,
             StartLongitude = vehicle.Longitude,
-            PricePerMinute = vehicle.PricePerMinute,
+            BasePricePerMinute = basePricePerMinute,
+            DemandMultiplier = demandMultiplier,
+            ZoneMultiplier = zoneMultiplier,
+            BatteryMultiplier = batteryMultiplier,
+            PricePerMinute = finalPricePerMinute,
             Currency = vehicle.Currency
         };
+    }
+
+    public static Trip StartFromReservation(Reservation reservation, Vehicle vehicle, DateTime startedAt)
+    {
+        return StartFromReservation(
+            reservation,
+            vehicle,
+            startedAt,
+            vehicle.PricePerMinute,
+            1.00m,
+            1.00m,
+            1.00m,
+            vehicle.PricePerMinute);
     }
 
     public void RequestCompletion(DateTime requestedAt)
@@ -55,8 +84,8 @@ public class Trip : BaseEntity
         {
             EndRequestedAt = requestedAt;
             DurationMinutes = Math.Max(1, (int)Math.Ceiling((requestedAt - StartedAt).TotalMinutes));
-            BasePrice = Math.Round(DurationMinutes * PricePerMinute, 2, MidpointRounding.AwayFromZero);
-            TotalPrice = Math.Max(0, BasePrice - DiscountAmount);
+            BasePrice = RoundMoney(DurationMinutes * BasePricePerMinute);
+            TotalPrice = Math.Max(0, RoundMoney(DurationMinutes * PricePerMinute) - DiscountAmount);
         }
 
         Status = TripStatus.PendingCompletionReview;
@@ -76,5 +105,10 @@ public class Trip : BaseEntity
 
         Status = TripStatus.Completed;
         EndedAt ??= EndRequestedAt ?? DateTime.UtcNow;
+    }
+
+    private static decimal RoundMoney(decimal value)
+    {
+        return Math.Round(value, 2, MidpointRounding.AwayFromZero);
     }
 }

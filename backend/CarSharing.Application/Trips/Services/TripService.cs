@@ -4,6 +4,7 @@ using CarSharing.Application.Trips.Dtos;
 using CarSharing.Domain.Entities;
 using CarSharing.Domain.Enums;
 using AutoMapper;
+using CarSharing.Application.Pricing.Services;
 using FluentValidation;
 
 namespace CarSharing.Application.Trips.Services;
@@ -40,6 +41,7 @@ public class TripService : ITripService
     private readonly IReservationRepository _reservationRepository;
     private readonly IVehicleRepository _vehicleRepository;
     private readonly ITripPhotoStorage _tripPhotoStorage;
+    private readonly IDynamicPricingService _dynamicPricingService;
     private readonly ICurrentUserService _currentUserService;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IValidator<StartTripRequest> _startTripValidator;
@@ -52,6 +54,7 @@ public class TripService : ITripService
         IReservationRepository reservationRepository,
         IVehicleRepository vehicleRepository,
         ITripPhotoStorage tripPhotoStorage,
+        IDynamicPricingService dynamicPricingService,
         ICurrentUserService currentUserService,
         IUnitOfWork unitOfWork,
         IValidator<StartTripRequest> startTripValidator,
@@ -63,6 +66,7 @@ public class TripService : ITripService
         _reservationRepository = reservationRepository;
         _vehicleRepository = vehicleRepository;
         _tripPhotoStorage = tripPhotoStorage;
+        _dynamicPricingService = dynamicPricingService;
         _currentUserService = currentUserService;
         _unitOfWork = unitOfWork;
         _startTripValidator = startTripValidator;
@@ -125,7 +129,16 @@ public class TripService : ITripService
             return Result<TripDto>.Failure(VehicleNotReserved);
         }
 
-        var trip = Trip.StartFromReservation(reservation, vehicle, now);
+        var pricing = await _dynamicPricingService.CalculateAsync(vehicle, now, cancellationToken);
+        var trip = Trip.StartFromReservation(
+            reservation,
+            vehicle,
+            now,
+            pricing.BasePricePerMinute,
+            pricing.DemandMultiplier,
+            pricing.ZoneMultiplier,
+            pricing.BatteryMultiplier,
+            pricing.FinalPricePerMinute);
         reservation.ConvertToTrip(now);
         vehicle.ChangeStatus(VehicleStatus.InUse);
 

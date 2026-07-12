@@ -1,5 +1,6 @@
 using AutoMapper;
 using CarSharing.Application.Common.Interfaces;
+using CarSharing.Application.Pricing.Services;
 using CarSharing.Application.Trips.Dtos;
 using CarSharing.Application.Trips.Mapping;
 using CarSharing.Application.Trips.Services;
@@ -175,6 +176,7 @@ public class TripEngineTests
             new FakeReservationRepository(reservation),
             new FakeVehicleRepository(vehicle),
             new FakePhotoStorage(),
+            new DynamicPricingService(new FakeVehicleRepository(vehicle)),
             new FakeCurrentUserService(userId, role),
             unitOfWork,
             new StartTripRequestValidator(),
@@ -328,6 +330,9 @@ public class TripEngineTests
 
         public Task<Vehicle?> GetByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) =>
             Task.FromResult<Vehicle?>(null);
+
+        public Task<int> CountAvailableByZoneAsync(string zone, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_vehicle.Status == VehicleStatus.Available && _vehicle.Zone == zone ? 1 : 0);
 
         public Task<bool> ExistsByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) =>
             Task.FromResult(false);
