@@ -3,6 +3,7 @@ using CarSharing.Application.Common.Models;
 using CarSharing.Application.Trips.Dtos;
 using CarSharing.Domain.Entities;
 using CarSharing.Domain.Enums;
+using AutoMapper;
 using FluentValidation;
 
 namespace CarSharing.Application.Trips.Services;
@@ -43,6 +44,7 @@ public class TripService : ITripService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IValidator<StartTripRequest> _startTripValidator;
     private readonly IValidator<RejectTripCompletionRequest> _rejectValidator;
+    private readonly IMapper _mapper;
 
     public TripService(
         ITripRepository tripRepository,
@@ -53,7 +55,8 @@ public class TripService : ITripService
         ICurrentUserService currentUserService,
         IUnitOfWork unitOfWork,
         IValidator<StartTripRequest> startTripValidator,
-        IValidator<RejectTripCompletionRequest> rejectValidator)
+        IValidator<RejectTripCompletionRequest> rejectValidator,
+        IMapper mapper)
     {
         _tripRepository = tripRepository;
         _completionRequestRepository = completionRequestRepository;
@@ -64,6 +67,7 @@ public class TripService : ITripService
         _unitOfWork = unitOfWork;
         _startTripValidator = startTripValidator;
         _rejectValidator = rejectValidator;
+        _mapper = mapper;
     }
 
     public async Task<Result<TripDto>> StartAsync(
@@ -128,7 +132,7 @@ public class TripService : ITripService
         await _tripRepository.AddAsync(trip, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripDto>.Success(ToDto(trip));
+        return Result<TripDto>.Success(MapTrip(trip));
     }
 
     public async Task<Result<TripDto?>> GetMyActiveAsync(CancellationToken cancellationToken = default)
@@ -146,7 +150,7 @@ public class TripService : ITripService
         }
 
         var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-        return Result<TripDto?>.Success(ToDto(trip, latestRequest));
+        return Result<TripDto?>.Success(MapTrip(trip, latestRequest));
     }
 
     public async Task<Result<TripDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -163,7 +167,7 @@ public class TripService : ITripService
         }
 
         var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-        return Result<TripDto>.Success(ToDto(trip, latestRequest));
+        return Result<TripDto>.Success(MapTrip(trip, latestRequest));
     }
 
     public async Task<Result<TripCompletionRequestDto>> SubmitCompletionAsync(
@@ -230,7 +234,7 @@ public class TripService : ITripService
         await _completionRequestRepository.AddAsync(completionRequest, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(ToDto(completionRequest));
+        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(completionRequest));
     }
 
     public async Task<Result<IReadOnlyList<TripCompletionRequestDto>>> GetPendingCompletionRequestsAsync(
@@ -242,7 +246,8 @@ public class TripService : ITripService
         }
 
         var requests = await _completionRequestRepository.GetPendingReviewAsync(cancellationToken);
-        return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(requests.Select(ToDto).ToList());
+        return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(
+            requests.Select(request => _mapper.Map<TripCompletionRequestDto>(request)).ToList());
     }
 
     public async Task<Result<TripCompletionRequestDto>> GetCompletionRequestByIdAsync(
@@ -260,7 +265,7 @@ public class TripService : ITripService
             return Result<TripCompletionRequestDto>.Failure(Forbidden);
         }
 
-        return Result<TripCompletionRequestDto>.Success(ToDto(request));
+        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(request));
     }
 
     public async Task<Result<TripCompletionRequestDto>> ApproveCompletionRequestAsync(
@@ -302,7 +307,7 @@ public class TripService : ITripService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(ToDto(request));
+        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(request));
     }
 
     public async Task<Result<TripCompletionRequestDto>> RejectCompletionRequestAsync(
@@ -343,7 +348,7 @@ public class TripService : ITripService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(ToDto(completionRequest));
+        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(completionRequest));
     }
 
     private bool CanAccessTrip(Trip trip)
@@ -414,64 +419,14 @@ public class TripService : ITripService
         return errors;
     }
 
-    private static TripDto ToDto(Trip trip, TripCompletionRequest? latestCompletionRequest = null)
+    private TripDto MapTrip(Trip trip, TripCompletionRequest? latestCompletionRequest = null)
     {
-        return new TripDto
-        {
-            Id = trip.Id,
-            UserId = trip.UserId,
-            VehicleId = trip.VehicleId,
-            ReservationId = trip.ReservationId,
-            Status = trip.Status,
-            StartedAt = trip.StartedAt,
-            EndRequestedAt = trip.EndRequestedAt,
-            EndedAt = trip.EndedAt,
-            DurationMinutes = trip.DurationMinutes,
-            PricePerMinute = trip.PricePerMinute,
-            BasePrice = trip.BasePrice,
-            DiscountPercent = trip.DiscountPercent,
-            DiscountAmount = trip.DiscountAmount,
-            TotalPrice = trip.TotalPrice,
-            Currency = trip.Currency,
-            StartLocationLabel = trip.StartLocationLabel,
-            StartLatitude = trip.StartLatitude,
-            StartLongitude = trip.StartLongitude,
-            LatestCompletionRequest = latestCompletionRequest is null ? null : ToDto(latestCompletionRequest)
-        };
-    }
+        var dto = _mapper.Map<TripDto>(trip);
+        dto.LatestCompletionRequest = latestCompletionRequest is null
+            ? null
+            : _mapper.Map<TripCompletionRequestDto>(latestCompletionRequest);
 
-    private static TripCompletionRequestDto ToDto(TripCompletionRequest request)
-    {
-        return new TripCompletionRequestDto
-        {
-            Id = request.Id,
-            TripId = request.TripId,
-            UserId = request.UserId,
-            VehicleId = request.VehicleId,
-            AssigneeId = request.AssigneeId,
-            AttemptNumber = request.AttemptNumber,
-            Status = request.Status,
-            RequestedAt = request.RequestedAt,
-            ReviewedAt = request.ReviewedAt,
-            ReviewedByUserId = request.ReviewedByUserId,
-            BaseRideCost = request.BaseRideCost,
-            DiscountPercent = request.DiscountPercent,
-            DiscountAmount = request.DiscountAmount,
-            FinalRideCost = request.FinalRideCost,
-            Currency = request.Currency,
-            PromoCode = request.PromoCode,
-            RejectionReason = request.RejectionReason,
-            Photos = request.Photos
-                .OrderBy(photo => photo.Angle)
-                .Select(photo => new TripCompletionPhotoDto
-                {
-                    Id = photo.Id,
-                    Angle = photo.Angle,
-                    FileUrl = photo.FileUrl,
-                    UploadedAt = photo.UploadedAt
-                })
-                .ToList()
-        };
+        return dto;
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
