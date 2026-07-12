@@ -10,6 +10,7 @@ import {
   FiSend,
   FiUser,
 } from "react-icons/fi";
+import { authApi } from "../../api/authApi";
 
 const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice }) => {
   const [isRegister, setIsRegister] = useState(() => {
@@ -18,8 +19,15 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [firstName, setFirstName] = useState("Farhad");
+  const [lastName, setLastName] = useState("Aliyev");
+  const [phone, setPhone] = useState("+994501234567");
+  const [password, setPassword] = useState("Password123!");
+  const [confirmPassword, setConfirmPassword] = useState("Password123!");
+  const [licenseNumber, setLicenseNumber] = useState("AZE-1234567");
   const [email, setEmail] = useState("farhad@electrostreet.az");
-  const [verificationLink, setVerificationLink] = useState("");
+  const verificationLink = "";
+  const [authError, setAuthError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) {
     return null;
@@ -34,51 +42,26 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
     window.location.href = "/";
   };
 
-  const handleAuthSubmit = (event) => {
+  const handleAuthSubmit = async (event) => {
     event.preventDefault();
-
-    const normalizedName = firstName.trim() || "Farhad";
-    const normalizedEmail = email.trim() || "farhad@electrostreet.az";
-    const token = `verify-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const pendingVerification = (() => {
-      try {
-        return JSON.parse(localStorage.getItem("electroStreetPendingEmailVerification") || "null");
-      } catch {
-        return null;
+    setAuthError("");
+    if (isRegister && password !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      if (isRegister) {
+        await authApi.register({ firstName, lastName, email, phone, password, driverLicenseNumber: licenseNumber });
       }
-    })();
-    const user = {
-      id: "usr-farhad",
-      name: normalizedName,
-      email: normalizedEmail,
-      balance: 0,
-      avatarInitial: normalizedName.charAt(0).toUpperCase(),
-      emailVerified: !isRegister && pendingVerification?.email !== normalizedEmail,
-    };
-
-    localStorage.setItem("electroStreetUser", JSON.stringify(user));
-
-    if (isRegister) {
-      const nextVerificationLink = `${window.location.origin}/?verifyEmail=${token}`;
-      localStorage.setItem(
-        "electroStreetPendingEmailVerification",
-        JSON.stringify({
-          email: normalizedEmail,
-          token,
-          link: nextVerificationLink,
-          createdAt: new Date().toISOString(),
-        })
-      );
-      setVerificationLink(nextVerificationLink);
-      return;
+      const user = await authApi.login(email, password);
+      if (onAuthSuccess) onAuthSuccess(user);
+      else window.location.href = "/";
+    } catch (error) {
+      setAuthError(error.message || "Authentication failed.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (onAuthSuccess) {
-      onAuthSuccess(user);
-      return;
-    }
-
-    window.location.href = "/";
   };
 
   const inputClass =
@@ -559,12 +542,12 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                       onChange={(event) => setFirstName(event.target.value)}
                     />
                   </div>
-                  <input className={inputClass} type="text" placeholder="Last name" />
+                  <input className={inputClass} type="text" placeholder="Last name" value={lastName} onChange={(event) => setLastName(event.target.value)} />
                 </div>
 
                 <div className="relative mb-3 w-full">
                   <FiPhone className="absolute left-4 top-3.5 text-zinc-400" />
-                  <input className={iconInputClass} type="tel" placeholder="+994 (50) 000-00-00" />
+                  <input className={iconInputClass} type="tel" placeholder="+994 (50) 000-00-00" value={phone} onChange={(event) => setPhone(event.target.value)} />
                 </div>
 
                 <div className="relative mb-3 w-full">
@@ -584,6 +567,8 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                     className={passwordInputClass}
                     type={showPassword ? "text" : "password"}
                     placeholder="Password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                   />
                   <button
                     type="button"
@@ -601,19 +586,21 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                     className={passwordInputClass}
                     type={showPassword ? "text" : "password"}
                     placeholder="Confirm password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
                   />
                 </div>
 
                 <div className="mb-5 grid w-full grid-cols-2 gap-3">
                   <input className={inputClass} type="number" min="18" placeholder="Age" />
-                  <input className={inputClass} type="text" placeholder="License ID" />
+                  <input className={inputClass} type="text" placeholder="License ID" value={licenseNumber} onChange={(event) => setLicenseNumber(event.target.value)} />
                 </div>
 
                 <button
                   type="submit"
                   className={primaryButtonClass}
                 >
-                  Sign Up
+                  {isSubmitting ? "Creating account..." : "Sign Up"}
                 </button>
 
                 <button
@@ -673,6 +660,8 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                     className={passwordInputClass}
                     type={showPassword ? "text" : "password"}
                     placeholder="Password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                   />
                   <button
                     type="button"
@@ -716,8 +705,9 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   type="submit"
                   className={primaryButtonClass}
                 >
-                  Sign In
+                  {isSubmitting ? "Signing in..." : "Sign In"}
                 </button>
+                {authError && <p className="mt-4 text-center text-sm font-bold text-red-600">{authError}</p>}
 
                 <button
                   type="button"

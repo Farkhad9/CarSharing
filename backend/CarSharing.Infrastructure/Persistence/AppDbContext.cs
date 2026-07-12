@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<Trip> Trips => Set<Trip>();
     public DbSet<TripCompletionRequest> TripCompletionRequests => Set<TripCompletionRequest>();
     public DbSet<TripCompletionPhoto> TripCompletionPhotos => Set<TripCompletionPhoto>();
+    public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

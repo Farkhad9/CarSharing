@@ -104,4 +104,18 @@ public class User : BaseEntity
         RefreshTokenHash = null;
         RefreshTokenExpiresAt = null;
     }
+
+    public void CreditBalance(decimal amount)
+    {
+        if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        Balance += amount;
+    }
+
+    public bool TryDebitBalance(decimal amount)
+    {
+        if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        if (Balance < amount) return false;
+        Balance -= amount;
+        return true;
+    }
 }
