@@ -43,8 +43,14 @@ jobs:
       - name: Restore
         run: dotnet restore backend/CarSharing.WebApi/CarSharing.WebApi.csproj
 
+      - name: Restore tests
+        run: dotnet restore backend/CarSharing.Application.Tests/CarSharing.Application.Tests.csproj
+
       - name: Build
         run: dotnet build backend/CarSharing.WebApi/CarSharing.WebApi.csproj --configuration Release --no-restore
+
+      - name: Test Trip Engine
+        run: dotnet test backend/CarSharing.Application.Tests/CarSharing.Application.Tests.csproj --configuration Release --no-restore
 
       - name: Install EF Core tools
         run: dotnet tool install --global dotnet-ef --version 10.0.9
