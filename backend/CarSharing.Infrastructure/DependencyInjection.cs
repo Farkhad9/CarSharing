@@ -26,6 +26,9 @@ public static class DependencyInjection
         services.AddScoped<ITripCompletionRequestRepository, TripCompletionRequestRepository>();
         services.AddScoped<IVehicleRepository, VehicleRepository>();
         services.AddScoped<IPaymentTransactionRepository, PaymentTransactionRepository>();
+        services.AddScoped<IChargingStationRepository, ChargingStationRepository>();
+        services.AddScoped<IChargingSessionRepository, ChargingSessionRepository>();
+        services.AddScoped<IStaffTaskRepository, StaffTaskRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.Configure<JwtOptions>(configuration.GetSection("Jwt"));
