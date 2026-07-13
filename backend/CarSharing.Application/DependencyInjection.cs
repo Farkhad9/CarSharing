@@ -14,6 +14,7 @@ using CarSharing.Application.Vehicles.Validators;
 using CarSharing.Application.Payments.Dtos;
 using CarSharing.Application.Payments.Services;
 using CarSharing.Application.Payments.Validators;
+using CarSharing.Application.Pricing.Services;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -28,6 +29,7 @@ public static class DependencyInjection
         services.AddScoped<ITripService, TripService>();
         services.AddScoped<IVehicleService, VehicleService>();
         services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IDynamicPricingService, DynamicPricingService>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
 

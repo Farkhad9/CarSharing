@@ -25,6 +25,18 @@ public class TripConfiguration : IEntityTypeConfiguration<Trip>
         builder.Property(trip => trip.PricePerMinute)
             .HasPrecision(18, 2);
 
+        builder.Property(trip => trip.BasePricePerMinute)
+            .HasPrecision(18, 2);
+
+        builder.Property(trip => trip.DemandMultiplier)
+            .HasPrecision(18, 4);
+
+        builder.Property(trip => trip.ZoneMultiplier)
+            .HasPrecision(18, 4);
+
+        builder.Property(trip => trip.BatteryMultiplier)
+            .HasPrecision(18, 4);
+
         builder.Property(trip => trip.BasePrice)
             .HasPrecision(18, 2);
 

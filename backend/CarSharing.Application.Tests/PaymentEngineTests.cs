@@ -115,6 +115,7 @@ public sealed class PaymentEngineTests
         public Task<IReadOnlyList<Vehicle>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Vehicle>>([vehicle]);
         public Task<Vehicle?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<Vehicle?>(id == vehicle.Id ? vehicle : null);
         public Task<Vehicle?> GetByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) => Task.FromResult<Vehicle?>(vehicle);
+        public Task<int> CountAvailableByZoneAsync(string zone, CancellationToken cancellationToken = default) => Task.FromResult(vehicle.Status == VehicleStatus.Available && vehicle.Zone == zone ? 1 : 0);
         public Task<bool> ExistsByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<bool> ExistsByPlateNumberAsync(string plateNumber, Guid excludedVehicleId, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(Vehicle entity, CancellationToken cancellationToken = default) => Task.CompletedTask;

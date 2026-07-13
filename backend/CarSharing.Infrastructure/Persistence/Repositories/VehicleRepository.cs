@@ -1,5 +1,6 @@
 using CarSharing.Application.Common.Interfaces;
 using CarSharing.Domain.Entities;
+using CarSharing.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace CarSharing.Infrastructure.Persistence.Repositories;
@@ -32,6 +33,17 @@ public class VehicleRepository : IVehicleRepository
     {
         return await _dbContext.Vehicles
             .FirstOrDefaultAsync(vehicle => vehicle.PlateNumber == plateNumber, cancellationToken);
+    }
+
+    public async Task<int> CountAvailableByZoneAsync(string zone, CancellationToken cancellationToken = default)
+    {
+        var normalizedZone = zone.Trim().ToUpperInvariant();
+
+        return await _dbContext.Vehicles
+            .CountAsync(
+                vehicle => vehicle.Status == VehicleStatus.Available
+                    && vehicle.Zone.ToUpper() == normalizedZone,
+                cancellationToken);
     }
 
     public async Task<bool> ExistsByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default)
