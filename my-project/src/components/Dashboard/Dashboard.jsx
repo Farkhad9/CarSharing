@@ -16,12 +16,10 @@ import {
   FiMapPin,
   FiMessageSquare,
   FiNavigation,
-  FiPlus,
   FiSend,
   FiShield,
   FiSmartphone,
   FiStar,
-  FiTrash2,
   FiUploadCloud,
   FiUserCheck,
   FiX,
@@ -38,10 +36,10 @@ import { trips } from "../../data/trips";
 import { staffApi } from "../../api/staffApi";
 import {
   TRIP_COMPLETION_UPDATED_EVENT,
-  TRIP_COMPLETION_STATUSES,
   tripCompletionApi,
 } from "../../api/tripCompletionApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
+import { paymentApi } from "../../api/paymentApi";
 import {
   RESERVATION_SECONDS,
   RESERVATIONS_UPDATED_EVENT,
@@ -49,7 +47,6 @@ import {
   isReservationExpired,
 } from "../../utils/reservations";
 
-const PROFILE_BALANCE_HOLD_AZN = 20;
 const DEFAULT_USER_LOCATION = [40.3772, 49.8475];
 const TRIP_PHOTO_ANGLES = [
   { id: "front", label: "Front", hint: "Full front side of the car" },
@@ -340,6 +337,9 @@ const Dashboard = ({ onLogout }) => {
   const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
   const [isSubmittingCompletion, setIsSubmittingCompletion] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [paymentBalance, setPaymentBalance] = useState(null);
+  const [paymentTransactions, setPaymentTransactions] = useState([]);
+  const [isLoadingPayments, setIsLoadingPayments] = useState(false);
   const [isPayingTrip, setIsPayingTrip] = useState(false);
   const [finishPromoCode, setFinishPromoCode] = useState("");
   const [finishPromoMessage, setFinishPromoMessage] = useState("");
@@ -402,9 +402,8 @@ const Dashboard = ({ onLogout }) => {
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
   );
-  const profileBalance = Number(user.balance || 0);
-  const profilePendingHold = Number(user.pendingHold || 0);
-  const profileDebt = Number(user.debtAmount || 0);
+  const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
+  const profilePendingHold = 0;
   const availableProfileBalance = Math.max(0, profileBalance - profilePendingHold);
 
   const recentTrips = useMemo(
@@ -437,6 +436,36 @@ const Dashboard = ({ onLogout }) => {
     setSupportTickets(nextTickets);
     localStorage.setItem("electroStreetSupportTickets", JSON.stringify(nextTickets));
   };
+
+  const loadPayments = async () => {
+    if (!localStorage.getItem("electroStreetAccessToken")) return;
+    setIsLoadingPayments(true);
+    try {
+      const [balance, transactions] = await Promise.all([
+        paymentApi.getBalance(),
+        paymentApi.getTransactions(),
+      ]);
+      setPaymentBalance(balance);
+      setPaymentTransactions(transactions);
+      persistUser({ ...user, balance: balance.balance, pendingHold: 0 });
+    } catch (error) {
+      setPaymentError(error.message || "Payment information could not be loaded.");
+    } finally {
+      setIsLoadingPayments(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadPayments();
+      const stripeResult = new URLSearchParams(window.location.search).get("stripe");
+      if (stripeResult === "success") setTripNotice("Stripe accepted the payment. Balance will update after webhook confirmation.");
+      if (stripeResult === "cancelled") setPaymentError("Stripe checkout was cancelled. Your balance was not changed.");
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // Payment state is loaded once when the dashboard opens or returns from Stripe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     localStorage.removeItem("reservedVehicle");
@@ -827,37 +856,13 @@ const Dashboard = ({ onLogout }) => {
   };
 
   const handlePayTrip = async (targetVehicle = paymentVehicle) => {
-    if (!targetVehicle?.completionRequestId) return;
-
-    const request = tripCompletionApi.getRequest(targetVehicle.completionRequestId);
-    if (!request || request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      setPaymentError("Staff approval has not arrived yet.");
-      return;
-    }
-
-    const fullAmount = toMoney(request.finalRideCost || request.rideCost || targetVehicle.finalRideCost || 0);
-    const existingDebt = toMoney(targetVehicle.debtAmount || request.debtAmount || 0);
-    const amount = existingDebt > 0 ? existingDebt : fullAmount;
-    const paymentMethod = targetVehicle.paymentMethod || "card";
-    const holdAmount = paymentMethod === "profile_balance" && existingDebt <= 0
-      ? toMoney(targetVehicle.holdAmount || request.holdAmount || 0)
-      : 0;
-    const capturableHold = Math.min(holdAmount, amount);
-    const availableAfterHold = Math.max(0, profileBalance - profilePendingHold);
-    const remainingAfterHold = Math.max(0, amount - capturableHold);
-    const extraBalancePayment = paymentMethod === "profile_balance"
-      ? Math.min(availableAfterHold, remainingAfterHold)
-      : remainingAfterHold;
-    const totalPaidNow = toMoney(capturableHold + extraBalancePayment);
-    const debtAmount = paymentMethod === "profile_balance"
-      ? toMoney(amount - totalPaidNow)
-      : 0;
+    const tripId = targetVehicle?.tripId || targetVehicle?.id;
+    if (!tripId) return;
+    const amount = toMoney(paymentRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
 
     const confirmed = await confirm({
       title: "Confirm payment",
-      message: `Confirm payment of ${amount.toFixed(2)} AZN using ${
-        paymentMethod === "profile_balance" ? "your profile balance" : paymentMethod
-      }?`,
+      message: `Confirm payment of ${amount.toFixed(2)} AZN from your ElectroStreet balance?`,
       confirmLabel: "Pay now",
       tone: "success",
     });
@@ -870,49 +875,17 @@ const Dashboard = ({ onLogout }) => {
     setPaymentError("");
 
     try {
-      if (paymentMethod === "profile_balance" && debtAmount > 0) {
-        const nextPendingHold = Math.max(0, toMoney(profilePendingHold - holdAmount));
-        const nextUser = {
-          ...user,
-          balance: Math.max(0, toMoney(profileBalance - totalPaidNow)),
-          pendingHold: nextPendingHold,
-          debtAmount,
-        };
-
-        tripCompletionApi.recordPartialPayment(request.id, paymentMethod, {
-          amountPaid: totalPaidNow,
-          debtAmount,
-          capturedHoldAmount: capturableHold,
-          extraBalancePayment,
-        });
-        persistUser(nextUser);
-        setReservations(getStoredReservations());
-        setPaymentError(
-          `Paid ${totalPaidNow.toFixed(2)} AZN. Outstanding debt: ${debtAmount.toFixed(2)} AZN. Top up your balance to complete the ride.`
-        );
-        setTripNotice(`Trip payment is partially covered. Outstanding debt: ${debtAmount.toFixed(2)} AZN.`);
-        return;
-      }
-
-      const paidRequest = tripCompletionApi.payRequest(request.id, paymentMethod);
-
-      if (paymentMethod === "profile_balance") {
-        persistUser({
-          ...user,
-          balance: Math.max(0, toMoney(profileBalance - totalPaidNow)),
-          pendingHold: Math.max(0, toMoney(profilePendingHold - holdAmount)),
-          debtAmount: 0,
-        });
-      }
-
-      setReservations(getStoredReservations());
+      const result = await paymentApi.payTrip(tripId);
+      setPaymentBalance((current) => ({ ...(current || {}), balance: result.remainingBalance, pendingHold: 0, currency: "AZN" }));
+      setPaymentTransactions((current) => [result.transaction, ...current]);
       setTripNotice(`Payment of ${amount.toFixed(2)} AZN was successful. The ride is completed.`);
-      setReviewTrip(paidRequest);
+      setReviewTrip({ vehicleName: `${targetVehicle.brand} ${targetVehicle.model}` });
       setReviewRating(5);
       setReviewComment("");
       setReviewError("");
     } catch (error) {
       setPaymentError(error.message || "The payment could not be completed.");
+      await loadPayments();
     } finally {
       setIsPayingTrip(false);
     }
@@ -962,15 +935,16 @@ const Dashboard = ({ onLogout }) => {
   const handleTopUp = (event) => {
     event.preventDefault();
     const amount = Number(topUpAmount);
-
-    if (!Number.isFinite(amount) || amount <= 0) return;
-
-    persistUser({
-      ...user,
-      balance: Number(((user.balance || 0) + amount).toFixed(2)),
-    });
-    setTopUpAmount("50");
-    setIsTopUpModalOpen(false);
+    if (!Number.isFinite(amount) || amount < 5 || amount > 1000) {
+      setPaymentError("Top-up amount must be between 5 and 1000 AZN.");
+      return;
+    }
+    setIsPayingTrip(true);
+    setPaymentError("");
+    paymentApi.createTopUp(amount)
+      .then((checkout) => { window.location.href = checkout.checkoutUrl; })
+      .catch((error) => setPaymentError(error.message || "Stripe checkout could not be opened."))
+      .finally(() => setIsPayingTrip(false));
   };
 
   const handleAddCard = (event) => {
@@ -990,10 +964,6 @@ const Dashboard = ({ onLogout }) => {
     ]);
     setCardForm({ number: "", holder: user.name || "Farhad" });
     setIsCardModalOpen(false);
-  };
-
-  const handleRemoveCard = (cardId) => {
-    persistCards(paymentCards.filter((card) => card.id !== cardId));
   };
 
   const handleDocumentUpload = (type, event) => {
@@ -1449,24 +1419,10 @@ const Dashboard = ({ onLogout }) => {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-2 sm:grid-cols-3">
-          {[
-            ["Pending hold", formatMoney(profilePendingHold)],
-            ["Outstanding debt", formatMoney(profileDebt)],
-            ["Ride hold", formatMoney(PROFILE_BALANCE_HOLD_AZN)],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-2xl bg-white/10 px-4 py-3">
-              <p className="text-[10px] font-black uppercase tracking-wide text-white/40">{label}</p>
-              <p className="mt-1 text-sm font-black">{value}</p>
-            </div>
-          ))}
+        <div className="mt-6 rounded-2xl bg-white/10 px-4 py-3">
+          <p className="text-[10px] font-black uppercase tracking-wide text-white/40">Secure top-up</p>
+          <p className="mt-1 text-sm font-black">Payments are processed by Stripe. Card details never reach ElectroStreet.</p>
         </div>
-
-        {profileDebt > 0 && (
-          <div className="mt-4 rounded-2xl border border-red-300/40 bg-red-500/15 px-4 py-3 text-sm font-bold text-red-100">
-            Pay the outstanding debt before creating another reservation.
-          </div>
-        )}
 
         <div className="mt-8 grid grid-cols-3 gap-2">
           {["25", "50", "100"].map((amount) => (
@@ -1496,57 +1452,44 @@ const Dashboard = ({ onLogout }) => {
       <section className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-red-500">Payment vault</p>
-            <h2 className="mt-2 text-3xl font-black tracking-tight text-zinc-950">Cards and payment methods</h2>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-red-500">Payment history</p>
+            <h2 className="mt-2 text-3xl font-black tracking-tight text-zinc-950">Balance transactions</h2>
           </div>
           <button
             type="button"
-            onClick={() => setIsCardModalOpen(true)}
+            onClick={loadPayments}
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-5 py-3 text-sm font-black text-white transition hover:bg-red-500"
           >
-            <FiPlus /> Add card
+            <FiActivity /> {isLoadingPayments ? "Loading..." : "Refresh"}
           </button>
         </div>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          {paymentCards.map((card, index) => (
-            <motion.div
-              key={card.id}
-              layout
-              className={`relative min-h-[210px] overflow-hidden rounded-3xl p-6 text-white shadow-xl ${
-                index % 2 === 0 ? "bg-[linear-gradient(135deg,#18181b,#ef4444)]" : "bg-[linear-gradient(135deg,#111827,#2563eb)]"
-              }`}
-            >
-              <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
-              <div className="relative flex items-start justify-between">
-                <FiCreditCard className="text-3xl text-white/80" />
-                <button
-                  type="button"
-                  onClick={() => handleRemoveCard(card.id)}
-                  className="rounded-full bg-white/10 p-2 text-white/70 transition hover:bg-white hover:text-red-600"
-                  aria-label="Remove payment card"
-                >
-                  <FiTrash2 />
-                </button>
+        <div className="mt-6 grid gap-3">
+          {paymentTransactions.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm font-bold text-zinc-500">
+              No transactions yet. Your Stripe top-ups and trip payments will appear here.
+            </div>
+          )}
+          {paymentTransactions.map((transaction) => (
+            <div key={transaction.id} className="flex flex-col gap-3 rounded-2xl border border-zinc-100 bg-zinc-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-black text-zinc-950">{transaction.type === 1 ? "Stripe top-up" : "Trip payment"}</p>
+                <p className="mt-1 text-xs font-bold text-zinc-500">
+                  {transaction.cardBrand && transaction.cardLast4 ? `${transaction.cardBrand} •••• ${transaction.cardLast4}` : transaction.paymentMethod}
+                  {" · "}{new Date(transaction.createdAt).toLocaleString()}
+                </p>
+                {transaction.failureReason && <p className="mt-1 text-xs font-bold text-red-600">{transaction.failureReason}</p>}
               </div>
-              <div className="relative mt-16">
-                <p className="font-mono text-2xl font-black tracking-widest">.... {card.last4}</p>
-                <div className="mt-5 flex items-center justify-between text-xs font-black uppercase tracking-widest text-white/65">
-                  <span>{card.holder}</span>
-                  <span>{card.brand}</span>
-                </div>
+              <div className="sm:text-right">
+                <p className={`text-lg font-black ${transaction.type === 1 ? "text-emerald-600" : "text-zinc-950"}`}>
+                  {transaction.type === 1 ? "+" : "−"}{formatMoney(transaction.amount)}
+                </p>
+                <p className="text-[10px] font-black uppercase tracking-wide text-zinc-400">
+                  {transaction.status === 2 ? "Completed" : transaction.status === 3 ? "Failed" : "Pending"}
+                </p>
               </div>
-            </motion.div>
+            </div>
           ))}
-
-          <button
-            type="button"
-            onClick={() => setIsCardModalOpen(true)}
-            className="flex min-h-[210px] flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 text-zinc-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"
-          >
-            <FiPlus className="mb-3 text-3xl" />
-            <span className="text-sm font-black">New card</span>
-          </button>
         </div>
       </section>
     </motion.div>
@@ -1913,15 +1856,16 @@ const Dashboard = ({ onLogout }) => {
             <input
               className="mt-3 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4 text-sm font-bold outline-none focus:border-red-500 focus:bg-white"
               type="number"
-              min="1"
-              step="1"
+              min="5"
+              max="1000"
+              step="0.01"
               value={topUpAmount}
               onChange={(event) => setTopUpAmount(event.target.value)}
               placeholder="Amount"
             />
 
-            <button type="submit" className="mt-5 w-full rounded-2xl bg-zinc-950 px-5 py-4 text-sm font-black text-white transition hover:bg-red-500">
-              Confirm
+            <button type="submit" disabled={isPayingTrip} className="mt-5 w-full rounded-2xl bg-zinc-950 px-5 py-4 text-sm font-black text-white transition hover:bg-red-500 disabled:opacity-50">
+              {isPayingTrip ? "Opening Stripe..." : "Continue to Stripe"}
             </button>
           </motion.form>
         </div>

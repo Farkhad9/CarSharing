@@ -11,6 +11,9 @@ using CarSharing.Application.Trips.Validators;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Application.Vehicles.Services;
 using CarSharing.Application.Vehicles.Validators;
+using CarSharing.Application.Payments.Dtos;
+using CarSharing.Application.Payments.Services;
+using CarSharing.Application.Payments.Validators;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,6 +27,7 @@ public static class DependencyInjection
         services.AddScoped<IReservationService, ReservationService>();
         services.AddScoped<ITripService, TripService>();
         services.AddScoped<IVehicleService, VehicleService>();
+        services.AddScoped<IPaymentService, PaymentService>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
 
@@ -36,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<IValidator<CreateVehicleRequest>, CreateVehicleRequestValidator>();
         services.AddScoped<IValidator<UpdateVehicleRequest>, UpdateVehicleRequestValidator>();
         services.AddScoped<IValidator<UpdateVehicleStatusRequest>, UpdateVehicleStatusRequestValidator>();
+        services.AddScoped<IValidator<TopUpBalanceRequest>, TopUpBalanceRequestValidator>();
 
         return services;
     }

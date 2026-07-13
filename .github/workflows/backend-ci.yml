@@ -1,4 +1,4 @@
-name: Backend CI
+name: Backend CI/CD
 
 on:
   workflow_dispatch:
@@ -63,3 +63,22 @@ jobs:
           --configuration Release
           --no-build
           --output backend/migrations-check.sql
+
+      - name: Publish backend artifact
+        run: >
+          dotnet publish backend/CarSharing.WebApi/CarSharing.WebApi.csproj
+          --configuration Release
+          --no-build
+          --output backend/publish
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carsharing-backend
+          path: backend/publish
+
+      - name: Upload migrations script
+        uses: actions/upload-artifact@v4
+        with:
+          name: carsharing-migrations
+          path: backend/migrations-check.sql

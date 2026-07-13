@@ -121,6 +121,7 @@ const App = () => {
 
   const handleLogout = () => {
     localStorage.removeItem("electroStreetUser");
+    localStorage.removeItem("electroStreetAccessToken");
     setUser(null);
     window.location.href = "/";
   };
