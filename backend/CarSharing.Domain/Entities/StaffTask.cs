@@ -4,13 +4,47 @@ namespace CarSharing.Domain.Entities;
 
 public class StaffTask : BaseEntity
 {
-    public string Title { get; set; } = null!;
-    public string Description { get; set; } = null!;
-    public Guid AssigneeId { get; set; }
-    public Guid? VehicleId { get; set; }
-    public StaffTaskPriority Priority { get; set; } = StaffTaskPriority.Medium;
-    public DateTime? DueAt { get; set; }
-    public StaffTaskStatus Status { get; set; } = StaffTaskStatus.Waiting;
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
+    private StaffTask()
+    {
+    }
+
+    public string Title { get; private set; } = null!;
+    public string Description { get; private set; } = null!;
+    public Guid AssigneeId { get; private set; }
+    public Guid? VehicleId { get; private set; }
+    public StaffTaskPriority Priority { get; private set; } = StaffTaskPriority.Medium;
+    public DateTime? DueAt { get; private set; }
+    public StaffTaskStatus Status { get; private set; } = StaffTaskStatus.Waiting;
+    public DateTime CreatedAt { get; private set; }
+    public DateTime UpdatedAt { get; private set; }
+
+    public static StaffTask Create(
+        string title,
+        string description,
+        Guid assigneeId,
+        Guid? vehicleId,
+        StaffTaskPriority priority,
+        DateTime? dueAt,
+        DateTime createdAt)
+    {
+        return new StaffTask
+        {
+            Id = Guid.NewGuid(),
+            Title = title.Trim(),
+            Description = description.Trim(),
+            AssigneeId = assigneeId,
+            VehicleId = vehicleId,
+            Priority = priority,
+            DueAt = dueAt,
+            Status = StaffTaskStatus.Waiting,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt
+        };
+    }
+
+    public void ChangeStatus(StaffTaskStatus status, DateTime updatedAt)
+    {
+        Status = status;
+        UpdatedAt = updatedAt;
+    }
 }
