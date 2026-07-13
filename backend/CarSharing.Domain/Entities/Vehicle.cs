@@ -117,4 +117,27 @@ public class Vehicle : BaseEntity
     {
         Status = status;
     }
+
+    public void StartCharging(Guid chargingStationId)
+    {
+        ChargingStationId = chargingStationId;
+        Status = VehicleStatus.Charging;
+    }
+
+    public void UpdateBattery(int batteryPercent)
+    {
+        if (batteryPercent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batteryPercent), "Battery percent must be between 0 and 100.");
+        }
+
+        BatteryPercent = batteryPercent;
+    }
+
+    public void MarkAvailableAfterCharging(int finalBatteryPercent)
+    {
+        UpdateBattery(finalBatteryPercent);
+        ChargingStationId = null;
+        Status = VehicleStatus.Available;
+    }
 }
