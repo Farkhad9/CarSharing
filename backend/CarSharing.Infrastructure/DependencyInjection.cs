@@ -35,6 +35,7 @@ public static class DependencyInjection
         services.AddScoped<IChargingSessionRepository, ChargingSessionRepository>();
         services.AddScoped<IStaffTaskRepository, StaffTaskRepository>();
         services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        services.AddScoped<IAdminStatisticsRepository, AdminStatisticsRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();

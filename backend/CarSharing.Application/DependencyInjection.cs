@@ -18,6 +18,7 @@ using CarSharing.Application.Pricing.Services;
 using CarSharing.Application.Charging.Services;
 using CarSharing.Application.StaffTasks.Services;
 using CarSharing.Application.Invoices.Services;
+using CarSharing.Application.Admin.Services;
 using CarSharing.Application.Messaging;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,6 +38,7 @@ public static class DependencyInjection
         services.AddScoped<IChargingService, ChargingService>();
         services.AddScoped<IStaffTaskService, StaffTaskService>();
         services.AddScoped<IInvoiceService, InvoiceService>();
+        services.AddScoped<IAdminStatisticsService, AdminStatisticsService>();
         services.AddScoped<IEventPublisher, NoOpEventPublisher>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
