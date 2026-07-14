@@ -23,7 +23,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const [phone, setPhone] = useState("+994501234567");
   const [password, setPassword] = useState("Password123!");
   const [confirmPassword, setConfirmPassword] = useState("Password123!");
-  const [licenseNumber, setLicenseNumber] = useState("AZE-1234567");
+  const [licenseNumber, setLicenseNumber] = useState("AZE1234567");
   const [email, setEmail] = useState("farhad@electrostreet.az");
   const verificationLink = "";
   const [authError, setAuthError] = useState("");
@@ -52,7 +52,14 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
     setIsSubmitting(true);
     try {
       if (isRegister) {
-        await authApi.register({ firstName, lastName, email, phone, password, driverLicenseNumber: licenseNumber });
+        await authApi.register({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          password,
+          driverLicenseNumber: licenseNumber.replace(/[^a-zA-Z0-9]/g, ""),
+        });
       }
       const user = await authApi.login(email, password);
       if (onAuthSuccess) onAuthSuccess(user);
@@ -602,6 +609,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 >
                   {isSubmitting ? "Creating account..." : "Sign Up"}
                 </button>
+                {authError && <p className="mt-4 text-center text-sm font-bold text-red-600">{authError}</p>}
 
                 <button
                   type="button"
