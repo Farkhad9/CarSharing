@@ -3,6 +3,11 @@ using CarSharing.Infrastructure.Persistence;
 using CarSharing.Infrastructure.Persistence.Repositories;
 using CarSharing.Infrastructure.Security;
 using CarSharing.Infrastructure.Payments;
+using CarSharing.Infrastructure.Invoices;
+using CarSharing.Infrastructure.Mail;
+using CarSharing.Infrastructure.Messaging;
+using CarSharing.Application.Messaging;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,12 +34,40 @@ public static class DependencyInjection
         services.AddScoped<IChargingStationRepository, ChargingStationRepository>();
         services.AddScoped<IChargingSessionRepository, ChargingSessionRepository>();
         services.AddScoped<IStaffTaskRepository, StaffTaskRepository>();
+        services.AddScoped<IInvoiceRepository, InvoiceRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
+        services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();
         services.Configure<JwtOptions>(configuration.GetSection("Jwt"));
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.AddScoped<IStripePaymentGateway, StripePaymentGateway>();
+        services.Configure<SmtpOptions>(configuration.GetSection(SmtpOptions.SectionName));
+        services.AddScoped<IReceiptEmailSender, MailtrapReceiptEmailSender>();
+
+        var rabbitMqOptions = configuration.GetSection(RabbitMqOptions.SectionName).Get<RabbitMqOptions>() ?? new RabbitMqOptions();
+        services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
+        if (rabbitMqOptions.Enabled)
+        {
+            services.AddMassTransit(x =>
+            {
+                x.AddConsumer<InvoiceDeliveryRequestedConsumer>();
+                x.UsingRabbitMq((context, cfg) =>
+                {
+                    cfg.Host(rabbitMqOptions.Host, rabbitMqOptions.Port, rabbitMqOptions.VirtualHost, host =>
+                    {
+                        host.Username(rabbitMqOptions.UserName);
+                        host.Password(rabbitMqOptions.Password);
+                    });
+
+                    cfg.ReceiveEndpoint(rabbitMqOptions.QueueName, endpoint =>
+                    {
+                        endpoint.ConfigureConsumer<InvoiceDeliveryRequestedConsumer>(context);
+                    });
+                });
+            });
+            services.AddScoped<IEventPublisher, MassTransitEventPublisher>();
+        }
 
         return services;
     }

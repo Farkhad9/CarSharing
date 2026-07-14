@@ -35,6 +35,7 @@ import { users } from "../../data/users";
 import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
 import { staffApi } from "../../api/staffApi";
+import { invoiceApi } from "../../api/invoiceApi";
 import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
 
@@ -919,6 +920,9 @@ const AdminControlRoom = () => {
   const [penaltyReasonId, setPenaltyReasonId] = useState(penaltyReasons[0].id);
   const [penaltyPeriodStartMs] = useState(() => Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [penalties, setPenalties] = useState([]);
+  const [billingInvoices, setBillingInvoices] = useState([]);
+  const [billingInvoiceError, setBillingInvoiceError] = useState("");
+  const [isLoadingBillingInvoices, setIsLoadingBillingInvoices] = useState(false);
   const [staff, setStaff] = useState(staffSeed);
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
@@ -994,6 +998,13 @@ const AdminControlRoom = () => {
   }, [managedServicePoints]);
 
   useEffect(() => staffApi.subscribe(setStaffTasks), []);
+
+  useEffect(() => {
+    if (activeSection === "billing") {
+      loadBillingInvoices();
+    }
+    // Receipts are loaded when the billing panel opens.
+  }, [activeSection]);
 
   const handleAdminLogout = () => {
     localStorage.removeItem("electroStreetAdminSession");
@@ -1413,6 +1424,31 @@ const AdminControlRoom = () => {
       ...items,
     ]);
     showAdminNotice(`Списано ${reason.amount} AZN: ${rider.fullName}`);
+  };
+
+  async function loadBillingInvoices() {
+    setIsLoadingBillingInvoices(true);
+    setBillingInvoiceError("");
+
+    try {
+      const invoices = await invoiceApi.getAdminInvoices();
+      setBillingInvoices(Array.isArray(invoices) ? invoices : []);
+    } catch (error) {
+      setBillingInvoices([]);
+      setBillingInvoiceError(error.status === 404 ? "" : error.message || "Receipts could not be loaded.");
+    } finally {
+      setIsLoadingBillingInvoices(false);
+    }
+  }
+
+  const downloadAdminReceipt = async (invoice) => {
+    if (!invoice?.id) return;
+
+    try {
+      await invoiceApi.downloadAdminReceipt(invoice.id, invoice.invoiceNumber || "receipt");
+    } catch (error) {
+      setBillingInvoiceError(error.message || "Receipt could not be downloaded.");
+    }
   };
 
   const createServiceTask = (vehicleId) => {
@@ -2265,6 +2301,82 @@ const AdminControlRoom = () => {
               <p className="text-[10px] font-black uppercase text-amber-200">Выбранная причина</p>
               <p className="mt-2 text-lg font-black text-white">{reason.amount} AZN</p>
               <p className="mt-1 text-xs font-semibold text-slate-300">{selectedReasonCount} списаний</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-black text-white">Receipts</p>
+                <p className="mt-1 text-xs font-semibold text-slate-400">
+                  PDF receipts, delivery status, and admin pricing checks will appear here.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadBillingInvoices}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500"
+              >
+                <FiActivity />
+                {isLoadingBillingInvoices ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {billingInvoiceError && (
+              <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+                {billingInvoiceError}
+              </p>
+            )}
+
+            <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
+              {billingInvoices.length === 0 ? (
+                <div className="bg-[#111a2b] px-4 py-5 text-sm font-semibold text-slate-400">
+                  No receipts yet. Completed top-ups and trip payments will generate PDF receipts after the backend invoice service is connected.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-sm">
+                    <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Receipt</th>
+                        <th className="px-4 py-3">Customer</th>
+                        <th className="px-4 py-3">Type</th>
+                        <th className="px-4 py-3">Amount</th>
+                        <th className="px-4 py-3">Delivery</th>
+                        <th className="px-4 py-3">PDF</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10">
+                      {billingInvoices.map((invoice) => (
+                        <tr key={invoice.id} className="bg-white/[0.02]">
+                          <td className="px-4 py-3">
+                            <p className="font-black text-white">{invoice.invoiceNumber || invoice.id}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                              {invoice.createdAt ? new Date(invoice.createdAt).toLocaleString() : "Pending date"}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{invoice.userEmail || invoice.userName || invoice.userId}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{invoice.type || "Payment"}</td>
+                          <td className="px-4 py-3 font-black text-emerald-200">
+                            {Number(invoice.amount || 0).toFixed(2)} {invoice.currency || "AZN"}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{invoice.deliveryStatus || invoice.status || "Ready"}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => downloadAdminReceipt(invoice)}
+                              className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-black text-white transition hover:border-red-300 hover:text-red-200"
+                            >
+                              <FiFileText />
+                              Receipt
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
 

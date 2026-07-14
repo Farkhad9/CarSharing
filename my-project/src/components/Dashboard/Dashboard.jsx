@@ -40,6 +40,7 @@ import {
 } from "../../api/tripCompletionApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
 import { paymentApi } from "../../api/paymentApi";
+import { invoiceApi } from "../../api/invoiceApi";
 import {
   RESERVATION_SECONDS,
   RESERVATIONS_UPDATED_EVENT,
@@ -339,6 +340,7 @@ const Dashboard = ({ onLogout }) => {
   const [paymentError, setPaymentError] = useState("");
   const [paymentBalance, setPaymentBalance] = useState(null);
   const [paymentTransactions, setPaymentTransactions] = useState([]);
+  const [paymentInvoices, setPaymentInvoices] = useState([]);
   const [isLoadingPayments, setIsLoadingPayments] = useState(false);
   const [isPayingTrip, setIsPayingTrip] = useState(false);
   const [finishPromoCode, setFinishPromoCode] = useState("");
@@ -405,6 +407,13 @@ const Dashboard = ({ onLogout }) => {
   const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
   const profilePendingHold = 0;
   const availableProfileBalance = Math.max(0, profileBalance - profilePendingHold);
+  const receiptByTransactionId = useMemo(() => {
+    return new Map(
+      paymentInvoices
+        .filter((invoice) => invoice?.paymentTransactionId)
+        .map((invoice) => [invoice.paymentTransactionId, invoice])
+    );
+  }, [paymentInvoices]);
 
   const recentTrips = useMemo(
     () =>
@@ -448,10 +457,29 @@ const Dashboard = ({ onLogout }) => {
       setPaymentBalance(balance);
       setPaymentTransactions(transactions);
       persistUser({ ...user, balance: balance.balance, pendingHold: 0 });
+
+      try {
+        const invoices = await invoiceApi.getMyInvoices();
+        setPaymentInvoices(Array.isArray(invoices) ? invoices : []);
+      } catch (error) {
+        if (error.status !== 404) {
+          setPaymentInvoices([]);
+        }
+      }
     } catch (error) {
       setPaymentError(error.message || "Payment information could not be loaded.");
     } finally {
       setIsLoadingPayments(false);
+    }
+  };
+
+  const downloadReceipt = async (invoice) => {
+    if (!invoice?.id) return;
+
+    try {
+      await invoiceApi.downloadMyReceipt(invoice.id, invoice.invoiceNumber || "receipt");
+    } catch (error) {
+      setPaymentError(error.message || "Receipt could not be downloaded.");
     }
   };
 
@@ -1470,7 +1498,12 @@ const Dashboard = ({ onLogout }) => {
               No transactions yet. Your Stripe top-ups and trip payments will appear here.
             </div>
           )}
-          {paymentTransactions.map((transaction) => (
+          {paymentTransactions.map((transaction) => {
+            const receipt = receiptByTransactionId.get(transaction.id);
+            const isCompleted = transaction.status === 2 || transaction.status === "Completed";
+            const canDownloadReceipt = isCompleted && receipt?.id && (!receipt.status || receipt.status === "Ready" || receipt.status === 2);
+
+            return (
             <div key={transaction.id} className="flex flex-col gap-3 rounded-2xl border border-zinc-100 bg-zinc-50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="font-black text-zinc-950">{transaction.type === 1 ? "Stripe top-up" : "Trip payment"}</p>
@@ -1480,16 +1513,28 @@ const Dashboard = ({ onLogout }) => {
                 </p>
                 {transaction.failureReason && <p className="mt-1 text-xs font-bold text-red-600">{transaction.failureReason}</p>}
               </div>
-              <div className="sm:text-right">
+              <div className="flex flex-col gap-2 sm:items-end sm:text-right">
                 <p className={`text-lg font-black ${transaction.type === 1 ? "text-emerald-600" : "text-zinc-950"}`}>
                   {transaction.type === 1 ? "+" : "−"}{formatMoney(transaction.amount)}
                 </p>
                 <p className="text-[10px] font-black uppercase tracking-wide text-zinc-400">
                   {transaction.status === 2 ? "Completed" : transaction.status === 3 ? "Failed" : "Pending"}
                 </p>
+                {isCompleted && (
+                  <button
+                    type="button"
+                    onClick={() => downloadReceipt(receipt)}
+                    disabled={!canDownloadReceipt}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-black text-zinc-700 transition hover:border-red-200 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <FiFileText />
+                    Receipt
+                  </button>
+                )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </motion.div>

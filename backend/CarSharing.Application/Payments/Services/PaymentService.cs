@@ -1,6 +1,7 @@
 using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Payments.Dtos;
+using CarSharing.Application.Invoices.Services;
 using CarSharing.Domain.Entities;
 using CarSharing.Domain.Enums;
 using FluentValidation;
@@ -25,11 +26,13 @@ public sealed class PaymentService : IPaymentService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IValidator<TopUpBalanceRequest> _topUpValidator;
     private readonly IStripePaymentGateway _stripeGateway;
+    private readonly IInvoiceService _invoiceService;
 
     public PaymentService(IUserRepository userRepository, ITripRepository tripRepository,
         IVehicleRepository vehicleRepository, IPaymentTransactionRepository paymentRepository,
         ICurrentUserService currentUser, IUnitOfWork unitOfWork,
-        IValidator<TopUpBalanceRequest> topUpValidator, IStripePaymentGateway stripeGateway)
+        IValidator<TopUpBalanceRequest> topUpValidator, IStripePaymentGateway stripeGateway,
+        IInvoiceService invoiceService)
     {
         _userRepository = userRepository;
         _tripRepository = tripRepository;
@@ -39,6 +42,7 @@ public sealed class PaymentService : IPaymentService
         _unitOfWork = unitOfWork;
         _topUpValidator = topUpValidator;
         _stripeGateway = stripeGateway;
+        _invoiceService = invoiceService;
     }
 
     public async Task<Result<BalanceDto>> GetBalanceAsync(CancellationToken cancellationToken = default)
@@ -102,6 +106,7 @@ public sealed class PaymentService : IPaymentService
         transaction.Complete(DateTime.UtcNow);
         user.CreditBalance(transaction.Amount);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+        await _invoiceService.CreateForCompletedPaymentAsync(transaction, user, null, cancellationToken);
         return Result<bool>.Success(true);
     }
 
@@ -138,6 +143,7 @@ public sealed class PaymentService : IPaymentService
         trip.CompletePayment();
         vehicle.ChangeStatus(vehicle.BatteryPercent < 40 ? VehicleStatus.Charging : VehicleStatus.Available);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+        await _invoiceService.CreateForCompletedPaymentAsync(transaction, userResult.User, trip, cancellationToken);
 
         return Result<TripPaymentDto>.Success(new TripPaymentDto(trip.Id, Map(transaction), userResult.User.Balance));
     }

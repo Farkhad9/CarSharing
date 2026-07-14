@@ -1,4 +1,7 @@
 using CarSharing.Application.Common.Interfaces;
+using CarSharing.Application.Common.Models;
+using CarSharing.Application.Invoices.Dtos;
+using CarSharing.Application.Invoices.Services;
 using CarSharing.Application.Payments.Dtos;
 using CarSharing.Application.Payments.Services;
 using CarSharing.Application.Payments.Validators;
@@ -21,6 +24,7 @@ public sealed class PaymentEngineTests
         Assert.Equal(VehicleStatus.Available, fixture.Vehicle.Status);
         Assert.Equal(90m, fixture.User.Balance);
         Assert.Equal(PaymentTransactionStatus.Completed, fixture.Payments.Items.Single().Status);
+        Assert.Single(fixture.Invoices.Items);
     }
 
     [Fact]
@@ -65,6 +69,7 @@ public sealed class PaymentEngineTests
         Assert.Equal(PaymentTransactionStatus.Completed, transaction.Status);
         Assert.Equal("visa", transaction.CardBrand);
         Assert.Equal("4242", transaction.CardLast4);
+        Assert.Single(fixture.Invoices.Items);
     }
 
     private static Fixture CreateFixture(decimal balance, int battery)
@@ -85,13 +90,14 @@ public sealed class PaymentEngineTests
         var vehicles = new VehicleRepo(vehicle);
         var payments = new PaymentRepo();
         var stripe = new StripeGateway();
+        var invoices = new InvoiceServiceStub();
         var service = new PaymentService(users, trips, vehicles, payments,
-            new CurrentUser(user.Id), new UnitOfWork(), new TopUpBalanceRequestValidator(), stripe);
-        return new Fixture(service, user, trip, vehicle, payments, stripe);
+            new CurrentUser(user.Id), new UnitOfWork(), new TopUpBalanceRequestValidator(), stripe, invoices);
+        return new Fixture(service, user, trip, vehicle, payments, stripe, invoices);
     }
 
     private sealed record Fixture(PaymentService Service, User User, Trip Trip, Vehicle Vehicle,
-        PaymentRepo Payments, StripeGateway Stripe);
+        PaymentRepo Payments, StripeGateway Stripe, InvoiceServiceStub Invoices);
 
     private sealed class UserRepo(User user) : IUserRepository
     {
@@ -150,5 +156,48 @@ public sealed class PaymentEngineTests
             => Task.FromResult(new StripeCheckoutSession("cs_test_123", "https://checkout.stripe.test/session"));
         public Task<StripePaymentEvent?> ParseCompletedCheckoutAsync(string payload, string signature, CancellationToken cancellationToken = default)
             => Task.FromResult(Event);
+    }
+
+    private sealed class InvoiceServiceStub : IInvoiceService
+    {
+        public List<Guid> Items { get; } = [];
+
+        public Task<Result<InvoiceDto>> CreateForCompletedPaymentAsync(
+            PaymentTransaction transaction,
+            User user,
+            Trip? trip,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Items.Contains(transaction.Id))
+            {
+                Items.Add(transaction.Id);
+            }
+
+            return Task.FromResult(Result<InvoiceDto>.Success(new InvoiceDto(
+                Guid.NewGuid(),
+                "INV-TEST",
+                user.Id,
+                user.Email,
+                transaction.Id,
+                transaction.TripId,
+                transaction.Type == PaymentTransactionType.TopUp ? InvoiceType.BalanceTopUp : InvoiceType.TripPayment,
+                InvoiceStatus.Ready,
+                InvoiceDeliveryStatus.Pending,
+                transaction.Amount,
+                transaction.Currency,
+                "/invoices/test.pdf",
+                DateTime.UtcNow,
+                DateTime.UtcNow,
+                null)));
+        }
+
+        public Task<Result<IReadOnlyList<InvoiceDto>>> GetMyInvoicesAsync(CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public Task<Result<IReadOnlyList<InvoiceDto>>> GetAllInvoicesAsync(CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public Task<Result<InvoiceDto>> GetByIdAsync(Guid id, bool adminAccess, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public Task<Result<InvoicePricingBreakdownDto>> GetPricingBreakdownAsync(Guid id, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
     }
 }

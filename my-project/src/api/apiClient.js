@@ -1,13 +1,17 @@
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5019";
 
-export const apiRequest = async (path, options = {}) => {
+const getAuthHeaders = () => {
   const token = localStorage.getItem("electroStreetAccessToken");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+export const apiRequest = async (path, options = {}) => {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     credentials: "include",
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...getAuthHeaders(),
       ...options.headers,
     },
   });
@@ -21,4 +25,29 @@ export const apiRequest = async (path, options = {}) => {
     throw error;
   }
   return data;
+};
+
+export const apiDownload = async (path, fileName = "download.pdf") => {
+  const response = await fetch(`${API_URL}${path}`, {
+    credentials: "include",
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const error = new Error(data?.errors?.[0]?.message || data?.error || "File download failed.");
+    error.code = data?.errors?.[0]?.code;
+    error.status = response.status;
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 };

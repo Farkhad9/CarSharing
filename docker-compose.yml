@@ -9,6 +9,15 @@ services:
       - "1433:1433"
     volumes:
       - carsharing-sqlserver-data:/var/opt/mssql
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: carsharing-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "guest"
+      RABBITMQ_DEFAULT_PASS: "guest"
 
 volumes:
   carsharing-sqlserver-data:
