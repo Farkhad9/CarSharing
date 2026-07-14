@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<TripCompletionRequest> TripCompletionRequests => Set<TripCompletionRequest>();
     public DbSet<TripCompletionPhoto> TripCompletionPhotos => Set<TripCompletionPhoto>();
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<ChargingStation> ChargingStations => Set<ChargingStation>();
     public DbSet<ChargingSession> ChargingSessions => Set<ChargingSession>();
     public DbSet<StaffTask> StaffTasks => Set<StaffTask>();
