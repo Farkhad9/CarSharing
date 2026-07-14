@@ -343,6 +343,7 @@ const Dashboard = ({ onLogout }) => {
   const [paymentInvoices, setPaymentInvoices] = useState([]);
   const [isLoadingPayments, setIsLoadingPayments] = useState(false);
   const [isPayingTrip, setIsPayingTrip] = useState(false);
+  const [isOpeningTopUp, setIsOpeningTopUp] = useState(false);
   const [finishPromoCode, setFinishPromoCode] = useState("");
   const [finishPromoMessage, setFinishPromoMessage] = useState("");
   const [reviewTrip, setReviewTrip] = useState(null);
@@ -967,12 +968,12 @@ const Dashboard = ({ onLogout }) => {
       setPaymentError("Top-up amount must be between 5 and 1000 AZN.");
       return;
     }
-    setIsPayingTrip(true);
+    setIsOpeningTopUp(true);
     setPaymentError("");
     paymentApi.createTopUp(amount)
       .then((checkout) => { window.location.href = checkout.checkoutUrl; })
       .catch((error) => setPaymentError(error.message || "Stripe checkout could not be opened."))
-      .finally(() => setIsPayingTrip(false));
+      .finally(() => setIsOpeningTopUp(false));
   };
 
   const handleAddCard = (event) => {
@@ -1909,8 +1910,14 @@ const Dashboard = ({ onLogout }) => {
               placeholder="Amount"
             />
 
-            <button type="submit" disabled={isPayingTrip} className="mt-5 w-full rounded-2xl bg-zinc-950 px-5 py-4 text-sm font-black text-white transition hover:bg-red-500 disabled:opacity-50">
-              {isPayingTrip ? "Opening Stripe..." : "Continue to Stripe"}
+            {paymentError && (
+              <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">
+                {paymentError}
+              </div>
+            )}
+
+            <button type="submit" disabled={isOpeningTopUp} className="mt-5 w-full rounded-2xl bg-zinc-950 px-5 py-4 text-sm font-black text-white transition hover:bg-red-500 disabled:opacity-50">
+              {isOpeningTopUp ? "Opening payment..." : "Pay"}
             </button>
           </motion.form>
         </div>

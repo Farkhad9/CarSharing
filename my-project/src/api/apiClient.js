@@ -8,7 +8,6 @@ const getAuthHeaders = () => {
 export const apiRequest = async (path, options = {}) => {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    credentials: "include",
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...getAuthHeaders(),
@@ -29,7 +28,6 @@ export const apiRequest = async (path, options = {}) => {
 
 export const apiDownload = async (path, fileName = "download.pdf") => {
   const response = await fetch(`${API_URL}${path}`, {
-    credentials: "include",
     headers: getAuthHeaders(),
   });
 
