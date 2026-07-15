@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -36,6 +36,8 @@ import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
 import { staffApi } from "../../api/staffApi";
 import { invoiceApi } from "../../api/invoiceApi";
+import { authApi } from "../../api/authApi";
+import { adminStatisticsApi } from "../../api/adminStatisticsApi";
 import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
 
@@ -376,18 +378,32 @@ const adminProfiles = {
   },
 };
 
-const ADMIN_ACCOUNTS = [
-  {
-    role: "admin",
-    login: "admin",
-    password: "admin123",
-  },
-  {
-    role: "super-admin",
-    login: "superadmin",
-    password: "super123",
-  },
-];
+const ADMIN_SESSION_STORAGE_KEY = "electroStreetAdminSession";
+
+const normalizeBackendRole = (role) => String(role ?? "").toLowerCase();
+
+const toAdminRole = (role) => {
+  const normalizedRole = normalizeBackendRole(role);
+  if (normalizedRole === "4" || normalizedRole === "superadmin" || normalizedRole === "super-admin") {
+    return "super-admin";
+  }
+
+  if (normalizedRole === "3" || normalizedRole === "admin") {
+    return "admin";
+  }
+
+  return null;
+};
+
+const isAdminUser = (user) => Boolean(toAdminRole(user?.role));
+
+const createAdminSession = (user) => ({
+  id: user.id,
+  role: toAdminRole(user.role),
+  email: user.email,
+  name: user.name || `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
+  signedInAt: new Date().toISOString(),
+});
 
 const sidebarItems = [
   { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
@@ -775,31 +791,38 @@ const ZoneDrawEvents = ({ enabled, onAddPoint }) => {
 };
 
 const AdminLogin = ({ onLogin }) => {
-  const [login, setLogin] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
 
-    const account = ADMIN_ACCOUNTS.find(
-      (item) => item.login === login.trim() && item.password === password
-    );
+    try {
+      const user = await authApi.login(email.trim(), password);
+      if (!isAdminUser(user)) {
+        await authApi.logout();
+        setError("This account does not have access to the admin panel.");
+        return;
+      }
 
-    if (!account) {
-      setError("Неверный логин или пароль.");
-      return;
+      const session = createAdminSession(user);
+      localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(session));
+      onLogin(session);
+    } catch (nextError) {
+      setError(
+        nextError.status === 401
+          ? "Invalid email or password."
+          : "Backend is not connected. Please start the server and try again."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const session = {
-      role: account.role,
-      login: account.login,
-      signedInAt: new Date().toISOString(),
-    };
-
-    localStorage.setItem("electroStreetAdminSession", JSON.stringify(session));
-    onLogin(session);
   };
+
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#08111f] px-4 py-8 text-slate-100">
@@ -816,16 +839,16 @@ const AdminLogin = ({ onLogin }) => {
         </div>
 
         <label className="grid gap-2 text-sm font-bold text-slate-300">
-          Логин
+          Email
           <input
-            type="text"
-            value={login}
+            type="email"
+            value={email}
             onChange={(event) => {
-              setLogin(event.target.value);
+              setEmail(event.target.value);
               setError("");
             }}
             className="rounded-xl border border-white/10 bg-[#0f1a2b] px-4 py-3 font-semibold text-white outline-none transition placeholder:text-slate-600 focus:border-red-400"
-            placeholder="admin или superadmin"
+            placeholder="Enter admin email"
             autoComplete="username"
           />
         </label>
@@ -853,9 +876,10 @@ const AdminLogin = ({ onLogin }) => {
 
         <button
           type="submit"
-          className="mt-6 w-full rounded-xl bg-red-500 px-5 py-3 text-sm font-black uppercase tracking-wide text-white transition hover:bg-red-600"
+          disabled={isSubmitting}
+          className="mt-6 w-full rounded-xl bg-red-500 px-5 py-3 text-sm font-black uppercase tracking-wide text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
         >
-          Войти
+          {isSubmitting ? "Signing in..." : "Sign in"}
         </button>
       </form>
     </main>
@@ -865,9 +889,18 @@ const AdminLogin = ({ onLogin }) => {
 const AdminControlRoom = () => {
   const [adminSession, setAdminSession] = useState(() => {
     try {
-      const storedSession = localStorage.getItem("electroStreetAdminSession");
+      const accessToken = localStorage.getItem("electroStreetAccessToken");
+      if (!accessToken) return null;
+
+      const storedSession = localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
       const parsedSession = storedSession ? JSON.parse(storedSession) : null;
-      return ADMIN_ACCOUNTS.some((account) => account.role === parsedSession?.role) ? parsedSession : null;
+      if (parsedSession?.role === "admin" || parsedSession?.role === "super-admin") {
+        return parsedSession;
+      }
+
+      const storedUser = localStorage.getItem("electroStreetUser");
+      const user = storedUser ? JSON.parse(storedUser) : null;
+      return isAdminUser(user) ? createAdminSession(user) : null;
     } catch {
       return null;
     }
@@ -923,6 +956,10 @@ const AdminControlRoom = () => {
   const [billingInvoices, setBillingInvoices] = useState([]);
   const [billingInvoiceError, setBillingInvoiceError] = useState("");
   const [isLoadingBillingInvoices, setIsLoadingBillingInvoices] = useState(false);
+  const [adminStatistics, setAdminStatistics] = useState(null);
+  const [adminStatisticsError, setAdminStatisticsError] = useState("");
+  const [isLoadingAdminStatistics, setIsLoadingAdminStatistics] = useState(false);
+  const [adminStatisticsLoadedAt, setAdminStatisticsLoadedAt] = useState(null);
   const [staff, setStaff] = useState(staffSeed);
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
@@ -997,7 +1034,38 @@ const AdminControlRoom = () => {
     localStorage.setItem(SERVICE_POINTS_STORAGE_KEY, JSON.stringify(managedServicePoints));
   }, [managedServicePoints]);
 
+  const loadAdminStatistics = useCallback(async () => {
+    setIsLoadingAdminStatistics(true);
+    setAdminStatisticsError("");
+
+    try {
+      const statistics = await adminStatisticsApi.getLiveStatistics();
+      setAdminStatistics(statistics);
+      setAdminStatisticsLoadedAt(new Date().toISOString());
+    } catch (error) {
+      setAdminStatistics(null);
+      setAdminStatisticsError(
+        error.status === 401 || error.status === 403
+          ? "Admin session expired. Please log in again."
+          : "Backend statistics are unavailable. Please check the server and refresh."
+      );
+    } finally {
+      setIsLoadingAdminStatistics(false);
+    }
+  }, []);
+
   useEffect(() => staffApi.subscribe(setStaffTasks), []);
+
+  useEffect(() => {
+    if (!adminSession) return undefined;
+
+    const initialStatisticsTimer = window.setTimeout(loadAdminStatistics, 0);
+    const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
+    return () => {
+      window.clearTimeout(initialStatisticsTimer);
+      window.clearInterval(statisticsTimer);
+    };
+  }, [adminSession, loadAdminStatistics]);
 
   useEffect(() => {
     if (activeSection === "billing") {
@@ -1006,8 +1074,12 @@ const AdminControlRoom = () => {
     // Receipts are loaded when the billing panel opens.
   }, [activeSection]);
 
-  const handleAdminLogout = () => {
-    localStorage.removeItem("electroStreetAdminSession");
+  const handleAdminLogout = async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+    }
     setAdminSession(null);
     setActiveSection("control");
     setStatusFilter("all");
@@ -1139,6 +1211,28 @@ const AdminControlRoom = () => {
   }, [userTableRows, userTableSearchQuery, userTableSort]);
 
   const fleetStats = useMemo(() => {
+    if (adminStatistics?.vehicles) {
+      const vehiclesSummary = adminStatistics.vehicles;
+      const activeTrips = adminStatistics.rides?.active ?? vehiclesSummary.inUse ?? 0;
+      const averageBattery = Math.round(
+        liveVehicles.reduce((sum, vehicle) => sum + vehicle.batteryPercent, 0) / Math.max(liveVehicles.length, 1)
+      );
+
+      return {
+        available: vehiclesSummary.available ?? 0,
+        in_use: vehiclesSummary.inUse ?? 0,
+        low_charge: vehiclesSummary.charging ?? 0,
+        service: vehiclesSummary.maintenance ?? 0,
+        reserved: vehiclesSummary.reserved ?? 0,
+        charging: vehiclesSummary.charging ?? 0,
+        maintenance: vehiclesSummary.maintenance ?? 0,
+        activeTrips,
+        utilization: vehiclesSummary.utilizationPercent ?? 0,
+        averageBattery,
+        total: vehiclesSummary.total ?? 0,
+      };
+    }
+
     const statusCounts = liveVehicles.reduce(
       (acc, vehicle) => {
         acc[vehicle.liveStatus] = (acc[vehicle.liveStatus] || 0) + 1;
@@ -1154,7 +1248,7 @@ const AdminControlRoom = () => {
     );
 
     return { ...statusCounts, activeTrips, utilization, averageBattery };
-  }, [liveVehicles]);
+  }, [adminStatistics, liveVehicles]);
 
   const stationStats = useMemo(() => {
     const onlineStations = managedChargingStations.filter(
@@ -1744,6 +1838,61 @@ const AdminControlRoom = () => {
         </div>
       )}
 
+      <div className="border-b border-white/10 p-5">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">
+                {adminStatistics ? "Live API connected" : "Backend statistics"}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-slate-400">
+                {adminStatisticsLoadedAt
+                  ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
+                  : "Sign in with a backend admin account to load real dashboard metrics."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadAdminStatistics}
+              disabled={isLoadingAdminStatistics}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              <FiActivity />
+              {isLoadingAdminStatistics ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          {adminStatisticsError && (
+            <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+              {adminStatisticsError}
+            </p>
+          )}
+
+          {adminStatistics && (
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Today revenue</p>
+                <p className="mt-1 text-lg font-black text-emerald-200">
+                  {Number(adminStatistics.revenue?.today || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Week revenue</p>
+                <p className="mt-1 text-lg font-black text-white">
+                  {Number(adminStatistics.revenue?.thisWeek || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Payments</p>
+                <p className="mt-1 text-lg font-black text-white">
+                  {adminStatistics.payments?.completed || 0}/{adminStatistics.payments?.pending || 0}/{adminStatistics.payments?.failed || 0}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-3 border-b border-white/10 p-5">
         {Object.entries(STATUS_META).map(([status, meta]) => (
           <button
@@ -1770,7 +1919,7 @@ const AdminControlRoom = () => {
         <div className="mb-4 flex items-center justify-between">
           <p className="text-sm font-black text-slate-300">Операции сейчас</p>
           <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-200">
-            WebSocket mock
+            {adminStatistics ? "Live API" : "Mock feed"}
           </span>
         </div>
 
@@ -2952,6 +3101,64 @@ const AdminControlRoom = () => {
         </button>
       )}
       <div className="grid gap-3 overflow-y-auto p-5">
+        {adminStatistics && (
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-white">Ride revenue</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from backend statistics</p>
+                </div>
+                <span className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
+                  {Number(adminStatistics.revenue?.thisMonth || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                </span>
+              </div>
+              <div className="mt-4 grid h-36 grid-cols-7 items-end gap-2">
+                {(adminStatistics.revenueChart || []).slice(-7).map((point) => {
+                  const maxRevenue = Math.max(...(adminStatistics.revenueChart || []).slice(-7).map((item) => Number(item.revenue || 0)), 1);
+                  const height = Math.max(8, Math.round((Number(point.revenue || 0) / maxRevenue) * 100));
+
+                  return (
+                    <div key={point.date} className="flex h-full flex-col justify-end gap-2">
+                      <div
+                        className="rounded-t-lg bg-emerald-400/80"
+                        style={{ height: `${height}%` }}
+                        title={`${Number(point.revenue || 0).toFixed(2)} ${adminStatistics.revenue?.currency || "AZN"}`}
+                      />
+                      <span className="truncate text-center text-[10px] font-black text-slate-500">
+                        {String(point.date).slice(5)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-sm font-black text-white">Top vehicles</p>
+              <div className="mt-4 grid gap-2">
+                {(adminStatistics.topVehicles || []).length ? (
+                  adminStatistics.topVehicles.map((vehicle) => (
+                    <div key={vehicle.vehicleId} className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-black text-white">{vehicle.label}</p>
+                        <p className="mt-1 text-[10px] font-bold text-slate-500">{vehicle.plateNumber} В· {vehicle.completedTrips} trips</p>
+                      </div>
+                      <span className="shrink-0 text-xs font-black text-emerald-200">
+                        {Number(vehicle.revenue || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-4 text-xs font-semibold text-slate-400">
+                    No completed ride payments yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
           Отдельная карта зарядной инфраструктуры: здесь видны только станции, их статус, мощность и свободные порты для планирования перегонов.
         </div>
@@ -3513,7 +3720,7 @@ const AdminControlRoom = () => {
           ["Задачи", serviceTasks.length, FiShield, "text-amber-200"],
         ]
       : [
-          ["Онлайн", liveVehicles.length, FiZap, "text-cyan-200"],
+          ["Онлайн", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"],
           ["Свободны", fleetStats.available, FiMap, "text-emerald-200"],
           ["В пути", fleetStats.activeTrips, FiNavigation, "text-blue-200"],
           ["Заряд", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"],
@@ -4183,6 +4390,61 @@ const AdminControlRoom = () => {
                 </div>
               </div>
 
+              <div className="border-b border-white/10 p-5">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">
+                        {adminStatistics ? "Live API connected" : "Backend statistics"}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                        {adminStatisticsLoadedAt
+                          ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
+                          : "Sign in with a backend admin account to load real dashboard metrics."}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={loadAdminStatistics}
+                      disabled={isLoadingAdminStatistics}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                    >
+                      <FiActivity />
+                      {isLoadingAdminStatistics ? "Refreshing..." : "Refresh"}
+                    </button>
+                  </div>
+
+                  {adminStatisticsError && (
+                    <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+                      {adminStatisticsError}
+                    </p>
+                  )}
+
+                  {adminStatistics && (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-xl bg-white/[0.05] p-3">
+                        <p className="text-[10px] font-black uppercase text-slate-500">Today revenue</p>
+                        <p className="mt-1 text-lg font-black text-emerald-200">
+                          {Number(adminStatistics.revenue?.today || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-white/[0.05] p-3">
+                        <p className="text-[10px] font-black uppercase text-slate-500">Week revenue</p>
+                        <p className="mt-1 text-lg font-black text-white">
+                          {Number(adminStatistics.revenue?.thisWeek || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-white/[0.05] p-3">
+                        <p className="text-[10px] font-black uppercase text-slate-500">Payments</p>
+                        <p className="mt-1 text-lg font-black text-white">
+                          {adminStatistics.payments?.completed || 0}/{adminStatistics.payments?.pending || 0}/{adminStatistics.payments?.failed || 0}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 border-b border-white/10 p-5">
                 {Object.entries(STATUS_META).map(([status, meta]) => (
                   <button
@@ -4209,7 +4471,7 @@ const AdminControlRoom = () => {
                 <div className="mb-4 flex items-center justify-between">
                   <p className="text-sm font-black text-slate-300">Операции сейчас</p>
                   <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-200">
-                    WebSocket mock
+                    {adminStatistics ? "Live API" : "Mock feed"}
                   </span>
                 </div>
 
