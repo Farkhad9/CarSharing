@@ -101,6 +101,7 @@ public sealed class PaymentEngineTests
 
     private sealed class UserRepo(User user) : IUserRepository
     {
+        public Task<IReadOnlyList<User>> GetAllAsync(string? search = null, UserRole? role = null, bool? isActive = null, UserVerificationStatus? verificationStatus = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<User>>([user]);
         public Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<User?>(id == user.Id ? user : null);
         public Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult<User?>(user);
         public Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default) => Task.FromResult<User?>(null);

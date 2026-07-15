@@ -98,6 +98,11 @@ public class AuthController : ControllerBase
             return Unauthorized(new { errors });
         }
 
+        if (errors.Any(error => error.Code == "User.Disabled"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { errors });
+        }
+
         return BadRequest(new { errors });
     }
 

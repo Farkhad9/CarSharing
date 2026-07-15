@@ -52,6 +52,9 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy(AuthorizationPolicies.AdminOnly, policy =>
         policy.RequireRole(UserRole.Admin.ToString(), UserRole.SuperAdmin.ToString()));
 
+    options.AddPolicy(AuthorizationPolicies.SuperAdminOnly, policy =>
+        policy.RequireRole(UserRole.SuperAdmin.ToString()));
+
     options.AddPolicy(AuthorizationPolicies.StaffOrAdmin, policy =>
         policy.RequireRole(UserRole.Staff.ToString(), UserRole.Admin.ToString(), UserRole.SuperAdmin.ToString()));
 

@@ -1,5 +1,6 @@
 using CarSharing.Application.Common.Interfaces;
 using CarSharing.Domain.Entities;
+using CarSharing.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace CarSharing.Infrastructure.Persistence.Repositories;
@@ -11,6 +12,45 @@ public class UserRepository : IUserRepository
     public UserRepository(AppDbContext dbContext)
     {
         _dbContext = dbContext;
+    }
+
+    public async Task<IReadOnlyList<User>> GetAllAsync(
+        string? search = null,
+        UserRole? role = null,
+        bool? isActive = null,
+        UserVerificationStatus? verificationStatus = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbContext.Users.AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var normalizedSearch = search.Trim().ToLowerInvariant();
+            query = query.Where(user =>
+                user.Email.Contains(normalizedSearch) ||
+                user.FirstName.ToLower().Contains(normalizedSearch) ||
+                user.LastName.ToLower().Contains(normalizedSearch) ||
+                user.Phone.Contains(normalizedSearch));
+        }
+
+        if (role.HasValue)
+        {
+            query = query.Where(user => user.Role == role.Value);
+        }
+
+        if (isActive.HasValue)
+        {
+            query = query.Where(user => user.IsActive == isActive.Value);
+        }
+
+        if (verificationStatus.HasValue)
+        {
+            query = query.Where(user => user.VerificationStatus == verificationStatus.Value);
+        }
+
+        return await query
+            .OrderByDescending(user => user.CreatedAt)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)

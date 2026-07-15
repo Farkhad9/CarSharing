@@ -15,6 +15,7 @@ public class UserDto
     public bool EmailVerified { get; set; }
     public UserVerificationStatus VerificationStatus { get; set; }
     public UserRole Role { get; set; }
+    public bool IsActive { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? VerifiedAt { get; set; }
 }

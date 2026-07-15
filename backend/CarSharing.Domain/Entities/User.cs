@@ -19,6 +19,7 @@ public class User : BaseEntity
     public bool EmailVerified { get; private set; }
     public UserVerificationStatus VerificationStatus { get; private set; } = UserVerificationStatus.Pending;
     public UserRole Role { get; private set; } = UserRole.Rider;
+    public bool IsActive { get; private set; } = true;
     public DateTime CreatedAt { get; private set; }
     public DateTime? VerifiedAt { get; private set; }
     public string? RefreshTokenHash { get; private set; }
@@ -46,6 +47,7 @@ public class User : BaseEntity
             EmailVerified = false,
             VerificationStatus = UserVerificationStatus.Pending,
             Role = UserRole.Rider,
+            IsActive = true,
             CreatedAt = DateTime.UtcNow,
             VerifiedAt = null
         };
@@ -73,17 +75,74 @@ public class User : BaseEntity
             PendingHold = 0,
             DriverLicenseNumber = driverLicenseNumber.Trim(),
             EmailVerified = true,
-            VerificationStatus = UserVerificationStatus.Verified,
+            VerificationStatus = UserVerificationStatus.Internal,
             Role = UserRole.Admin,
+            IsActive = true,
             CreatedAt = now,
             VerifiedAt = now
         };
+    }
+
+    public static User CreateStaff(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber)
+    {
+        return CreateInternalUser(firstName, lastName, email, phone, passwordHash, driverLicenseNumber, UserRole.Staff);
+    }
+
+    public static User CreateSuperAdmin(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber)
+    {
+        return CreateInternalUser(firstName, lastName, email, phone, passwordHash, driverLicenseNumber, UserRole.SuperAdmin);
     }
 
     public void VerifyEmail()
     {
         EmailVerified = true;
         VerifiedAt = DateTime.UtcNow;
+    }
+
+    public void ApproveVerification()
+    {
+        VerificationStatus = UserVerificationStatus.Verified;
+        VerifiedAt = DateTime.UtcNow;
+    }
+
+    public void RejectVerification()
+    {
+        VerificationStatus = UserVerificationStatus.Rejected;
+        VerifiedAt = null;
+    }
+
+    public void ChangeRole(UserRole role)
+    {
+        Role = role;
+        if (role is UserRole.Admin or UserRole.SuperAdmin or UserRole.Staff)
+        {
+            EmailVerified = true;
+            VerificationStatus = UserVerificationStatus.Internal;
+            VerifiedAt ??= DateTime.UtcNow;
+        }
+    }
+
+    public void Activate()
+    {
+        IsActive = true;
+    }
+
+    public void Deactivate()
+    {
+        IsActive = false;
+        RevokeRefreshToken();
     }
 
     public void SetRefreshToken(string refreshTokenHash, DateTime expiresAt)
@@ -117,5 +176,36 @@ public class User : BaseEntity
         if (Balance < amount) return false;
         Balance -= amount;
         return true;
+    }
+
+    private static User CreateInternalUser(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber,
+        UserRole role)
+    {
+        var now = DateTime.UtcNow;
+
+        return new User
+        {
+            Id = Guid.NewGuid(),
+            FirstName = firstName.Trim(),
+            LastName = lastName.Trim(),
+            Email = email.Trim().ToLowerInvariant(),
+            Phone = phone.Trim(),
+            PasswordHash = passwordHash,
+            Balance = 0,
+            PendingHold = 0,
+            DriverLicenseNumber = driverLicenseNumber.Trim(),
+            EmailVerified = true,
+            VerificationStatus = UserVerificationStatus.Internal,
+            Role = role,
+            IsActive = true,
+            CreatedAt = now,
+            VerifiedAt = now
+        };
     }
 }

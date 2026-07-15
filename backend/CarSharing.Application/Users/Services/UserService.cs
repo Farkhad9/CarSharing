@@ -18,6 +18,7 @@ public class UserService : IUserService
     private static readonly Error InvalidCredentials = new("User.InvalidCredentials", "Invalid email or password.");
     private static readonly Error NotFound = new("User.NotFound", "User was not found.");
     private static readonly Error InvalidRefreshToken = new("User.InvalidRefreshToken", "Refresh token is invalid or expired.");
+    private static readonly Error Disabled = new("User.Disabled", "User account is disabled.");
 
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -89,6 +90,11 @@ public class UserService : IUserService
             return Result<AuthResponse>.Failure(InvalidCredentials);
         }
 
+        if (!user.IsActive)
+        {
+            return Result<AuthResponse>.Failure(Disabled);
+        }
+
         var response = IssueTokens(user);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -109,6 +115,11 @@ public class UserService : IUserService
         if (user is null || !user.HasValidRefreshToken(refreshTokenHash, DateTime.UtcNow))
         {
             return Result<AuthResponse>.Failure(InvalidRefreshToken);
+        }
+
+        if (!user.IsActive)
+        {
+            return Result<AuthResponse>.Failure(Disabled);
         }
 
         var response = IssueTokens(user);
