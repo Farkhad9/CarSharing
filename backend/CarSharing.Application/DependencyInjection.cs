@@ -19,6 +19,8 @@ using CarSharing.Application.Charging.Services;
 using CarSharing.Application.StaffTasks.Services;
 using CarSharing.Application.Invoices.Services;
 using CarSharing.Application.Admin.Services;
+using CarSharing.Application.Admin.Dtos;
+using CarSharing.Application.Admin.Validators;
 using CarSharing.Application.Messaging;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +41,7 @@ public static class DependencyInjection
         services.AddScoped<IStaffTaskService, StaffTaskService>();
         services.AddScoped<IInvoiceService, InvoiceService>();
         services.AddScoped<IAdminStatisticsService, AdminStatisticsService>();
+        services.AddScoped<IAdminUserService, AdminUserService>();
         services.AddScoped<IEventPublisher, NoOpEventPublisher>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
@@ -53,6 +56,10 @@ public static class DependencyInjection
         services.AddScoped<IValidator<UpdateVehicleRequest>, UpdateVehicleRequestValidator>();
         services.AddScoped<IValidator<UpdateVehicleStatusRequest>, UpdateVehicleStatusRequestValidator>();
         services.AddScoped<IValidator<TopUpBalanceRequest>, TopUpBalanceRequestValidator>();
+        services.AddScoped<IValidator<CreateStaffUserRequest>, CreateStaffUserRequestValidator>();
+        services.AddScoped<IValidator<CreateAdminUserRequest>, CreateAdminUserRequestValidator>();
+        services.AddScoped<IValidator<UpdateUserRoleRequest>, UpdateUserRoleRequestValidator>();
+        services.AddScoped<IValidator<UpdateUserVerificationRequest>, UpdateUserVerificationRequestValidator>();
 
         return services;
     }
