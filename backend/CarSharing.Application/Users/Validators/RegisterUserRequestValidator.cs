@@ -48,7 +48,7 @@ public class RegisterUserRequestValidator : AbstractValidator<RegisterUserReques
         RuleFor(x => x.DriverLicenseNumber)
             .NotEmpty()
             .WithMessage("Driver license number is required.")
-            .Matches(@"^[A-Za-z0-9]{5,20}$")
-            .WithMessage("Driver license number can contain only letters and digits.");
+            .Matches(@"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9-]{5,20}$")
+            .WithMessage("Driver license number must contain letters and digits.");
     }
 }

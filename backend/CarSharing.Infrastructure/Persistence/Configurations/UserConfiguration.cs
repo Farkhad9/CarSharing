@@ -57,6 +57,9 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.IsActive)
             .IsRequired();
 
+        builder.Property(user => user.BlockReason)
+            .HasMaxLength(500);
+
         builder.Property(user => user.CreatedAt)
             .IsRequired();
 

@@ -49,8 +49,8 @@ public sealed class CreateStaffUserRequestValidator : AbstractValidator<CreateSt
         RuleFor(x => x.DriverLicenseNumber)
             .NotEmpty()
             .WithMessage("Driver license number is required.")
-            .Matches(@"^[A-Za-z0-9]{5,20}$")
-            .WithMessage("Driver license number can contain only letters and digits.");
+            .Matches(@"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9-]{5,20}$")
+            .WithMessage("Driver license number must contain letters and digits.");
     }
 }
 
@@ -99,8 +99,8 @@ public sealed class CreateAdminUserRequestValidator : AbstractValidator<CreateAd
         RuleFor(x => x.DriverLicenseNumber)
             .NotEmpty()
             .WithMessage("Driver license number is required.")
-            .Matches(@"^[A-Za-z0-9]{5,20}$")
-            .WithMessage("Driver license number can contain only letters and digits.");
+            .Matches(@"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9-]{5,20}$")
+            .WithMessage("Driver license number must contain letters and digits.");
 
         RuleFor(x => x.Role)
             .Must(role => role is UserRole.Admin or UserRole.SuperAdmin)
@@ -125,5 +125,21 @@ public sealed class UpdateUserVerificationRequestValidator : AbstractValidator<U
         RuleFor(x => x.Status)
             .Must(status => status is UserVerificationStatus.Verified or UserVerificationStatus.Rejected)
             .WithMessage("Verification status must be Verified or Rejected.");
+    }
+}
+
+public sealed class BlockUserRequestValidator : AbstractValidator<BlockUserRequest>
+{
+    public BlockUserRequestValidator()
+    {
+        RuleFor(x => x.Reason)
+            .NotEmpty()
+            .WithMessage("Block reason is required.")
+            .MaximumLength(500)
+            .WithMessage("Block reason must contain at most 500 characters.");
+
+        RuleFor(x => x.Duration)
+            .IsInEnum()
+            .WithMessage("Block duration is not valid.");
     }
 }

@@ -1,9 +1,11 @@
 import { apiRequest } from "./apiClient";
+import { normalizeRole } from "./adminUsersApi";
 
 const persistSession = (response) => {
   localStorage.setItem("electroStreetAccessToken", response.accessToken);
   const user = {
     ...response.user,
+    roleKey: normalizeRole(response.user.role),
     name: `${response.user.firstName} ${response.user.lastName}`.trim(),
     avatarInitial: response.user.firstName?.charAt(0)?.toUpperCase() || "U",
   };
@@ -21,6 +23,8 @@ export const authApi = {
     try { await apiRequest("/api/auth/logout", { method: "POST" }); } finally {
       localStorage.removeItem("electroStreetAccessToken");
       localStorage.removeItem("electroStreetUser");
+      localStorage.removeItem("electroStreetAdminSession");
+      localStorage.removeItem("electroStreetStaffSession");
     }
   },
 };

@@ -14,4 +14,12 @@ public sealed record StaffTaskDto(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
+public sealed record CreateStaffTaskRequest(
+    string Title,
+    string Description,
+    Guid AssigneeId,
+    Guid? VehicleId,
+    StaffTaskPriority Priority,
+    DateTime? DueAt);
+
 public sealed record UpdateStaffTaskStatusRequest(StaffTaskStatus Status);

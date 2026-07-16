@@ -16,6 +16,9 @@ public class UserDto
     public UserVerificationStatus VerificationStatus { get; set; }
     public UserRole Role { get; set; }
     public bool IsActive { get; set; }
+    public string? BlockReason { get; set; }
+    public DateTime? BlockedAt { get; set; }
+    public DateTime? BlockedUntil { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? VerifiedAt { get; set; }
 }

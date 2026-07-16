@@ -13,6 +13,13 @@ public sealed class StaffTaskRepository : IStaffTaskRepository
         _dbContext = dbContext;
     }
 
+    public async Task<IReadOnlyList<StaffTask>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.StaffTasks
+            .OrderByDescending(task => task.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<StaffTask?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _dbContext.StaffTasks

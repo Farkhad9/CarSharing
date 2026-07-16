@@ -3,6 +3,7 @@ using CarSharing.Application.Common.Interfaces;
 using CarSharing.Infrastructure;
 using CarSharing.Infrastructure.Security;
 using CarSharing.WebApi.Auth;
+using CarSharing.WebApi.Hubs;
 using CarSharing.WebApi.Seeding;
 using CarSharing.WebApi.Services;
 using CarSharing.Domain.Enums;
@@ -22,6 +23,7 @@ const string FrontendCorsPolicy = "FrontendCorsPolicy";
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddSignalR();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -44,6 +46,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwtOptions.Issuer,
             ValidAudience = jwtOptions.Audience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SecretKey))
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+
+                if (!string.IsNullOrWhiteSpace(accessToken) && path.StartsWithSegments("/hubs/operations"))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            }
         };
     });
 
@@ -91,6 +109,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<OperationsHub>("/hubs/operations");
 
 if (app.Environment.IsDevelopment())
 {

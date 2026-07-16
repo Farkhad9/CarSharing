@@ -16,7 +16,9 @@ using CarSharing.Application.Payments.Services;
 using CarSharing.Application.Payments.Validators;
 using CarSharing.Application.Pricing.Services;
 using CarSharing.Application.Charging.Services;
+using CarSharing.Application.StaffTasks.Dtos;
 using CarSharing.Application.StaffTasks.Services;
+using CarSharing.Application.StaffTasks.Validators;
 using CarSharing.Application.Invoices.Services;
 using CarSharing.Application.Admin.Services;
 using CarSharing.Application.Admin.Dtos;
@@ -60,6 +62,8 @@ public static class DependencyInjection
         services.AddScoped<IValidator<CreateAdminUserRequest>, CreateAdminUserRequestValidator>();
         services.AddScoped<IValidator<UpdateUserRoleRequest>, UpdateUserRoleRequestValidator>();
         services.AddScoped<IValidator<UpdateUserVerificationRequest>, UpdateUserVerificationRequestValidator>();
+        services.AddScoped<IValidator<BlockUserRequest>, BlockUserRequestValidator>();
+        services.AddScoped<IValidator<CreateStaffTaskRequest>, CreateStaffTaskRequestValidator>();
 
         return services;
     }
