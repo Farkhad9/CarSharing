@@ -15,6 +15,7 @@ public class TripCompletionRequestDto
     public DateTime? ReviewedAt { get; set; }
     public Guid? ReviewedByUserId { get; set; }
     public decimal BaseRideCost { get; set; }
+    public int DurationMinutes { get; set; }
     public int DiscountPercent { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal FinalRideCost { get; set; }

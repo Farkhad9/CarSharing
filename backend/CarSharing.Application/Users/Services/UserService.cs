@@ -199,6 +199,25 @@ public class UserService : IUserService
         return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
     }
 
+    public async Task<Result<UserDto>> SubmitVerificationDocumentsAsync(
+        Guid id,
+        string driverLicenseDocumentUrl,
+        string passportDocumentUrl,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _userRepository.GetByIdAsync(id, cancellationToken);
+        if (user is null)
+        {
+            return Result<UserDto>.Failure(NotFound);
+        }
+
+        user.SubmitVerificationDocuments(driverLicenseDocumentUrl, passportDocumentUrl, DateTime.UtcNow);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
+    }
+
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
     {
         return validationResult.Errors

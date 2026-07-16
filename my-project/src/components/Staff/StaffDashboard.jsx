@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiCheckCircle, FiClock, FiLogOut, FiRefreshCw, FiTool } from "react-icons/fi";
+import { FiCamera, FiCheckCircle, FiClock, FiLogOut, FiRefreshCw, FiTool, FiX } from "react-icons/fi";
 import { authApi } from "../../api/authApi";
+import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
+import { tripCompletionRequestsApi } from "../../api/tripCompletionRequestsApi";
 import { vehicleApi } from "../../api/vehicleApi";
 
 const SESSION_STORAGE_KEY = "electroStreetStaffSession";
@@ -76,6 +78,18 @@ const formatDate = (value) => {
   }).format(date);
 };
 
+const toCompletionTask = (request, vehicleLabel) => ({
+  id: `completion-${request.id}`,
+  completionRequestId: request.id,
+  title: `Review trip photos: ${vehicleLabel}`,
+  description: `Customer submitted trip completion photos. Duration: ${request.durationMinutes || "n/a"} min. Fare: ${Number(request.finalRideCost || 0).toFixed(2)} ${request.currency || "AZN"}.`,
+  vehicleId: request.vehicleId,
+  priority: 3,
+  dueAt: request.requestedAt,
+  status: request.localStatus || STAFF_TASK_STATUSES.Waiting,
+  createdAt: request.requestedAt,
+});
+
 const getRemainingMs = (task, now) => {
   const dueDate = parseLocalDate(task.dueAt);
   if (!dueDate || Number.isNaN(dueDate.getTime())) return Number.POSITIVE_INFINITY;
@@ -97,12 +111,14 @@ const formatCountdown = (task, now) => {
 const StaffDashboard = () => {
   const [session, setSession] = useState(readSession);
   const [tasks, setTasks] = useState([]);
+  const [completionRequests, setCompletionRequests] = useState([]);
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [refreshNotice, setRefreshNotice] = useState("");
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
+  const [completionError, setCompletionError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const hasLoadedTasksRef = useRef(false);
 
@@ -114,12 +130,14 @@ const StaffDashboard = () => {
       setActionError("");
     }
     try {
-      const [nextTasks, nextVehicles] = await Promise.all([
+      const [nextTasks, nextVehicles, nextCompletionRequests] = await Promise.all([
         staffTasksApi.getMyTasks(),
         vehicleApi.getVehicles(),
+        tripCompletionRequestsApi.getPending(),
       ]);
       setTasks(Array.isArray(nextTasks) ? nextTasks : []);
       setBackendVehicles(Array.isArray(nextVehicles) ? nextVehicles : []);
+      setCompletionRequests(Array.isArray(nextCompletionRequests) ? nextCompletionRequests : []);
       hasLoadedTasksRef.current = true;
       setHasLoadedTasks(true);
     } catch (error) {
@@ -177,20 +195,32 @@ const StaffDashboard = () => {
     };
   }, [session]);
 
+  const completionTasks = useMemo(
+    () =>
+      completionRequests.map((request) => {
+        const vehicle = backendVehicles.find((item) => item.id === request.vehicleId);
+        const vehicleLabel = vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
+        return toCompletionTask(request, vehicleLabel);
+      }),
+    [backendVehicles, completionRequests]
+  );
+
+  const allTasks = useMemo(() => [...completionTasks, ...tasks], [completionTasks, tasks]);
+
   const stats = useMemo(
     () => ({
-      all: tasks.length,
-      [STAFF_TASK_STATUSES.Done]: tasks.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
-      [STAFF_TASK_STATUSES.InProgress]: tasks.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
-      [STAFF_TASK_STATUSES.Waiting]: tasks.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
+      all: allTasks.length,
+      [STAFF_TASK_STATUSES.Done]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
+      [STAFF_TASK_STATUSES.InProgress]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
+      [STAFF_TASK_STATUSES.Waiting]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
     }),
-    [tasks]
+    [allTasks]
   );
 
   const visibleTasks = useMemo(() => {
     const filtered = activeFilter === "all"
-      ? tasks
-      : tasks.filter((task) => task.status === activeFilter);
+      ? allTasks
+      : allTasks.filter((task) => task.status === activeFilter);
 
     return [...filtered].sort((first, second) => {
       const firstRemaining = getRemainingMs(first, now);
@@ -199,16 +229,51 @@ const StaffDashboard = () => {
       if (firstRemaining !== secondRemaining) return firstRemaining - secondRemaining;
       return new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime();
     });
-  }, [activeFilter, now, tasks]);
+  }, [activeFilter, allTasks, now]);
 
   const updateStatus = async (taskId, status) => {
     setActionError("");
     try {
+      if (String(taskId).startsWith("completion-")) {
+        const requestId = taskId.replace("completion-", "");
+        if (status === STAFF_TASK_STATUSES.Done) {
+          await reviewCompletionRequest(requestId, "approve");
+        } else {
+          setCompletionRequests((items) =>
+            items.map((item) =>
+              item.id === requestId ? { ...item, localStatus: status } : item
+            )
+          );
+        }
+        return;
+      }
+
       const updatedTask = await staffTasksApi.updateMyTaskStatus(taskId, status);
       setTasks((items) => items.map((task) => (task.id === taskId ? updatedTask : task)));
     } catch (error) {
       setActionError(error.message || "Task status could not be updated.");
     }
+  };
+
+  const reviewCompletionRequest = async (requestId, action, rejectionReason = "") => {
+    setCompletionError("");
+    try {
+      if (action === "approve") {
+        await tripCompletionRequestsApi.approve(requestId);
+      } else {
+        await tripCompletionRequestsApi.reject(requestId, rejectionReason || "Photos need to be retaken.");
+      }
+      setCompletionRequests((items) => items.filter((item) => item.id !== requestId));
+      await loadTasks();
+    } catch (error) {
+      setCompletionError(error.message || "Completion request could not be reviewed.");
+    }
+  };
+
+  const rejectCompletionRequest = async (requestId) => {
+    const reason = window.prompt("Reason for rejection", "Photos need to be retaken.");
+    if (!reason?.trim()) return;
+    await reviewCompletionRequest(requestId, "reject", reason.trim());
   };
 
   const getVehicleLabel = (vehicleId) => {
@@ -217,6 +282,11 @@ const StaffDashboard = () => {
       ? `${vehicle.plateNumber} · ${vehicle.brand} ${vehicle.model}`
       : vehicleId;
   };
+
+  function getVehicleName(vehicleId) {
+    const vehicle = backendVehicles.find((item) => item.id === vehicleId);
+    return vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
+  }
 
   const handleLogout = async () => {
     await authApi.logout();
@@ -271,6 +341,83 @@ const StaffDashboard = () => {
         </aside>
 
         <section className="min-w-0">
+          <div className="mb-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-black">Trip completion reviews</h2>
+                <p className="text-sm font-semibold text-zinc-500">
+                  Customer photo submissions waiting for staff approval.
+                </p>
+              </div>
+              <span className="rounded-lg bg-red-50 px-3 py-2 text-xs font-black text-red-600">
+                {completionRequests.length} pending
+              </span>
+            </div>
+
+            {completionError && (
+              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                {completionError}
+              </p>
+            )}
+
+            <div className="mt-4 grid gap-3">
+              {completionRequests.length ? completionRequests.map((request) => (
+                <article key={request.id} className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-black">{getVehicleName(request.vehicleId)}</h3>
+                        <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                          Attempt {request.attemptNumber}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-zinc-500">
+                        Requested {formatDate(request.requestedAt)} · Fare {Number(request.finalRideCost || 0).toFixed(2)} {request.currency || "AZN"}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(request.photos || []).map((photo) => (
+                          <a
+                            key={photo.id || `${request.id}-${photo.angle}`}
+                            href={`${API_URL}${photo.fileUrl}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-black text-zinc-600 transition hover:border-red-200 hover:text-red-600"
+                          >
+                            <FiCamera />
+                            {photo.angle}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid shrink-0 grid-cols-2 gap-2 sm:w-72">
+                      <button
+                        type="button"
+                        onClick={() => rejectCompletionRequest(request.id)}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-xs font-black text-red-600 transition hover:bg-red-50"
+                      >
+                        <FiX />
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => reviewCompletionRequest(request.id, "approve")}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-black text-white transition hover:bg-emerald-700"
+                      >
+                        <FiCheckCircle />
+                        Approve
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )) : (
+                <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-6 text-center">
+                  <p className="text-sm font-black text-zinc-500">No trip completion requests waiting.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="mb-4">
             <h2 className="text-xl font-black">My tasks</h2>
             <p className="text-sm font-semibold text-zinc-500">

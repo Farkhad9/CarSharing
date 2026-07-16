@@ -45,6 +45,7 @@ public static class DependencyInjection
         services.AddScoped<IStripePaymentGateway, StripePaymentGateway>();
         services.Configure<SmtpOptions>(configuration.GetSection(SmtpOptions.SectionName));
         services.AddScoped<IReceiptEmailSender, MailtrapReceiptEmailSender>();
+        services.AddScoped<IEmailVerificationSender, SmtpEmailVerificationSender>();
 
         var rabbitMqOptions = configuration.GetSection(RabbitMqOptions.SectionName).Get<RabbitMqOptions>() ?? new RabbitMqOptions();
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));

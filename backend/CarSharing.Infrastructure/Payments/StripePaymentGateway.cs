@@ -50,6 +50,43 @@ public sealed class StripePaymentGateway : IStripePaymentGateway
         return new StripeCheckoutSession(session.Id, session.Url);
     }
 
+    public async Task<StripeCheckoutSession> CreateTripPaymentSessionAsync(Guid transactionId, Guid userId, Guid tripId,
+        string email, decimal amount, string currency, CancellationToken cancellationToken = default)
+    {
+        var client = CreateClient();
+        var service = new SessionService(client);
+        var session = await service.CreateAsync(new SessionCreateOptions
+        {
+            Mode = "payment",
+            SuccessUrl = _options.SuccessUrl,
+            CancelUrl = _options.CancelUrl,
+            CustomerEmail = email,
+            ClientReferenceId = transactionId.ToString(),
+            Metadata = new Dictionary<string, string>
+            {
+                ["transactionId"] = transactionId.ToString(),
+                ["userId"] = userId.ToString(),
+                ["tripId"] = tripId.ToString(),
+                ["purpose"] = "trip_payment"
+            },
+            LineItems =
+            [
+                new SessionLineItemOptions
+                {
+                    Quantity = 1,
+                    PriceData = new SessionLineItemPriceDataOptions
+                    {
+                        Currency = currency.ToLowerInvariant(),
+                        UnitAmount = decimal.ToInt64(decimal.Round(amount * 100, 0, MidpointRounding.AwayFromZero)),
+                        ProductData = new SessionLineItemPriceDataProductDataOptions { Name = "ElectroStreet trip payment" }
+                    }
+                }
+            ]
+        }, cancellationToken: cancellationToken);
+
+        return new StripeCheckoutSession(session.Id, session.Url);
+    }
+
     public async Task<StripePaymentEvent?> ParseCompletedCheckoutAsync(string payload, string signature,
         CancellationToken cancellationToken = default)
     {

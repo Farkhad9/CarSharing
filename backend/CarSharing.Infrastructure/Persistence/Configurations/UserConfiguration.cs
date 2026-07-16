@@ -45,6 +45,12 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
             .IsRequired()
             .HasMaxLength(20);
 
+        builder.Property(user => user.DriverLicenseDocumentUrl)
+            .HasMaxLength(600);
+
+        builder.Property(user => user.PassportDocumentUrl)
+            .HasMaxLength(600);
+
         builder.Property(user => user.EmailVerified)
             .IsRequired();
 

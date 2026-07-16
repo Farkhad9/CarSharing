@@ -30,6 +30,10 @@ public sealed class PaymentsController : ControllerBase
     public async Task<IActionResult> PayTrip(Guid tripId, CancellationToken cancellationToken)
         => ToResponse(await _service.PayTripAsync(tripId, cancellationToken));
 
+    [HttpPost("trips/{tripId:guid}/checkout")]
+    public async Task<IActionResult> CreateTripCheckout(Guid tripId, CancellationToken cancellationToken)
+        => ToResponse(await _service.CreateTripPaymentCheckoutAsync(tripId, cancellationToken));
+
     private IActionResult ToResponse<T>(Result<T> result)
     {
         if (result.IsSuccess) return Ok(result.Value);

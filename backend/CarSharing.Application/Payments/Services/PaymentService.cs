@@ -17,6 +17,7 @@ public sealed class PaymentService : IPaymentService
     private static readonly Error Forbidden = new("Payment.Forbidden", "User is not allowed to pay for this trip.");
     private static readonly Error TripNotAwaitingPayment = new("Payment.TripNotAwaitingPayment", "Trip must be awaiting payment.");
     private static readonly Error AlreadyPaid = new("Payment.AlreadyPaid", "Trip has already been paid.");
+    private static readonly Error EmailNotVerified = new("Payment.EmailNotVerified", "Please confirm your email before topping up your balance.");
 
     private readonly IUserRepository _userRepository;
     private readonly ITripRepository _tripRepository;
@@ -64,9 +65,10 @@ public sealed class PaymentService : IPaymentService
 
         var userResult = await GetCurrentUserAsync(cancellationToken);
         if (userResult.Error is not null) return Result<TopUpCheckoutDto>.Failure(userResult.Error);
+        if (!userResult.User!.EmailVerified) return Result<TopUpCheckoutDto>.Failure(EmailNotVerified);
 
         var now = DateTime.UtcNow;
-        var transaction = PaymentTransaction.CreateTopUp(userResult.User!.Id, request.Amount, "Stripe", now);
+        var transaction = PaymentTransaction.CreateTopUp(userResult.User.Id, request.Amount, "Stripe", now);
         await _paymentRepository.AddAsync(transaction, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -96,7 +98,7 @@ public sealed class PaymentService : IPaymentService
         var transaction = await _paymentRepository.GetByIdAsync(paymentEvent.TransactionId, cancellationToken);
         if (transaction is null) return Result<bool>.Failure(new Error("Payment.TransactionNotFound", "Transaction was not found."));
         if (transaction.Status == PaymentTransactionStatus.Completed) return Result<bool>.Success(true);
-        if (transaction.Status != PaymentTransactionStatus.Pending || transaction.Type != PaymentTransactionType.TopUp)
+        if (transaction.Status != PaymentTransactionStatus.Pending)
             return Result<bool>.Failure(new Error("Payment.InvalidTransaction", "Transaction cannot be completed."));
 
         var user = await _userRepository.GetByIdAsync(transaction.UserId, cancellationToken);
@@ -104,10 +106,74 @@ public sealed class PaymentService : IPaymentService
 
         transaction.SetExternalPayment(paymentEvent.SessionId, paymentEvent.CardBrand, paymentEvent.CardLast4);
         transaction.Complete(DateTime.UtcNow);
-        user.CreditBalance(transaction.Amount);
+
+        if (transaction.Type == PaymentTransactionType.TopUp)
+        {
+            user.CreditBalance(transaction.Amount);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await _invoiceService.CreateForCompletedPaymentAsync(transaction, user, null, cancellationToken);
+            return Result<bool>.Success(true);
+        }
+
+        if (transaction.Type == PaymentTransactionType.RidePayment && transaction.TripId is not null)
+        {
+            var trip = await _tripRepository.GetByIdAsync(transaction.TripId.Value, cancellationToken);
+            if (trip is null) return Result<bool>.Failure(TripNotFound);
+            if (trip.Status != TripStatus.AwaitingPayment)
+                return Result<bool>.Failure(TripNotAwaitingPayment);
+
+            var vehicle = await _vehicleRepository.GetByIdAsync(trip.VehicleId, cancellationToken);
+            if (vehicle is null) return Result<bool>.Failure(VehicleNotFound);
+
+            trip.CompletePayment();
+            vehicle.ChangeStatus(vehicle.BatteryPercent < 40 ? VehicleStatus.Charging : VehicleStatus.Available);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await _invoiceService.CreateForCompletedPaymentAsync(transaction, user, trip, cancellationToken);
+            return Result<bool>.Success(true);
+        }
+
+        return Result<bool>.Failure(new Error("Payment.InvalidTransaction", "Transaction cannot be completed."));
+    }
+
+    public async Task<Result<TopUpCheckoutDto>> CreateTripPaymentCheckoutAsync(Guid tripId, CancellationToken cancellationToken = default)
+    {
+        var userResult = await GetCurrentUserAsync(cancellationToken);
+        if (userResult.Error is not null) return Result<TopUpCheckoutDto>.Failure(userResult.Error);
+
+        var trip = await _tripRepository.GetByIdAsync(tripId, cancellationToken);
+        if (trip is null) return Result<TopUpCheckoutDto>.Failure(TripNotFound);
+        if (trip.UserId != userResult.User!.Id) return Result<TopUpCheckoutDto>.Failure(Forbidden);
+        if (await _paymentRepository.HasCompletedTripPaymentAsync(tripId, cancellationToken))
+            return Result<TopUpCheckoutDto>.Failure(AlreadyPaid);
+        if (trip.Status != TripStatus.AwaitingPayment)
+            return Result<TopUpCheckoutDto>.Failure(TripNotAwaitingPayment);
+
+        var transaction = PaymentTransaction.CreateTripCardPayment(userResult.User.Id, trip.Id, trip.TotalPrice, DateTime.UtcNow);
+        await _paymentRepository.AddAsync(transaction, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-        await _invoiceService.CreateForCompletedPaymentAsync(transaction, user, null, cancellationToken);
-        return Result<bool>.Success(true);
+
+        try
+        {
+            var checkout = await _stripeGateway.CreateTripPaymentSessionAsync(
+                transaction.Id,
+                userResult.User.Id,
+                trip.Id,
+                userResult.User.Email,
+                transaction.Amount,
+                transaction.Currency,
+                cancellationToken);
+            transaction.SetExternalPayment(checkout.Id);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return Result<TopUpCheckoutDto>.Success(new TopUpCheckoutDto(transaction.Id, checkout.Url));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            transaction.Fail("External payment gateway is unavailable.");
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return Result<TopUpCheckoutDto>.Failure(new Error(
+                "Payment.GatewayUnavailable",
+                "Stripe checkout is temporarily unavailable. Please try again later."));
+        }
     }
 
     public async Task<Result<TripPaymentDto>> PayTripAsync(Guid tripId, CancellationToken cancellationToken = default)

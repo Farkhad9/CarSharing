@@ -387,6 +387,8 @@ public sealed class AdminUserService : IAdminUserService
             user.Email,
             user.Phone,
             user.DriverLicenseNumber,
+            user.DriverLicenseDocumentUrl,
+            user.PassportDocumentUrl,
             user.Balance,
             user.PendingHold,
             user.EmailVerified,
@@ -398,6 +400,7 @@ public sealed class AdminUserService : IAdminUserService
             user.BlockedUntil,
             user.BlockedByUserId,
             user.CreatedAt,
+            user.VerificationSubmittedAt,
             user.VerifiedAt);
     }
 

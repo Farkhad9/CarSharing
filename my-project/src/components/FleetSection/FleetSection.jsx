@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 // ИСПРАВЛЕНО: Импортируем иконку батареи из правильного пакета /bs
 import { BsBatteryCharging } from "react-icons/bs"; 
 import { FiNavigation, FiSliders } from "react-icons/fi";
-import { vehicles } from "../../data/vehicles";
 import { VEHICLE_STATUSES } from "../../data/statuses";
 import AuthModal from "../AuthModal/AuthModal";
-import { RESERVATIONS_UPDATED_EVENT, cleanupExpiredReservations } from "../../utils/reservations";
+import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
+import { vehicleApi } from "../../api/vehicleApi";
 
 const USER_LOCATION = [40.3772, 49.8475];
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
@@ -90,6 +90,37 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const [activeBrandFilter, setActiveBrandFilter] = useState("all");
   const [authVehicle, setAuthVehicle] = useState(null);
   const [reservationsRevision, setReservationsRevision] = useState(0);
+  const [backendVehicles, setBackendVehicles] = useState([]);
+  const [isLoadingVehicles, setIsLoadingVehicles] = useState(true);
+  const [vehicleError, setVehicleError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadVehicles = async () => {
+      setIsLoadingVehicles(true);
+      setVehicleError("");
+      try {
+        const items = await vehicleApi.getVehicles();
+        if (isMounted) {
+          setBackendVehicles(items);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setVehicleError(error.message || "Vehicles could not be loaded.");
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingVehicles(false);
+        }
+      }
+    };
+
+    loadVehicles();
+    return () => {
+      isMounted = false;
+    };
+  }, [reservationsRevision]);
 
   useEffect(() => {
     const refreshReservations = (event) => {
@@ -138,24 +169,12 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const filteredAndSortedVehicles = useMemo(() => {
     void reservationsRevision;
 
-    const activeReservationVehicleIds = new Set(
-      cleanupExpiredReservations()
-        .filter((reservation) => !reservation.unlockedAt && !reservation.tripStartedAt)
-        .map((reservation) => reservation.vehicleId)
-    );
-
-    return vehicles
+    return backendVehicles
       .map((vehicle) => {
         const distanceMeters = getDistanceMeters(USER_LOCATION, vehicle);
-        const reservedByUser = activeReservationVehicleIds.has(vehicle.id);
-        const effectiveStatus =
-          reservedByUser && vehicle.status === VEHICLE_STATUSES.AVAILABLE
-            ? VEHICLE_STATUSES.RESERVED
-            : vehicle.status;
 
         return {
           ...vehicle,
-          status: effectiveStatus,
           distanceMeters,
           walkTimeMinutes: getWalkingMinutes(distanceMeters),
         };
@@ -166,7 +185,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         return matchesStatus && matchesBrand;
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [activeFilter, activeBrandFilter, reservationsRevision]);
+  }, [activeFilter, activeBrandFilter, backendVehicles, reservationsRevision]);
 
   return (
     <section id="fleet" className="scroll-mt-24 bg-white py-16 md:py-24 border-b border-gray-100">
@@ -224,8 +243,18 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         </div>
 
         {/* Сетка автомобилей точь-в-точь как в твоем UI */}
+        {vehicleError && (
+          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">
+            {vehicleError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
-          {filteredAndSortedVehicles.map((vehicle) => {
+          {isLoadingVehicles ? (
+            <div className="rounded-3xl border border-gray-100 bg-white p-8 text-sm font-black text-gray-500 shadow-sm md:col-span-2 lg:col-span-3">
+              Loading EVs from backend...
+            </div>
+          ) : filteredAndSortedVehicles.length ? filteredAndSortedVehicles.map((vehicle) => {
             const status = STATUS_STYLES[vehicle.status] || STATUS_STYLES[VEHICLE_STATUSES.AVAILABLE];
 
             return (
@@ -309,7 +338,11 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
                 </button>
               </article>
             );
-          })}
+          }) : (
+            <div className="rounded-3xl border border-dashed border-gray-200 bg-white p-8 text-center text-sm font-black text-gray-500 md:col-span-2 lg:col-span-3">
+              No EVs match these filters.
+            </div>
+          )}
         </div>
       </div>
 

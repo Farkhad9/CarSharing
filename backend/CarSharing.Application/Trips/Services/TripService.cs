@@ -247,7 +247,7 @@ public class TripService : ITripService
         await _completionRequestRepository.AddAsync(completionRequest, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(completionRequest));
+        return Result<TripCompletionRequestDto>.Success(await MapCompletionRequestAsync(completionRequest, cancellationToken));
     }
 
     public async Task<Result<IReadOnlyList<TripCompletionRequestDto>>> GetPendingCompletionRequestsAsync(
@@ -259,8 +259,13 @@ public class TripService : ITripService
         }
 
         var requests = await _completionRequestRepository.GetPendingReviewAsync(cancellationToken);
-        return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(
-            requests.Select(request => _mapper.Map<TripCompletionRequestDto>(request)).ToList());
+        var items = new List<TripCompletionRequestDto>();
+        foreach (var request in requests)
+        {
+            items.Add(await MapCompletionRequestAsync(request, cancellationToken));
+        }
+
+        return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(items);
     }
 
     public async Task<Result<TripCompletionRequestDto>> GetCompletionRequestByIdAsync(
@@ -278,7 +283,7 @@ public class TripService : ITripService
             return Result<TripCompletionRequestDto>.Failure(Forbidden);
         }
 
-        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(request));
+        return Result<TripCompletionRequestDto>.Success(await MapCompletionRequestAsync(request, cancellationToken));
     }
 
     public async Task<Result<TripCompletionRequestDto>> ApproveCompletionRequestAsync(
@@ -320,7 +325,7 @@ public class TripService : ITripService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(request));
+        return Result<TripCompletionRequestDto>.Success(await MapCompletionRequestAsync(request, cancellationToken));
     }
 
     public async Task<Result<TripCompletionRequestDto>> RejectCompletionRequestAsync(
@@ -361,7 +366,7 @@ public class TripService : ITripService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripCompletionRequestDto>.Success(_mapper.Map<TripCompletionRequestDto>(completionRequest));
+        return Result<TripCompletionRequestDto>.Success(await MapCompletionRequestAsync(completionRequest, cancellationToken));
     }
 
     private bool CanAccessTrip(Trip trip)
@@ -439,6 +444,16 @@ public class TripService : ITripService
             ? null
             : _mapper.Map<TripCompletionRequestDto>(latestCompletionRequest);
 
+        return dto;
+    }
+
+    private async Task<TripCompletionRequestDto> MapCompletionRequestAsync(
+        TripCompletionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var dto = _mapper.Map<TripCompletionRequestDto>(request);
+        var trip = await _tripRepository.GetByIdAsync(request.TripId, cancellationToken);
+        dto.DurationMinutes = trip?.DurationMinutes ?? 0;
         return dto;
     }
 

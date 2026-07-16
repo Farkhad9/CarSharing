@@ -17,6 +17,8 @@ public sealed record AdminUserDto(
     string Email,
     string Phone,
     string DriverLicenseNumber,
+    string? DriverLicenseDocumentUrl,
+    string? PassportDocumentUrl,
     decimal Balance,
     decimal PendingHold,
     bool EmailVerified,
@@ -28,6 +30,7 @@ public sealed record AdminUserDto(
     DateTime? BlockedUntil,
     Guid? BlockedByUserId,
     DateTime CreatedAt,
+    DateTime? VerificationSubmittedAt,
     DateTime? VerifiedAt);
 
 public sealed record CreateStaffUserRequest(
