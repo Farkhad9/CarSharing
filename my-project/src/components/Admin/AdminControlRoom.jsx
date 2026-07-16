@@ -10,6 +10,8 @@ import {
   FiCommand,
   FiDollarSign,
   FiEdit3,
+  FiEye,
+  FiEyeOff,
   FiFileText,
   FiMap,
   FiMenu,
@@ -34,12 +36,75 @@ import { trips } from "../../data/trips";
 import { users } from "../../data/users";
 import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
-import { staffApi } from "../../api/staffApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { authApi } from "../../api/authApi";
 import { adminStatisticsApi } from "../../api/adminStatisticsApi";
-import { STAFF_TASK_STATUS_LABELS, STAFF_TASK_STATUSES } from "../../data/staff";
+import { adminUsersApi, USER_BLOCK_DURATIONS, USER_ROLES, USER_VERIFICATION_STATUSES, normalizeRole } from "../../api/adminUsersApi";
+import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
+import { adminStaffTasksApi, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES } from "../../api/staffTasksApi";
+import { vehicleApi } from "../../api/vehicleApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
+
+const STAFF_TASK_STATUS_LABELS = {
+  [STAFF_TASK_STATUSES.Waiting]: "Waiting",
+  [STAFF_TASK_STATUSES.InProgress]: "In progress",
+  [STAFF_TASK_STATUSES.Done]: "Done",
+};
+
+const STAFF_TASK_PRIORITY_LABELS = {
+  [STAFF_TASK_PRIORITIES.Low]: "Low",
+  [STAFF_TASK_PRIORITIES.Medium]: "Medium",
+  [STAFF_TASK_PRIORITIES.High]: "High",
+};
+
+const STAFF_TASK_PRIORITY_STYLES = {
+  [STAFF_TASK_PRIORITIES.Low]: "border-sky-400/30 bg-sky-500/10 text-sky-200",
+  [STAFF_TASK_PRIORITIES.Medium]: "border-amber-400/30 bg-amber-500/10 text-amber-200",
+  [STAFF_TASK_PRIORITIES.High]: "border-red-400/35 bg-red-500/15 text-red-100",
+};
+
+const STAFF_TASK_STATUS_STYLES = {
+  [STAFF_TASK_STATUSES.Waiting]: "border-slate-400/25 bg-slate-500/10 text-slate-200",
+  [STAFF_TASK_STATUSES.InProgress]: "border-blue-400/30 bg-blue-500/10 text-blue-200",
+  [STAFF_TASK_STATUSES.Done]: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
+};
+
+const toDateTimeLocalValue = (date = new Date()) => {
+  const offsetMs = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+};
+
+const upsertStaffTask = (items, nextTask) => {
+  const exists = items.some((task) => task.id === nextTask.id);
+  return exists
+    ? items.map((task) => (task.id === nextTask.id ? nextTask : task))
+    : [nextTask, ...items];
+};
+
+const upsertAdminUser = (items, nextUser) => {
+  const exists = items.some((user) => user.id === nextUser.id);
+  return exists
+    ? items.map((user) => (user.id === nextUser.id ? nextUser : user))
+    : [nextUser, ...items];
+};
+
+const mapBackendStaffUser = (user) => ({
+  id: user.id,
+  name: `${user.firstName} ${user.lastName}`.trim() || user.email,
+  role: "Staff",
+  specialty: user.email,
+  active: user.isActive,
+  ordersCompleted: 0,
+  avgCompletionMinutes: 0,
+  rating: 0,
+  complaints: 0,
+  praises: 0,
+  activeShiftHours: 0,
+  weeklyChange: 0,
+  kycRating: user.verificationStatus === USER_VERIFICATION_STATUSES.Internal ? 10 : 0,
+  applicationsProcessed: [],
+  supportTicketsClosed: [],
+});
 
 const BAKU_CENTER = [40.3777, 49.8499];
 const CRITICAL_BATTERY_PERCENT = 10;
@@ -47,6 +112,7 @@ const CHARGING_TECHNICIAN_ID = "tech-003";
 const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
 const CHARGING_STATIONS_STORAGE_KEY = "electroStreetChargingStations";
 const SERVICE_POINTS_STORAGE_KEY = "electroStreetServicePoints";
+const LEGACY_DEVELOPMENT_ADMIN_EMAIL = "admin@carsharing.local";
 
 const servicePointsSeed = [
   {
@@ -379,6 +445,7 @@ const adminProfiles = {
 };
 
 const ADMIN_SESSION_STORAGE_KEY = "electroStreetAdminSession";
+const ADMIN_ACTIVE_SECTION_STORAGE_KEY = "electroStreetAdminActiveSection";
 
 const normalizeBackendRole = (role) => String(role ?? "").toLowerCase();
 
@@ -497,74 +564,6 @@ const techniciansSeed = [
   { id: "tech-002", name: "Elvin", specialty: "Технические проблемы", status: "free", lat: 40.372, lng: 49.858 },
   { id: "tech-003", name: "Nihad", specialty: "Зарядка", status: "busy", lat: 40.392, lng: 49.851 },
 ];
-
-const taskAssignments = {
-  washing: {
-    type: "Мойка",
-    technicianId: "tech-001",
-  },
-  technical: {
-    type: "Техническая проблема",
-    technicianId: "tech-002",
-  },
-  charging: {
-    type: "Зарядка",
-    technicianId: "tech-003",
-  },
-};
-
-const includesAny = (value, keywords) => keywords.some((keyword) => value.includes(keyword));
-
-const getTaskContext = (vehicle, incidents = [], tickets = []) =>
-  [
-    vehicle?.status,
-    vehicle?.liveStatus,
-    vehicle?.brand,
-    vehicle?.model,
-    vehicle?.location?.label,
-    ...incidents
-      .filter((incident) => incident.vehicleId === vehicle?.id)
-      .flatMap((incident) => [incident.title, incident.detail, incident.severity]),
-    ...tickets
-      .filter((ticket) => ticket.vehicleId === vehicle?.id)
-      .flatMap((ticket) => [
-        ticket.subject,
-        ...ticket.messages.map((message) => (typeof message === "string" ? message : message.body)),
-      ]),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-const resolveTaskAssignment = (vehicle, incidents = [], tickets = []) => {
-  const context = getTaskContext(vehicle, incidents, tickets);
-
-  if (
-    vehicle?.liveStatus === "low_charge" ||
-    vehicle?.status === VEHICLE_STATUSES.CHARGING ||
-    vehicle?.batteryPercent < 30 ||
-    includesAny(context, ["заряд", "battery", "charge", "charging", "кабель"])
-  ) {
-    return taskAssignments.charging;
-  }
-
-  if (includesAny(context, ["мойк", "уборк", "clean", "wash"])) {
-    return taskAssignments.washing;
-  }
-
-  if (
-    (vehicle?.liveStatus === "service" && vehicle?.status !== VEHICLE_STATUSES.COMPLETED) ||
-    includesAny(context, ["полом", "техничес", "ремонт", "сервис", "телемет", "не откры", "не реаг", "ошиб", "повреж"])
-  ) {
-    return taskAssignments.technical;
-  }
-
-  if (vehicle?.status === VEHICLE_STATUSES.COMPLETED) {
-    return taskAssignments.washing;
-  }
-
-  return taskAssignments.washing;
-};
 
 const tasksSeed = [
   { id: "task-001", vehicleId: "ev-004", technicianId: "tech-003", chargingStationId: "station-004", type: "Зарядка", status: "Техник в пути" },
@@ -793,6 +792,7 @@ const ZoneDrawEvents = ({ enabled, onAddPoint }) => {
 const AdminLogin = ({ onLogin }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -855,17 +855,27 @@ const AdminLogin = ({ onLogin }) => {
 
         <label className="mt-4 grid gap-2 text-sm font-bold text-slate-300">
           Пароль
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => {
-              setPassword(event.target.value);
-              setError("");
-            }}
-            className="rounded-xl border border-white/10 bg-[#0f1a2b] px-4 py-3 font-semibold text-white outline-none transition placeholder:text-slate-600 focus:border-red-400"
-            placeholder="Введите пароль"
-            autoComplete="current-password"
-          />
+          <span className="flex items-center rounded-xl border border-white/10 bg-[#0f1a2b] pr-3 transition focus-within:border-red-400">
+            <input
+              type={isPasswordVisible ? "text" : "password"}
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setError("");
+              }}
+              className="min-w-0 flex-1 rounded-xl bg-transparent px-4 py-3 font-semibold text-white outline-none placeholder:text-slate-600"
+              placeholder="Введите пароль"
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              onClick={() => setIsPasswordVisible((value) => !value)}
+              className="rounded-lg p-2 text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+              aria-label={isPasswordVisible ? "Hide password" : "Show password"}
+            >
+              {isPasswordVisible ? <FiEyeOff /> : <FiEye />}
+            </button>
+          </span>
         </label>
 
         {error && (
@@ -935,14 +945,22 @@ const AdminControlRoom = () => {
   const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[2]?.id || vehicles[0]?.id);
   const [focusTarget, setFocusTarget] = useState(null);
   const adminRole = adminSession?.role || "admin";
-  const [activeSection, setActiveSection] = useState("control");
+  const isSuperAdmin = adminRole === "super-admin";
+  const [activeSection, setActiveSection] = useState(() => {
+    try {
+      const storedSection = localStorage.getItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY);
+      return sidebarItems.some((item) => item.id === storedSection) ? storedSection : "control";
+    } catch {
+      return "control";
+    }
+  });
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [userTableSearchQuery, setUserTableSearchQuery] = useState("");
   const [userTableSort, setUserTableSort] = useState({ key: "registeredAt", direction: "desc" });
-  const [kycProfiles, setKycProfiles] = useState(kycProfilesSeed);
+  const [kycProfiles] = useState(kycProfilesSeed);
   const [kycFilter, setKycFilter] = useState("all");
-  const [selectedKycUserId, setSelectedKycUserId] = useState(kycProfilesSeed[1]?.userId || kycProfilesSeed[0]?.userId);
+  const [selectedKycUserId, setSelectedKycUserId] = useState(null);
   const [isDrawingZone, setIsDrawingZone] = useState(false);
   const [draftZoneType, setDraftZoneType] = useState("allowed");
   const [draftZonePoints, setDraftZonePoints] = useState([]);
@@ -960,26 +978,48 @@ const AdminControlRoom = () => {
   const [adminStatisticsError, setAdminStatisticsError] = useState("");
   const [isLoadingAdminStatistics, setIsLoadingAdminStatistics] = useState(false);
   const [adminStatisticsLoadedAt, setAdminStatisticsLoadedAt] = useState(null);
+  const [backendUsers, setBackendUsers] = useState([]);
+  const [isLoadingBackendUsers, setIsLoadingBackendUsers] = useState(false);
+  const [backendUsersError, setBackendUsersError] = useState("");
+  const [createUserDraft, setCreateUserDraft] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    password: "",
+    driverLicenseNumber: "",
+    role: USER_ROLES.Staff,
+  });
+  const [blockDraft, setBlockDraft] = useState({
+    userId: "",
+    reason: "",
+    duration: USER_BLOCK_DURATIONS.FifteenMinutes,
+  });
   const [staff, setStaff] = useState(staffSeed);
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
   const [incidents, setIncidents] = useState(incidentSeed);
   const [technicians, setTechnicians] = useState(techniciansSeed);
   const [serviceTasks, setServiceTasks] = useState(tasksSeed);
-  const [staffTasks, setStaffTasks] = useState(() => staffApi.getTasks());
+  const [staffTasks, setStaffTasks] = useState([]);
+  const [isLoadingStaffTasks, setIsLoadingStaffTasks] = useState(false);
+  const [staffTasksError, setStaffTasksError] = useState("");
+  const [backendVehicles, setBackendVehicles] = useState([]);
+  const [backendVehiclesError, setBackendVehiclesError] = useState("");
   const [staffTaskDraft, setStaffTaskDraft] = useState({
     title: "",
     description: "",
-    assigneeId: "staff-nihat",
-    priority: "Средний",
-    dueAt: "Сегодня",
+    assigneeId: "",
+    vehicleId: "",
+    priority: STAFF_TASK_PRIORITIES.Medium,
+    dueAt: "",
   });
   const [tickets, setTickets] = useState(ticketsSeed);
   const [activeTicketId, setActiveTicketId] = useState(ticketsSeed[0].id);
   const [ticketSearchQuery, setTicketSearchQuery] = useState("");
   const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
   const [chatDraft, setChatDraft] = useState("");
-  const [adminNotice, setAdminNotice] = useState({ section: null, message: "" });
+  const [adminNotice, setAdminNotice] = useState({ section: null, message: "", tone: "success" });
   const { confirm, dialog } = useConfirmDialog();
   const [riderNotifications, setRiderNotifications] = useState([]);
   const [plannedMaintenance, setPlannedMaintenance] = useState([]);
@@ -1006,7 +1046,26 @@ const AdminControlRoom = () => {
   );
   const [alertsEnabled, setAlertsEnabled] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const staffMembers = useMemo(() => staffApi.getStaff(), []);
+  const staffMembers = useMemo(
+    () => backendUsers
+      .filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL && user.role === USER_ROLES.Staff && user.isActive)
+      .map((user) => ({
+        id: user.id,
+        name: `${user.firstName} ${user.lastName}`.trim() || user.email,
+        email: user.email,
+        role: "Staff",
+      })),
+    [backendUsers]
+  );
+  const canManageUserAccount = useCallback((user) => {
+    if (!user || user.id === adminSession?.id) return false;
+    if (isSuperAdmin) return true;
+    return user.role === USER_ROLES.Rider || user.role === USER_ROLES.Staff;
+  }, [adminSession?.id, isSuperAdmin]);
+  const blockableUsers = useMemo(
+    () => backendUsers.filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL && user.isActive && canManageUserAccount(user)),
+    [backendUsers, canManageUserAccount]
+  );
 
   useEffect(() => {
     if (!adminSession) return;
@@ -1024,6 +1083,12 @@ const AdminControlRoom = () => {
     }
 
     return undefined;
+  }, [activeSection, adminSession]);
+
+  useEffect(() => {
+    if (!adminSession) return;
+
+    localStorage.setItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY, activeSection);
   }, [activeSection, adminSession]);
 
   useEffect(() => {
@@ -1054,16 +1119,113 @@ const AdminControlRoom = () => {
     }
   }, []);
 
-  useEffect(() => staffApi.subscribe(setStaffTasks), []);
+  const loadBackendUsers = useCallback(async () => {
+    setIsLoadingBackendUsers(true);
+    setBackendUsersError("");
+
+    try {
+      const users = await adminUsersApi.getUsers();
+      setBackendUsers(users);
+      const backendStaff = users
+        .filter((user) => user.role === USER_ROLES.Staff)
+        .map(mapBackendStaffUser);
+      setStaff(backendStaff);
+      setStaffTaskDraft((draft) => ({
+        ...draft,
+        assigneeId: draft.assigneeId || backendStaff[0]?.id || "",
+      }));
+    } catch (error) {
+      setBackendUsersError(error.message || "Backend users are unavailable.");
+    } finally {
+      setIsLoadingBackendUsers(false);
+    }
+  }, []);
+
+  const loadStaffTasks = useCallback(async () => {
+    setIsLoadingStaffTasks(true);
+    setStaffTasksError("");
+
+    try {
+      setStaffTasks(await adminStaffTasksApi.getTasks());
+    } catch (error) {
+      setStaffTasksError(error.message || "Backend staff tasks are unavailable.");
+    } finally {
+      setIsLoadingStaffTasks(false);
+    }
+  }, []);
+
+  const loadBackendVehicles = useCallback(async () => {
+    setBackendVehiclesError("");
+
+    try {
+      const vehiclesFromBackend = await vehicleApi.getVehicles();
+      setBackendVehicles(Array.isArray(vehiclesFromBackend) ? vehiclesFromBackend : []);
+    } catch (error) {
+      setBackendVehicles([]);
+      setBackendVehiclesError(error.message || "Backend vehicles are unavailable.");
+    }
+  }, []);
 
   useEffect(() => {
     if (!adminSession) return undefined;
 
     const initialStatisticsTimer = window.setTimeout(loadAdminStatistics, 0);
+    const initialUsersTimer = window.setTimeout(loadBackendUsers, 0);
+    const initialTasksTimer = window.setTimeout(loadStaffTasks, 0);
+    const initialVehiclesTimer = window.setTimeout(loadBackendVehicles, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
     return () => {
       window.clearTimeout(initialStatisticsTimer);
+      window.clearTimeout(initialUsersTimer);
+      window.clearTimeout(initialTasksTimer);
+      window.clearTimeout(initialVehiclesTimer);
       window.clearInterval(statisticsTimer);
+    };
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadBackendVehicles]);
+
+  useEffect(() => {
+    if (!adminSession) return undefined;
+
+    const connection = createOperationsConnection();
+    const handleStaffTaskChange = (task) => {
+      setStaffTasks((items) => upsertStaffTask(items, task));
+      setStaffTasksError("");
+    };
+    const handleAdminUserChange = (user) => {
+      setBackendUsers((items) => upsertAdminUser(items, user));
+      setBackendUsersError("");
+      if (user.role === USER_ROLES.Staff) {
+        setStaff((items) => upsertAdminUser(items, mapBackendStaffUser(user)));
+      } else {
+        setStaff((items) => items.filter((staffMember) => staffMember.id !== user.id));
+      }
+    };
+    const handleAdminDataChange = (message) => {
+      if (message?.scope === "staffTasks") {
+        loadAdminStatistics();
+      } else if (message?.scope === "users") {
+        loadAdminStatistics();
+      }
+    };
+
+    connection.on(REALTIME_EVENTS.StaffTaskCreated, handleStaffTaskChange);
+    connection.on(REALTIME_EVENTS.StaffTaskUpdated, handleStaffTaskChange);
+    connection.on(REALTIME_EVENTS.AdminUserChanged, handleAdminUserChange);
+    connection.on(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
+    connection.onreconnecting(() => setStaffTasksError("Live updates reconnecting. Manual refresh is still available."));
+    connection.onreconnected(() => setStaffTasksError(""));
+    connection.onclose(() => setStaffTasksError("Live updates paused. Manual refresh is still available."));
+
+    startConnection(connection).catch(() => {
+      setStaffTasksError("Live updates unavailable. Manual refresh is still available.");
+    });
+
+    return () => {
+      connection.off(REALTIME_EVENTS.StaffTaskCreated, handleStaffTaskChange);
+      connection.off(REALTIME_EVENTS.StaffTaskUpdated, handleStaffTaskChange);
+      connection.off(REALTIME_EVENTS.AdminUserChanged, handleAdminUserChange);
+      connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
+      stopConnection(connection).catch(() => {});
     };
   }, [adminSession, loadAdminStatistics]);
 
@@ -1079,6 +1241,7 @@ const AdminControlRoom = () => {
       await authApi.logout();
     } finally {
       localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      localStorage.removeItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY);
     }
     setAdminSession(null);
     setActiveSection("control");
@@ -1119,27 +1282,42 @@ const AdminControlRoom = () => {
 
   const searchResults = useMemo(() => filteredVehicles.slice(0, 6), [filteredVehicles]);
 
-  const isSuperAdmin = adminRole === "super-admin";
   const currentAdminProfile = adminProfiles[adminRole] || adminProfiles.admin;
 
   const kycRows = useMemo(() => {
-    const riderUsers = users.filter((user) => user.role === "rider");
+    const riderUsers = backendUsers.filter((user) => user.role === USER_ROLES.Rider);
 
     return riderUsers.map((user) => {
+      const status = !user.isActive
+        ? "blocked"
+        : user.verificationStatus === USER_VERIFICATION_STATUSES.Verified
+          ? "verified"
+          : user.verificationStatus === USER_VERIFICATION_STATUSES.Rejected
+            ? "blocked"
+            : "pending";
       const profile = kycProfiles.find((item) => item.userId === user.id) || {
         userId: user.id,
-        status: user.verificationStatus || "pending",
+        status,
         risk: "medium",
-        selfie: "Waiting for selfie",
-        passport: "Waiting for passport",
-        license: "Waiting for license",
-        submittedAt: "Not submitted",
-        notes: "No KYC package yet.",
+        account: user.email || "No email",
+        documents: user.driverLicenseNumber || "No driver license number",
+        identity: user.phone || "No phone number",
+        submittedAt: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Not submitted",
+        notes: user.blockReason
+          || (status === "verified"
+            ? "Verification approved."
+            : status === "blocked"
+              ? "Verification rejected or account blocked."
+              : "Awaiting admin verification decision."),
       };
 
-      return { ...user, kyc: profile };
+      return {
+        ...user,
+        fullName: `${user.firstName} ${user.lastName}`.trim() || user.email,
+        kyc: { ...profile, status },
+      };
     });
-  }, [kycProfiles]);
+  }, [backendUsers, kycProfiles]);
 
   const filteredKycRows = useMemo(() => {
     if (kycFilter === "all") return kycRows;
@@ -1147,7 +1325,7 @@ const AdminControlRoom = () => {
   }, [kycFilter, kycRows]);
 
   const selectedKycUser = useMemo(
-    () => kycRows.find((row) => row.id === selectedKycUserId) || kycRows[0],
+    () => kycRows.find((row) => row.id === selectedKycUserId) || null,
     [kycRows, selectedKycUserId]
   );
 
@@ -1159,31 +1337,36 @@ const AdminControlRoom = () => {
       "2025-11-12",
     ];
 
-    return users.map((user, index) => {
-      const registeredAt = user.registeredAt || registeredAtSeed[index % registeredAtSeed.length];
-      const accountStatus = user.verificationStatus === "blocked"
+    return backendUsers
+      .filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL)
+      .map((user, index) => {
+      const registeredAt = user.createdAt
+        ? new Date(user.createdAt).toLocaleDateString()
+        : registeredAtSeed[index % registeredAtSeed.length];
+      const accountStatus = !user.isActive
         ? "blocked"
-        : user.verificationStatus === "internal"
+        : user.verificationStatus === USER_VERIFICATION_STATUSES.Internal
           ? "internal"
-          : user.activeTripId
-            ? "active_trip"
-            : user.activeReservationId
-              ? "reserved"
-              : user.verificationStatus || "pending";
+          : user.verificationStatus === USER_VERIFICATION_STATUSES.Verified
+            ? "verified"
+            : user.verificationStatus === USER_VERIFICATION_STATUSES.Rejected
+              ? "blocked"
+              : "pending";
 
       return {
         id: user.id,
-        username: user.fullName || user.username || user.email,
+        username: `${user.firstName} ${user.lastName}`.trim() || user.email,
         email: user.email,
         phone: user.phone || "—",
-        balanceAmount: user.balance?.amount ?? 0,
-        balanceCurrency: user.balance?.currency || "AZN",
+        balanceAmount: user.balance ?? 0,
+        balanceCurrency: "AZN",
         registeredAt,
         accountStatus,
-        role: user.role,
+        role: normalizeRole(user.role),
+        raw: user,
       };
-    });
-  }, []);
+      });
+  }, [backendUsers]);
 
   const visibleUserTableRows = useMemo(() => {
     const query = userTableSearchQuery.trim().toLowerCase();
@@ -1439,8 +1622,15 @@ const AdminControlRoom = () => {
 
   const getVehicle = (vehicleId) => liveVehicles.find((vehicle) => vehicle.id === vehicleId) || vehicles.find((vehicle) => vehicle.id === vehicleId);
   const activeTicket = tickets.find((ticket) => ticket.id === activeTicketId) || tickets[0];
-  const showAdminNotice = (message, section = activeSection) => {
-    setAdminNotice({ section, message });
+  const showAdminNotice = (message, section = activeSection, tone = "success") => {
+    setAdminNotice({ section, message, tone });
+  };
+  const getApiErrorMessage = (error, fallback) => {
+    if (Array.isArray(error?.errors) && error.errors.length) {
+      return error.errors.map((item) => item.message).filter(Boolean).join("\n") || fallback;
+    }
+
+    return error?.message || fallback;
   };
   const openVehicleNotification = (notice) => {
     if (notice.vehicleId) {
@@ -1470,23 +1660,86 @@ const AdminControlRoom = () => {
     showAdminNotice(`Зона сохранена: ${nextZone.name}`);
   };
 
-  const updateKycStatus = (userId, status) => {
-    setKycProfiles((items) =>
-      items.map((profile) =>
-        profile.userId === userId
-          ? {
-              ...profile,
-              status,
-              notes:
-                status === "verified"
-                  ? "Approved by admin. Push notification sent."
-                  : status === "blocked"
-                    ? "Blocked by admin. Support review required."
-                    : "Returned to manual moderation queue.",
-            }
-          : profile
-      )
-    );
+  const updateKycStatus = async (userId, status) => {
+    try {
+      if (status === "verified") {
+        await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Verified);
+        showAdminNotice("Rider verification approved", "users");
+      } else if (status === "blocked") {
+        setBlockDraft((draft) => ({ ...draft, userId, reason: draft.reason || "KYC rejected by administrator" }));
+        await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Rejected);
+        showAdminNotice("Rider verification rejected. Use Block to restrict login if needed.", "users");
+      } else {
+        showAdminNotice("Backend supports approve or reject. Pending reset is not available.", "users");
+      }
+      await loadBackendUsers();
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User verification could not be updated."), "users", "error");
+    }
+  };
+
+  const createBackendUser = async () => {
+    try {
+      const payload = {
+        firstName: createUserDraft.firstName.trim(),
+        lastName: createUserDraft.lastName.trim(),
+        email: createUserDraft.email.trim(),
+        phone: createUserDraft.phone.trim(),
+        password: createUserDraft.password,
+        driverLicenseNumber: createUserDraft.driverLicenseNumber.trim(),
+      };
+
+      if (Number(createUserDraft.role) === USER_ROLES.Staff) {
+        await adminUsersApi.createStaff(payload);
+      } else {
+        await adminUsersApi.createAdmin({ ...payload, role: Number(createUserDraft.role) });
+      }
+
+      setCreateUserDraft({
+        firstName: "",
+        lastName: "",
+        email: "",
+        phone: "",
+        password: "",
+        driverLicenseNumber: "",
+        role: USER_ROLES.Staff,
+      });
+      await loadBackendUsers();
+      showAdminNotice("Account created successfully", "users");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Account could not be created."), "users", "error");
+    }
+  };
+
+  const blockBackendUser = async (userId = blockDraft.userId) => {
+    if (!userId) return;
+    if (!blockDraft.reason.trim()) {
+      showAdminNotice("Block reason is required.", "users", "error");
+      return;
+    }
+
+    try {
+      await adminUsersApi.blockUser(userId, {
+        reason: blockDraft.reason.trim(),
+        duration: Number(blockDraft.duration),
+      });
+      setBlockDraft({ userId: "", reason: "", duration: USER_BLOCK_DURATIONS.FifteenMinutes });
+      await loadBackendUsers();
+      showAdminNotice("User blocked successfully", "users");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User could not be blocked."), "users", "error");
+    }
+  };
+
+  const unblockBackendUser = async (userId) => {
+    try {
+      await adminUsersApi.unblockUser(userId);
+      await loadBackendUsers();
+      setSelectedKycUserId((current) => (current === userId ? null : current));
+      showAdminNotice("User unblocked successfully", "users");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User could not be unblocked."), "users", "error");
+    }
   };
 
   const preparePenalty = () => {
@@ -1545,60 +1798,76 @@ const AdminControlRoom = () => {
     }
   };
 
-  const createServiceTask = (vehicleId) => {
-    const vehicle = getVehicle(vehicleId);
-    const assignment = resolveTaskAssignment(vehicle, incidents, tickets);
-    const assignedTech = technicians.find((tech) => tech.id === assignment.technicianId) || technicians[0];
-    const nearestStation = assignment.type === "Зарядка" ? getNearestChargingStation(vehicle) : null;
-
-    setServiceTasks((items) => [
-      {
-        id: `task-${items.length + 1}`,
-        vehicleId,
-        technicianId: assignedTech.id,
-        chargingStationId: nearestStation?.id,
-        type: assignment.type,
-        status: "Назначено",
-      },
-      ...items,
-    ]);
-    setTechnicians((items) =>
-      items.map((tech) => (tech.id === assignedTech.id ? { ...tech, status: "busy" } : tech))
-    );
-    showAdminNotice(`${assignment.type}: назначено ${assignedTech.name}`);
-  };
-
-  const createStaffTask = () => {
+  const createStaffTask = async () => {
     if (!staffTaskDraft.title.trim()) {
-      showAdminNotice("Укажите название задания", "tasks");
+      showAdminNotice("Task title is required.", "tasks", "error");
       return;
     }
 
-    const nextTasks = staffApi.createTask({
-      title: staffTaskDraft.title.trim(),
-      description: staffTaskDraft.description.trim() || "Задание создано администратором.",
-      assigneeId: staffTaskDraft.assigneeId,
-      priority: staffTaskDraft.priority,
-      dueAt: staffTaskDraft.dueAt.trim() || "Сегодня",
-      vehicleId: selectedVehicleId,
-      status: STAFF_TASK_STATUSES.WAITING,
-    });
+    if (!staffTaskDraft.description.trim()) {
+      showAdminNotice("Task description is required.", "tasks", "error");
+      return;
+    }
+
+    if (!staffTaskDraft.assigneeId) {
+      showAdminNotice("Select an active staff assignee first.", "tasks", "error");
+      return;
+    }
+
+    if (!staffTaskDraft.vehicleId) {
+      showAdminNotice("Select the vehicle for this task.", "tasks", "error");
+      return;
+    }
+
+    if (!staffTaskDraft.priority) {
+      showAdminNotice("Select task priority.", "tasks", "error");
+      return;
+    }
+
+    if (!staffTaskDraft.dueAt) {
+      showAdminNotice("Task deadline is required.", "tasks", "error");
+      return;
+    }
+
+    if (new Date(staffTaskDraft.dueAt).getTime() < Date.now() - 60000) {
+      showAdminNotice("Deadline cannot be in the past.", "tasks", "error");
+      return;
+    }
+
     const staff = staffMembers.find((item) => item.id === staffTaskDraft.assigneeId);
 
-    setStaffTasks(nextTasks);
-    setStaffTaskDraft({
-      title: "",
-      description: "",
-      assigneeId: staffTaskDraft.assigneeId,
-      priority: "Средний",
-      dueAt: "Сегодня",
-    });
-    showAdminNotice(`Задание назначено: ${staff?.name || "сотрудник"}`, "tasks");
+    try {
+      const createdTask = await adminStaffTasksApi.createTask({
+        title: staffTaskDraft.title.trim(),
+        description: staffTaskDraft.description.trim(),
+        assigneeId: staffTaskDraft.assigneeId,
+        priority: Number(staffTaskDraft.priority),
+        dueAt: staffTaskDraft.dueAt,
+        vehicleId: staffTaskDraft.vehicleId,
+      });
+      setStaffTasks((items) => upsertStaffTask(items, createdTask));
+      setStaffTaskDraft({
+        title: "",
+        description: "",
+        assigneeId: staffTaskDraft.assigneeId,
+        vehicleId: "",
+        priority: STAFF_TASK_PRIORITIES.Medium,
+        dueAt: "",
+      });
+      showAdminNotice(`Task assigned: ${staff?.name || "staff"}`, "tasks");
+    } catch (error) {
+      showAdminNotice(error.message || "Staff task could not be created.", "tasks", "error");
+    }
   };
 
-  const updateStaffTaskStatus = (taskId, status) => {
-    setStaffTasks(staffApi.updateTaskStatus(taskId, status));
-    showAdminNotice(`Статус обновлен: ${STAFF_TASK_STATUS_LABELS[status]}`, "tasks");
+  const updateStaffTaskStatus = async (taskId, status) => {
+    try {
+      const updatedTask = await adminStaffTasksApi.updateTaskStatus(taskId, Number(status));
+      setStaffTasks((items) => items.map((task) => (task.id === taskId ? updatedTask : task)));
+      showAdminNotice(`Status updated: ${STAFF_TASK_STATUS_LABELS[status]}`, "tasks");
+    } catch (error) {
+      showAdminNotice(error.message || "Task status could not be updated.", "tasks", "error");
+    }
   };
 
   const updateChargingDraft = (field, value) => {
@@ -1733,26 +2002,6 @@ const AdminControlRoom = () => {
     showAdminNotice(`Сервисная точка удалена: ${point.name}`, "service-points");
   };
 
-  const advanceTask = (taskId) => {
-    const flow = ["Назначено", "Техник в пути", "Техник на месте", "Машина обслуживается", "Готово"];
-    setServiceTasks((items) =>
-      items.map((task) => {
-        if (task.id !== taskId) return task;
-        const index = flow.indexOf(task.status);
-        const nextStatus = flow[Math.min(index + 1, flow.length - 1)];
-
-        if (nextStatus === "Готово") {
-          setTechnicians((techs) =>
-            techs.map((tech) => (tech.id === task.technicianId ? { ...tech, status: "free" } : tech))
-          );
-          showAdminNotice("Задача закрыта: машина возвращена в клиентский парк");
-        }
-
-        return { ...task, status: nextStatus };
-      })
-    );
-  };
-
   const sendChatMessage = () => {
     if (!chatDraft.trim() || !activeTicket) return;
 
@@ -1801,6 +2050,9 @@ const AdminControlRoom = () => {
 
   const renderPanelHeader = (eyebrow, title, action = null) => {
     const visibleAdminNotice = adminNotice.section === activeSection ? adminNotice.message : "";
+    const noticeClassName = adminNotice.tone === "error"
+      ? "border-red-400/30 bg-red-500/15 text-red-100"
+      : "border-emerald-400/25 bg-emerald-500/10 text-emerald-200";
 
     return (
       <div className="border-b border-white/10 p-5">
@@ -1814,8 +2066,8 @@ const AdminControlRoom = () => {
         {visibleAdminNotice && (
           <button
             type="button"
-            onClick={() => setAdminNotice({ section: null, message: "" })}
-            className="mt-4 w-full rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-left text-xs font-bold text-emerald-200"
+            onClick={() => setAdminNotice({ section: null, message: "", tone: "success" })}
+            className={`mt-4 w-full whitespace-pre-line rounded-xl border px-3 py-2 text-left text-xs font-bold ${noticeClassName}`}
           >
             {visibleAdminNotice}
           </button>
@@ -2010,6 +2262,7 @@ const AdminControlRoom = () => {
       ["phone", "Phone"],
       ["balanceAmount", "Balance"],
       ["registeredAt", "Registered"],
+      ["role", "Role"],
       ["accountStatus", "Status"],
     ];
     const toggleUserTableSort = (key) => {
@@ -2029,7 +2282,92 @@ const AdminControlRoom = () => {
           </span>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-4 p-5">
+        <div className="grid min-h-0 flex-1 gap-4 p-5">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-black text-white">Create backend account</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Admin can create Staff. SuperAdmin can create Admin and SuperAdmin.</p>
+              </div>
+              <button type="button" onClick={loadBackendUsers} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
+                Refresh users
+              </button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-4">
+              {[
+                ["firstName", "First name"],
+                ["lastName", "Last name"],
+                ["email", "Email"],
+                ["phone", "+994501234567"],
+                ["password", "Password"],
+                ["driverLicenseNumber", "License number"],
+              ].map(([key, placeholder]) => (
+                <input
+                  key={key}
+                  type={key === "password" ? "password" : key === "email" ? "email" : "text"}
+                  value={createUserDraft[key]}
+                  onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, [key]: event.target.value }))}
+                  placeholder={placeholder}
+                  className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                />
+              ))}
+              <select
+                value={createUserDraft.role}
+                onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, role: Number(event.target.value) }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value={USER_ROLES.Staff}>Staff</option>
+                {isSuperAdmin && <option value={USER_ROLES.Admin}>Admin</option>}
+                {isSuperAdmin && <option value={USER_ROLES.SuperAdmin}>SuperAdmin</option>}
+              </select>
+              <button type="button" onClick={createBackendUser} className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600">
+                Create account
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-sm font-black text-white">Block selected user</p>
+            <div className="mt-3 grid gap-2 md:grid-cols-[1fr_2fr_180px_140px]">
+              <select
+                value={blockDraft.userId}
+                onChange={(event) => setBlockDraft((draft) => ({ ...draft, userId: event.target.value }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value="">Select user</option>
+                {blockableUsers.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {`${user.firstName} ${user.lastName}`.trim() || user.email} - {normalizeRole(user.role)}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={blockDraft.reason}
+                onChange={(event) => setBlockDraft((draft) => ({ ...draft, reason: event.target.value }))}
+                placeholder="Block reason"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+              />
+              <select
+                value={blockDraft.duration}
+                onChange={(event) => setBlockDraft((draft) => ({ ...draft, duration: Number(event.target.value) }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              >
+                <option value={USER_BLOCK_DURATIONS.FifteenMinutes}>15 minutes</option>
+                <option value={USER_BLOCK_DURATIONS.OneDay}>1 day</option>
+                <option value={USER_BLOCK_DURATIONS.Forever}>Forever</option>
+              </select>
+              <button type="button" onClick={() => blockBackendUser()} className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600">
+                Block
+              </button>
+            </div>
+          </div>
+
+          {(backendUsersError || isLoadingBackendUsers) && (
+            <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${backendUsersError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+              {backendUsersError || "Loading backend users..."}
+            </p>
+          )}
+
           <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
             <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
               <div>
@@ -2060,6 +2398,7 @@ const AdminControlRoom = () => {
                         </button>
                       </th>
                     ))}
+                    <th className="px-4 py-3">Block</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
@@ -2075,10 +2414,40 @@ const AdminControlRoom = () => {
                           {row.balanceAmount.toFixed(2)} {row.balanceCurrency}
                         </td>
                         <td className="px-4 py-3 font-semibold text-slate-300">{row.registeredAt}</td>
+                        <td className="px-4 py-3 font-black text-slate-200">{row.role}</td>
                         <td className="px-4 py-3">
                           <span className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase ${status.className}`}>
                             {status.label}
                           </span>
+                          {row.raw?.blockReason && (
+                            <p className="mt-1 max-w-[220px] text-[10px] font-bold leading-4 text-red-200">
+                              {row.raw.blockReason}
+                              {row.raw.blockedUntil ? ` · until ${new Date(row.raw.blockedUntil).toLocaleString()}` : " · forever"}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
+                            <button
+                              type="button"
+                              onClick={() => setBlockDraft((draft) => ({ ...draft, userId: row.id }))}
+                              className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
+                            >
+                              Select
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => unblockBackendUser(row.id)}
+                              className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[10px] font-black uppercase text-emerald-100"
+                            >
+                              Unblock
+                            </button>
+                          ) : (
+                            <span className="rounded-lg bg-white/[0.06] px-3 py-2 text-[10px] font-black uppercase text-slate-500">
+                              Protected
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -2164,18 +2533,18 @@ const AdminControlRoom = () => {
                 <div className="mt-4 grid gap-3">
                   <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-4">
                     <p className="mb-3 flex items-center gap-2 text-sm font-black text-white">
-                      <FiUserCheck /> Side-by-side verification
+                      <FiUserCheck /> Verification details
                     </p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded-xl bg-white/[0.05] p-3">
                         <p className="text-[10px] font-black uppercase text-slate-500">Анкета + селфи</p>
-                        <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.selfie}</p>
+                        <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.account || selectedKycUser.email}</p>
                         <p className="mt-1 text-xs font-semibold text-slate-400">{selectedKycUser.kyc.submittedAt}</p>
                       </div>
                       <div className="rounded-xl bg-white/[0.05] p-3">
                         <p className="text-[10px] font-black uppercase text-slate-500">Паспорт + права</p>
-                        <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.passport}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{selectedKycUser.kyc.license}</p>
+                        <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.documents || selectedKycUser.driverLicenseNumber || "No driver license number"}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-400">{selectedKycUser.kyc.identity || selectedKycUser.phone || "No phone number"}</p>
                       </div>
                     </div>
                     <p className="mt-3 rounded-xl bg-white/[0.04] px-3 py-2 text-xs font-semibold leading-5 text-slate-400">
@@ -2183,29 +2552,47 @@ const AdminControlRoom = () => {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  {selectedKycUser.isActive && selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Verified ? (
+                    <div className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-center text-xs font-black text-emerald-100">
+                      Verification approved
+                    </div>
+                  ) : selectedKycUser.isActive ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
+                        className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateKycStatus(selectedKycUser.id, "blocked")}
+                        className="rounded-xl bg-amber-500 px-3 py-3 text-xs font-black text-amber-950 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Reject KYC
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBlockDraft((draft) => ({
+                          ...draft,
+                          userId: selectedKycUser.id,
+                          reason: draft.reason || "KYC or account policy violation",
+                        }))}
+                        className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black text-white"
+                      >
+                        Select block
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
+                      onClick={() => unblockBackendUser(selectedKycUser.id)}
                       className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white"
                     >
-                      Approve
+                      Unblock account
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => updateKycStatus(selectedKycUser.id, "pending")}
-                      className="rounded-xl bg-amber-500 px-3 py-3 text-xs font-black text-amber-950"
-                    >
-                      Review
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateKycStatus(selectedKycUser.id, "blocked")}
-                      className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black text-white"
-                    >
-                      Block
-                    </button>
-                  </div>
+                  )}
 
                   <button
                     type="button"
@@ -2955,134 +3342,158 @@ const AdminControlRoom = () => {
 
   const renderTasksPanel = () => (
     <>
-      {renderPanelHeader("Task Manager", "Техники и сервис", <button type="button" onClick={() => createServiceTask(selectedVehicleId)} className="rounded-xl bg-red-500 px-3 py-2 text-xs font-black text-white"><FiPlus className="inline" /> Задача</button>)}
+      {renderPanelHeader("Task Manager", "Technicians and service")}
       <div className="grid gap-4 overflow-y-auto p-5">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
-          Техники — полевая команда: мойка, зарядка, осмотр, мелкий ремонт. “Следующий статус” двигает задачу по цепочке: назначено → в пути → на месте → обслуживается → готово.
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <div className="grid gap-2">
-            <input
-              value={staffTaskDraft.title}
-              onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
-              placeholder="Название задания для сотрудника"
-              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-            />
-            <textarea
-              value={staffTaskDraft.description}
-              onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, description: event.target.value }))}
-              placeholder="Описание"
-              rows={3}
-              className="resize-none rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-            />
-            <div className="grid gap-2 md:grid-cols-3">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/10">
+          <div className="mb-4 flex flex-col gap-1">
+            <p className="text-sm font-black text-white">Create service task</p>
+            <p className="text-xs font-semibold text-slate-500">Assign a staff member, choose the exact vehicle by plate number, and set a future deadline.</p>
+          </div>
+          <div className="grid gap-3">
+            <div className="grid gap-3">
+              <div className="grid gap-3">
+                <input
+                  value={staffTaskDraft.title}
+                  onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
+                  placeholder="Task title"
+                  className="rounded-xl border border-white/10 bg-[#111a2b] px-4 py-3 text-sm font-bold text-white outline-none transition placeholder:text-slate-500 focus:border-red-400/70"
+                />
+                <textarea
+                  value={staffTaskDraft.description}
+                  onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, description: event.target.value }))}
+                  placeholder="Task description"
+                  rows={4}
+                  className="resize-none rounded-xl border border-white/10 bg-[#111a2b] px-4 py-3 text-sm font-bold leading-6 text-white outline-none transition placeholder:text-slate-500 focus:border-red-400/70"
+                />
+              </div>
+              <label className="rounded-xl border border-red-400/20 bg-red-500/10 p-3">
+                <span className="text-[10px] font-black uppercase tracking-wide text-red-200">Deadline</span>
+                <input
+                  type="datetime-local"
+                  value={staffTaskDraft.dueAt}
+                  min={toDateTimeLocalValue()}
+                  onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, dueAt: event.target.value }))}
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f1728] px-3 py-3 text-sm font-black text-white outline-none [color-scheme:dark] focus:border-red-300"
+                />
+                <span className="mt-2 block text-[11px] font-bold leading-4 text-red-100/80">Past dates are disabled.</span>
+              </label>
+            </div>
+            <div className="grid gap-2">
               <select
                 value={staffTaskDraft.assigneeId}
                 onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, assigneeId: event.target.value }))}
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
               >
+                <option value="">Select active staff</option>
                 {staffMembers.map((staff) => (
                   <option key={staff.id} value={staff.id}>
-                    {staff.name}
+                    {staff.name} {staff.email ? `- ${staff.email}` : ""}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={staffTaskDraft.vehicleId}
+                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, vehicleId: event.target.value }))}
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
+              >
+                <option value="">No vehicle</option>
+                {backendVehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.plateNumber} - {vehicle.brand} {vehicle.model}
                   </option>
                 ))}
               </select>
               <select
                 value={staffTaskDraft.priority}
                 onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, priority: event.target.value }))}
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
               >
-                <option value="Высокий">Высокий</option>
-                <option value="Средний">Средний</option>
-                <option value="Низкий">Низкий</option>
+                <option value={STAFF_TASK_PRIORITIES.High}>High</option>
+                <option value={STAFF_TASK_PRIORITIES.Medium}>Medium</option>
+                <option value={STAFF_TASK_PRIORITIES.Low}>Low</option>
               </select>
-              <input
-                value={staffTaskDraft.dueAt}
-                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, dueAt: event.target.value }))}
-                placeholder="Срок"
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-              />
             </div>
             <button type="button" onClick={createStaffTask} className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600">
-              Назначить сотруднику
+              Assign task
             </button>
+            {backendVehiclesError && (
+              <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">
+                {backendVehiclesError}
+              </p>
+            )}
           </div>
         </div>
-
         <div className="grid gap-3">
+          {(staffTasksError || isLoadingStaffTasks) && (
+            <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${staffTasksError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+              {staffTasksError || "Loading staff tasks..."}
+            </p>
+          )}
           {staffTasks.map((task) => {
             const staff = staffMembers.find((item) => item.id === task.assigneeId);
+            const taskVehicle = backendVehicles.find((vehicle) => vehicle.id === task.vehicleId);
+            const priorityStyle =
+              STAFF_TASK_PRIORITY_STYLES[task.priority] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
+            const statusStyle =
+              STAFF_TASK_STATUS_STYLES[task.status] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
+            const deadlineLabel = task.dueAt ? new Date(task.dueAt).toLocaleString() : "No deadline";
+            const vehicleLabel = taskVehicle
+              ? `${taskVehicle.plateNumber} - ${taskVehicle.brand} ${taskVehicle.model}`
+              : "No vehicle";
+
             return (
-              <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="text-sm font-black text-white">{task.title}</p>
-                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{task.description}</p>
-                    <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
-                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{staff?.name || "staff"}</span>
-                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.priority}</span>
-                      <span className="rounded-full bg-white/[0.06] px-3 py-1">{task.dueAt}</span>
-                      <span className="rounded-full bg-blue-500/10 px-3 py-1 text-blue-200">
+              <article key={task.id} className="rounded-2xl border border-white/10 bg-[#10192a] p-4 shadow-lg shadow-black/10">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="min-w-0 text-base font-black leading-6 text-white">{task.title}</h3>
+                      <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${statusStyle}`}>
                         {STAFF_TASK_STATUS_LABELS[task.status]}
                       </span>
+                      <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${priorityStyle}`}>
+                        {STAFF_TASK_PRIORITY_LABELS[task.priority] || task.priority}
+                      </span>
                     </div>
-                  </div>
-                  <div className="grid shrink-0 grid-cols-3 gap-2">
-                    {Object.entries(STAFF_TASK_STATUS_LABELS).map(([status, label]) => (
-                      <button
-                        key={status}
-                        type="button"
-                        onClick={() => updateStaffTaskStatus(task.id, status)}
-                        className={`rounded-xl px-3 py-2 text-[10px] font-black ${
-                          task.status === status ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                    <p className="mt-2 max-w-3xl text-xs font-semibold leading-5 text-slate-400">{task.description}</p>
                   </div>
                 </div>
-              </div>
+
+                <div className="mt-4 grid gap-2 md:grid-cols-3">
+                  <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.045] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Assignee</p>
+                    <p className="mt-1 truncate text-sm font-black text-white">{staff?.name || "Unassigned"}</p>
+                  </div>
+                  <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.045] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Vehicle</p>
+                    <p className="mt-1 break-words text-sm font-black text-white">{vehicleLabel}</p>
+                  </div>
+                  <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.045] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Deadline</p>
+                    <p className="mt-1 text-sm font-black text-white">{deadlineLabel}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {Object.entries(STAFF_TASK_STATUS_LABELS).map(([status, label]) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => updateStaffTaskStatus(task.id, status)}
+                      className={`rounded-xl px-3 py-3 text-[11px] font-black transition ${
+                        task.status === status
+                          ? "bg-red-500 text-white shadow-lg shadow-red-950/20"
+                          : "bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </article>
             );
           })}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          {technicians.map((tech) => (
-            <div key={tech.id} className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
-              <p className="text-xs font-black text-white">{tech.name}</p>
-              <p className="mt-1 text-[10px] font-semibold text-slate-400">{tech.specialty}</p>
-              <p className={`mt-1 text-[10px] font-black uppercase ${tech.status === "free" ? "text-emerald-300" : "text-amber-300"}`}>{tech.status}</p>
-            </div>
-          ))}
-        </div>
-        {serviceTasks.map((task) => {
-          const vehicle = getVehicle(task.vehicleId);
-          const tech = technicians.find((item) => item.id === task.technicianId);
-          const station = managedChargingStations.find((item) => item.id === task.chargingStationId);
-          return (
-            <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-              <p className="text-sm font-black text-white">
-                {task.type}: {vehicle?.brand} {vehicle?.model}
-                {task.autoCreated && <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-1 text-[10px] text-amber-200">auto</span>}
-              </p>
-              <p className="mt-1 text-xs font-semibold text-slate-400">{tech?.name} · {task.status}</p>
-              {station && (
-                <p className="mt-2 text-xs font-semibold text-emerald-200">
-                  Станция: {station.name} · {station.availablePorts}/{station.totalPorts} портов
-                </p>
-              )}
-              {task.userNotice && (
-                <p className="mt-2 rounded-xl bg-white/[0.05] px-3 py-2 text-xs font-semibold leading-5 text-slate-300">
-                  Push пользователю: {task.userNotice}
-                </p>
-              )}
-              <button type="button" onClick={() => advanceTask(task.id)} className="mt-3 rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
-                Следующий статус
-              </button>
-            </div>
-          );
-        })}
       </div>
     </>
   );

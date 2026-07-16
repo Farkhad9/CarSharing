@@ -184,6 +184,9 @@ public sealed class ChargingSystemTests
     {
         public List<StaffTask> Items { get; } = [];
 
+        public Task<IReadOnlyList<StaffTask>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffTask>>(Items);
+
         public Task<StaffTask?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(Items.FirstOrDefault(x => x.Id == id));
 

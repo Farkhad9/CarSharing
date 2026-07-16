@@ -137,7 +137,8 @@ public sealed class AdminUserManagementTests
             new CreateStaffUserRequestValidator(),
             new CreateAdminUserRequestValidator(),
             new UpdateUserRoleRequestValidator(),
-            new UpdateUserVerificationRequestValidator());
+            new UpdateUserVerificationRequestValidator(),
+            new BlockUserRequestValidator());
 
         return new Fixture(service, users);
     }
@@ -163,6 +164,111 @@ public sealed class AdminUserManagementTests
             "Admin123!",
             "ADMIN123",
             role);
+    }
+
+    [Fact]
+    public async Task BlockUserAsync_WithDuration_StoresReasonAndUntil()
+    {
+        var rider = User.CreateRider("Test", "Rider", "rider-block@test.local", "+994505555555", "hash", "RIDER2");
+        var adminId = Guid.NewGuid();
+        var fixture = CreateFixture(UserRole.Admin, adminId, rider);
+
+        var result = await fixture.Service.BlockUserAsync(
+            rider.Id,
+            new BlockUserRequest("Repeated late returns", UserBlockDuration.FifteenMinutes));
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value!.IsActive);
+        Assert.Equal("Repeated late returns", result.Value.BlockReason);
+        Assert.NotNull(result.Value.BlockedUntil);
+        Assert.Equal(adminId, result.Value.BlockedByUserId);
+    }
+
+    [Fact]
+    public async Task BlockUserAsync_ForCurrentUser_IsRejected()
+    {
+        var admin = User.CreateAdmin("Root", "Admin", "admin-self@test.local", "+994506666666", "hash", "ADMIN2");
+        var fixture = CreateFixture(UserRole.Admin, admin.Id, admin);
+
+        var result = await fixture.Service.BlockUserAsync(
+            admin.Id,
+            new BlockUserRequest("Self block", UserBlockDuration.OneDay));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotDisableSelf", result.Errors.Single().Code);
+        Assert.True(admin.IsActive);
+    }
+
+    [Fact]
+    public async Task BlockUserAsync_ForSuperAdminByAdmin_IsRejected()
+    {
+        var superAdmin = User.CreateSuperAdmin("Super", "Admin", "super@test.local", "+994507777777", "hash", "SUPER1");
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: superAdmin);
+
+        var result = await fixture.Service.BlockUserAsync(
+            superAdmin.Id,
+            new BlockUserRequest("Nope", UserBlockDuration.Forever));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotManageSuperAdmin", result.Errors.Single().Code);
+        Assert.True(superAdmin.IsActive);
+    }
+
+    [Fact]
+    public async Task BlockUserAsync_ForAdminByAdmin_IsRejected()
+    {
+        var targetAdmin = User.CreateAdmin("Target", "Admin", "target-admin@test.local", "+994509999999", "hash", "ADMIN3");
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: targetAdmin);
+
+        var result = await fixture.Service.BlockUserAsync(
+            targetAdmin.Id,
+            new BlockUserRequest("Nope", UserBlockDuration.Forever));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotManageAdminAccount", result.Errors.Single().Code);
+        Assert.True(targetAdmin.IsActive);
+    }
+
+    [Fact]
+    public async Task UnblockUserAsync_ClearsBlockFields()
+    {
+        var staff = User.CreateStaff("Staff", "User", "staff-block@test.local", "+994508888888", "hash", "STAFF3");
+        staff.Block("Temporary", DateTime.UtcNow.AddDays(1), Guid.NewGuid(), DateTime.UtcNow);
+        var fixture = CreateFixture(UserRole.SuperAdmin, seedUsers: staff);
+
+        var result = await fixture.Service.UnblockUserAsync(staff.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value!.IsActive);
+        Assert.Null(result.Value.BlockReason);
+        Assert.Null(result.Value.BlockedUntil);
+    }
+
+    [Fact]
+    public async Task CreateStaffValidator_RejectsLicenseWithoutDigits()
+    {
+        var validator = new CreateStaffUserRequestValidator();
+
+        var result = await validator.ValidateAsync(CreateStaffRequest() with
+        {
+            DriverLicenseNumber = "ONLYLETTERS"
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.PropertyName == nameof(CreateStaffUserRequest.DriverLicenseNumber));
+    }
+
+    [Fact]
+    public async Task CreateStaffValidator_AcceptsLicenseWithLettersAndDigits()
+    {
+        var validator = new CreateStaffUserRequestValidator();
+
+        var result = await validator.ValidateAsync(CreateStaffRequest() with
+        {
+            DriverLicenseNumber = "AZE1234567"
+        });
+
+        Assert.True(result.IsValid);
     }
 
     private sealed record Fixture(AdminUserService Service, UserRepo Users);

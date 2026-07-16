@@ -98,7 +98,7 @@ public class AuthController : ControllerBase
             return Unauthorized(new { errors });
         }
 
-        if (errors.Any(error => error.Code == "User.Disabled"))
+        if (errors.Any(error => error.Code is "User.Disabled" or "User.Blocked"))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new { errors });
         }

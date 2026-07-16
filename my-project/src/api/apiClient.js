@@ -1,13 +1,24 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5019";
+export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5019";
+
+export const getAccessToken = () => localStorage.getItem("electroStreetAccessToken");
 
 const getAuthHeaders = () => {
-  const token = localStorage.getItem("electroStreetAccessToken");
+  const token = getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+const parseJson = (text) => {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
 };
 
 export const apiRequest = async (path, options = {}) => {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...getAuthHeaders(),
@@ -16,10 +27,20 @@ export const apiRequest = async (path, options = {}) => {
   });
 
   if (response.status === 204) return null;
-  const data = await response.json().catch(() => null);
+  const responseText = await response.text();
+  const data = parseJson(responseText);
   if (!response.ok) {
-    const error = new Error(data?.errors?.[0]?.message || data?.error || "API request failed.");
+    const messages = Array.isArray(data?.errors)
+      ? data.errors.map((item) => item.message).filter(Boolean)
+      : [];
+    const fallbackMessage = response.status === 401
+      ? "You are not logged in or your session expired. Please sign in again."
+      : response.status === 403
+        ? "Access denied for this action."
+        : `API request failed (${response.status}).`;
+    const error = new Error(messages.length ? messages.join("\n") : data?.error || responseText || fallbackMessage);
     error.code = data?.errors?.[0]?.code;
+    error.errors = data?.errors || [];
     error.status = response.status;
     throw error;
   }
@@ -28,6 +49,7 @@ export const apiRequest = async (path, options = {}) => {
 
 export const apiDownload = async (path, fileName = "download.pdf") => {
   const response = await fetch(`${API_URL}${path}`, {
+    credentials: "include",
     headers: getAuthHeaders(),
   });
 

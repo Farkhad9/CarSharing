@@ -16,6 +16,7 @@ public sealed class AdminUserService : IAdminUserService
     private static readonly Error EmailNotUnique = new("AdminUsers.EmailNotUnique", "User with this email already exists.");
     private static readonly Error CannotDisableSelf = new("AdminUsers.CannotDisableSelf", "You cannot disable your own account.");
     private static readonly Error CannotManageSuperAdmin = new("AdminUsers.CannotManageSuperAdmin", "Only SuperAdmin can manage a SuperAdmin account.");
+    private static readonly Error CannotManageAdminAccount = new("AdminUsers.CannotManageAdminAccount", "Only SuperAdmin can manage admin accounts.");
     private static readonly Error CannotVerifyInternalUser = new("AdminUsers.CannotVerifyInternalUser", "Internal users do not use rider verification.");
 
     private readonly IUserRepository _userRepository;
@@ -26,6 +27,7 @@ public sealed class AdminUserService : IAdminUserService
     private readonly IValidator<CreateAdminUserRequest> _createAdminValidator;
     private readonly IValidator<UpdateUserRoleRequest> _updateRoleValidator;
     private readonly IValidator<UpdateUserVerificationRequest> _updateVerificationValidator;
+    private readonly IValidator<BlockUserRequest> _blockUserValidator;
 
     public AdminUserService(
         IUserRepository userRepository,
@@ -35,7 +37,8 @@ public sealed class AdminUserService : IAdminUserService
         IValidator<CreateStaffUserRequest> createStaffValidator,
         IValidator<CreateAdminUserRequest> createAdminValidator,
         IValidator<UpdateUserRoleRequest> updateRoleValidator,
-        IValidator<UpdateUserVerificationRequest> updateVerificationValidator)
+        IValidator<UpdateUserVerificationRequest> updateVerificationValidator,
+        IValidator<BlockUserRequest> blockUserValidator)
     {
         _userRepository = userRepository;
         _currentUser = currentUser;
@@ -45,6 +48,7 @@ public sealed class AdminUserService : IAdminUserService
         _createAdminValidator = createAdminValidator;
         _updateRoleValidator = updateRoleValidator;
         _updateVerificationValidator = updateVerificationValidator;
+        _blockUserValidator = blockUserValidator;
     }
 
     public async Task<Result<IReadOnlyList<AdminUserDto>>> GetUsersAsync(
@@ -112,6 +116,73 @@ public sealed class AdminUserService : IAdminUserService
             request.DriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<AdminUserDto>.Success(ToDto(user));
+    }
+
+    public async Task<Result<AdminUserDto>> BlockUserAsync(
+        Guid id,
+        BlockUserRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var access = RequireAdmin();
+        if (access is not null)
+        {
+            return Result<AdminUserDto>.Failure(access);
+        }
+
+        var validation = await _blockUserValidator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+        {
+            return Result<AdminUserDto>.Failure(ToValidationErrors(validation));
+        }
+
+        var user = await _userRepository.GetByIdAsync(id, cancellationToken);
+        if (user is null)
+        {
+            return Result<AdminUserDto>.Failure(NotFound);
+        }
+
+        if (user.Id == _currentUser.UserId)
+        {
+            return Result<AdminUserDto>.Failure(CannotDisableSelf);
+        }
+
+        var managementError = EnsureCanManage(user);
+        if (managementError is not null)
+        {
+            return Result<AdminUserDto>.Failure(managementError);
+        }
+
+        var now = DateTime.UtcNow;
+        user.Block(request.Reason, GetBlockedUntil(request.Duration, now), _currentUser.UserId, now);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<AdminUserDto>.Success(ToDto(user));
+    }
+
+    public async Task<Result<AdminUserDto>> UnblockUserAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var access = RequireAdmin();
+        if (access is not null)
+        {
+            return Result<AdminUserDto>.Failure(access);
+        }
+
+        var user = await _userRepository.GetByIdAsync(id, cancellationToken);
+        if (user is null)
+        {
+            return Result<AdminUserDto>.Failure(NotFound);
+        }
+
+        var managementError = EnsureCanManage(user);
+        if (managementError is not null)
+        {
+            return Result<AdminUserDto>.Failure(managementError);
+        }
+
+        user.Unblock();
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<AdminUserDto>.Success(ToDto(user));
@@ -196,15 +267,15 @@ public sealed class AdminUserService : IAdminUserService
             return Result<AdminUserDto>.Failure(NotFound);
         }
 
+        if (!request.IsActive && user.Id == _currentUser.UserId)
+        {
+            return Result<AdminUserDto>.Failure(CannotDisableSelf);
+        }
+
         var managementError = EnsureCanManage(user);
         if (managementError is not null)
         {
             return Result<AdminUserDto>.Failure(managementError);
-        }
-
-        if (!request.IsActive && user.Id == _currentUser.UserId)
-        {
-            return Result<AdminUserDto>.Failure(CannotDisableSelf);
         }
 
         if (request.IsActive)
@@ -287,9 +358,17 @@ public sealed class AdminUserService : IAdminUserService
 
     private Error? EnsureCanManage(User target)
     {
-        return target.Role == UserRole.SuperAdmin && _currentUser.Role != UserRole.SuperAdmin
-            ? CannotManageSuperAdmin
-            : null;
+        if (_currentUser.Role == UserRole.SuperAdmin)
+        {
+            return null;
+        }
+
+        return target.Role switch
+        {
+            UserRole.SuperAdmin => CannotManageSuperAdmin,
+            UserRole.Admin => CannotManageAdminAccount,
+            _ => null
+        };
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
@@ -314,7 +393,22 @@ public sealed class AdminUserService : IAdminUserService
             user.VerificationStatus,
             user.Role,
             user.IsActive,
+            user.BlockReason,
+            user.BlockedAt,
+            user.BlockedUntil,
+            user.BlockedByUserId,
             user.CreatedAt,
             user.VerifiedAt);
+    }
+
+    private static DateTime? GetBlockedUntil(UserBlockDuration duration, DateTime now)
+    {
+        return duration switch
+        {
+            UserBlockDuration.FifteenMinutes => now.AddMinutes(15),
+            UserBlockDuration.OneDay => now.AddDays(1),
+            UserBlockDuration.Forever => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(duration), duration, null)
+        };
     }
 }

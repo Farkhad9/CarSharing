@@ -22,6 +22,10 @@ public class User : BaseEntity
     public bool IsActive { get; private set; } = true;
     public DateTime CreatedAt { get; private set; }
     public DateTime? VerifiedAt { get; private set; }
+    public string? BlockReason { get; private set; }
+    public DateTime? BlockedAt { get; private set; }
+    public DateTime? BlockedUntil { get; private set; }
+    public Guid? BlockedByUserId { get; private set; }
     public string? RefreshTokenHash { get; private set; }
     public DateTime? RefreshTokenExpiresAt { get; private set; }
 
@@ -136,13 +140,47 @@ public class User : BaseEntity
 
     public void Activate()
     {
-        IsActive = true;
+        Unblock();
     }
 
     public void Deactivate()
     {
+        Block("Account disabled.", null, null, DateTime.UtcNow);
+    }
+
+    public void Block(string reason, DateTime? blockedUntil, Guid? blockedByUserId, DateTime blockedAt)
+    {
         IsActive = false;
+        BlockReason = reason.Trim();
+        BlockedAt = blockedAt;
+        BlockedUntil = blockedUntil;
+        BlockedByUserId = blockedByUserId;
         RevokeRefreshToken();
+    }
+
+    public void Unblock()
+    {
+        IsActive = true;
+        BlockReason = null;
+        BlockedAt = null;
+        BlockedUntil = null;
+        BlockedByUserId = null;
+    }
+
+    public bool IsBlocked(DateTime utcNow)
+    {
+        return !IsActive && (!BlockedUntil.HasValue || BlockedUntil.Value > utcNow);
+    }
+
+    public bool TryExpireBlock(DateTime utcNow)
+    {
+        if (IsActive || !BlockedUntil.HasValue || BlockedUntil.Value > utcNow)
+        {
+            return false;
+        }
+
+        Unblock();
+        return true;
     }
 
     public void SetRefreshToken(string refreshTokenHash, DateTime expiresAt)

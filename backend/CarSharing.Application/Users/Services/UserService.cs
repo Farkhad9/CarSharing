@@ -90,6 +90,17 @@ public class UserService : IUserService
             return Result<AuthResponse>.Failure(InvalidCredentials);
         }
 
+        var now = DateTime.UtcNow;
+        if (user.IsBlocked(now))
+        {
+            return Result<AuthResponse>.Failure(ToBlockedError(user));
+        }
+
+        if (user.TryExpireBlock(now))
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         if (!user.IsActive)
         {
             return Result<AuthResponse>.Failure(Disabled);
@@ -115,6 +126,17 @@ public class UserService : IUserService
         if (user is null || !user.HasValidRefreshToken(refreshTokenHash, DateTime.UtcNow))
         {
             return Result<AuthResponse>.Failure(InvalidRefreshToken);
+        }
+
+        var now = DateTime.UtcNow;
+        if (user.IsBlocked(now))
+        {
+            return Result<AuthResponse>.Failure(ToBlockedError(user));
+        }
+
+        if (user.TryExpireBlock(now))
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         if (!user.IsActive)
@@ -211,5 +233,14 @@ public class UserService : IUserService
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken));
         return Convert.ToHexString(bytes);
+    }
+
+    private static Error ToBlockedError(User user)
+    {
+        var unlockText = user.BlockedUntil.HasValue
+            ? $" Unlocks at {user.BlockedUntil.Value.AddHours(4):dd.MM.yyyy HH:mm} Baku time."
+            : " Blocked permanently.";
+
+        return new Error("User.Blocked", $"User account is blocked. Reason: {user.BlockReason ?? "No reason provided."}.{unlockText}");
     }
 }

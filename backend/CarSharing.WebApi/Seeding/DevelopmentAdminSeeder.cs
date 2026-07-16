@@ -24,6 +24,14 @@ public static class DevelopmentAdminSeeder
             return;
         }
 
+        var legacyAdmin = await dbContext.Users
+            .FirstOrDefaultAsync(user => user.Email == "admin@carsharing.local");
+        if (legacyAdmin is not null && legacyAdmin.Email != email)
+        {
+            dbContext.Users.Remove(legacyAdmin);
+            await dbContext.SaveChangesAsync();
+        }
+
         var exists = await dbContext.Users.AnyAsync(user => user.Email == email);
         if (exists)
         {

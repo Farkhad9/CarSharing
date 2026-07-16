@@ -3,6 +3,7 @@ using CarSharing.Application.Common.Models;
 using CarSharing.Application.StaffTasks.Dtos;
 using CarSharing.Domain.Entities;
 using CarSharing.Domain.Enums;
+using FluentValidation;
 
 namespace CarSharing.Application.StaffTasks.Services;
 
@@ -10,21 +11,39 @@ public sealed class StaffTaskService : IStaffTaskService
 {
     private static readonly Error Unauthenticated = new("StaffTask.Unauthenticated", "User must be authenticated.");
     private static readonly Error StaffRequired = new("StaffTask.StaffRequired", "Only staff, admin, or super admin can manage staff tasks.");
+    private static readonly Error AdminRequired = new("StaffTask.AdminRequired", "Only admin or super admin can manage all staff tasks.");
     private static readonly Error TaskNotFound = new("StaffTask.NotFound", "Staff task was not found.");
     private static readonly Error Forbidden = new("StaffTask.Forbidden", "User is not allowed to update this task.");
+    private static readonly Error AssigneeNotFound = new("StaffTask.AssigneeNotFound", "Staff assignee was not found.");
+    private static readonly Error AssigneeMustBeStaff = new("StaffTask.AssigneeMustBeStaff", "Task assignee must be an active staff user.");
 
     private readonly IStaffTaskRepository _staffTaskRepository;
+    private readonly IUserRepository _userRepository;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IValidator<CreateStaffTaskRequest> _createStaffTaskValidator;
 
     public StaffTaskService(
         IStaffTaskRepository staffTaskRepository,
+        IUserRepository userRepository,
         ICurrentUserService currentUser,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IValidator<CreateStaffTaskRequest> createStaffTaskValidator)
     {
         _staffTaskRepository = staffTaskRepository;
+        _userRepository = userRepository;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
+        _createStaffTaskValidator = createStaffTaskValidator;
+    }
+
+    public async Task<Result<IReadOnlyList<StaffTaskDto>>> GetAllTasksAsync(CancellationToken cancellationToken = default)
+    {
+        var accessError = RequireAdmin();
+        if (accessError is not null) return Result<IReadOnlyList<StaffTaskDto>>.Failure(accessError);
+
+        var tasks = await _staffTaskRepository.GetAllAsync(cancellationToken);
+        return Result<IReadOnlyList<StaffTaskDto>>.Success(tasks.Select(Map).ToList());
     }
 
     public async Task<Result<IReadOnlyList<StaffTaskDto>>> GetMyTasksAsync(CancellationToken cancellationToken = default)
@@ -34,6 +53,43 @@ public sealed class StaffTaskService : IStaffTaskService
 
         var tasks = await _staffTaskRepository.GetByAssigneeIdAsync(_currentUser.UserId!.Value, cancellationToken);
         return Result<IReadOnlyList<StaffTaskDto>>.Success(tasks.Select(Map).ToList());
+    }
+
+    public async Task<Result<StaffTaskDto>> CreateAsync(CreateStaffTaskRequest request, CancellationToken cancellationToken = default)
+    {
+        var accessError = RequireAdmin();
+        if (accessError is not null) return Result<StaffTaskDto>.Failure(accessError);
+
+        var validation = await _createStaffTaskValidator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+        {
+            return Result<StaffTaskDto>.Failure(ToValidationErrors(validation));
+        }
+
+        var assignee = await _userRepository.GetByIdAsync(request.AssigneeId, cancellationToken);
+        if (assignee is null)
+        {
+            return Result<StaffTaskDto>.Failure(AssigneeNotFound);
+        }
+
+        if (assignee.Role != UserRole.Staff || !assignee.IsActive || assignee.IsBlocked(DateTime.UtcNow))
+        {
+            return Result<StaffTaskDto>.Failure(AssigneeMustBeStaff);
+        }
+
+        var task = StaffTask.Create(
+            request.Title,
+            request.Description,
+            request.AssigneeId,
+            request.VehicleId,
+            request.Priority,
+            request.DueAt,
+            DateTime.UtcNow);
+
+        await _staffTaskRepository.AddAsync(task, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<StaffTaskDto>.Success(Map(task));
     }
 
     public async Task<Result<StaffTaskDto>> UpdateStatusAsync(Guid taskId, UpdateStaffTaskStatusRequest request, CancellationToken cancellationToken = default)
@@ -59,6 +115,19 @@ public sealed class StaffTaskService : IStaffTaskService
     {
         if (_currentUser.UserId is null) return Unauthenticated;
         return _currentUser.Role is UserRole.Staff or UserRole.Admin or UserRole.SuperAdmin ? null : StaffRequired;
+    }
+
+    private Error? RequireAdmin()
+    {
+        if (_currentUser.UserId is null) return Unauthenticated;
+        return _currentUser.Role is UserRole.Admin or UserRole.SuperAdmin ? null : AdminRequired;
+    }
+
+    private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
+    {
+        return validationResult.Errors
+            .Select(error => new Error($"Validation.{error.PropertyName}", error.ErrorMessage))
+            .ToList();
     }
 
     private static StaffTaskDto Map(StaffTask task) => new(

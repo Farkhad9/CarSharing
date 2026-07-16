@@ -29,6 +29,13 @@ public interface IAdminUserService
         UpdateUserStatusRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<Result<AdminUserDto>> BlockUserAsync(
+        Guid id,
+        BlockUserRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<Result<AdminUserDto>> UnblockUserAsync(Guid id, CancellationToken cancellationToken = default);
+
     Task<Result<AdminUserDto>> UpdateVerificationAsync(
         Guid id,
         UpdateUserVerificationRequest request,
