@@ -7,6 +7,8 @@ public interface IStripePaymentGateway
 {
     Task<StripeCheckoutSession> CreateTopUpSessionAsync(Guid transactionId, Guid userId, string email,
         decimal amount, string currency, CancellationToken cancellationToken = default);
+    Task<StripeCheckoutSession> CreateTripPaymentSessionAsync(Guid transactionId, Guid userId, Guid tripId, string email,
+        decimal amount, string currency, CancellationToken cancellationToken = default);
     Task<StripePaymentEvent?> ParseCompletedCheckoutAsync(string payload, string signature,
         CancellationToken cancellationToken = default);
 }

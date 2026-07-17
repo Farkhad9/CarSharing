@@ -12,6 +12,8 @@ public class UserDto
     public decimal Balance { get; set; }
     public decimal PendingHold { get; set; }
     public string DriverLicenseNumber { get; set; } = null!;
+    public string? DriverLicenseDocumentUrl { get; set; }
+    public string? PassportDocumentUrl { get; set; }
     public bool EmailVerified { get; set; }
     public UserVerificationStatus VerificationStatus { get; set; }
     public UserRole Role { get; set; }
@@ -20,5 +22,6 @@ public class UserDto
     public DateTime? BlockedAt { get; set; }
     public DateTime? BlockedUntil { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? VerificationSubmittedAt { get; set; }
     public DateTime? VerifiedAt { get; set; }
 }

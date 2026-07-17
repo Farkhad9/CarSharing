@@ -92,6 +92,20 @@ public sealed class AdminUserManagementTests
     }
 
     [Fact]
+    public async Task UpdateVerificationAsync_ForVerifiedRider_CanResetToPending()
+    {
+        var rider = User.CreateRider("Test", "Rider", "rider-pending@test.local", "+994503333334", "hash", "RIDER2");
+        rider.ApproveVerification();
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: rider);
+
+        var result = await fixture.Service.UpdateVerificationAsync(rider.Id, new UpdateUserVerificationRequest(UserVerificationStatus.Pending));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(UserVerificationStatus.Pending, result.Value!.VerificationStatus);
+        Assert.Null(rider.VerifiedAt);
+    }
+
+    [Fact]
     public async Task UpdateVerificationAsync_ForStaff_IsRejected()
     {
         var staff = User.CreateStaff("Staff", "User", "staff@test.local", "+994504444444", "hash", "STAFF2");
@@ -121,6 +135,22 @@ public sealed class AdminUserManagementTests
         Assert.Equal(query.Role, fixture.Users.LastQuery?.Role);
         Assert.Equal(query.IsActive, fixture.Users.LastQuery?.IsActive);
         Assert.Equal(query.VerificationStatus, fixture.Users.LastQuery?.VerificationStatus);
+    }
+
+    [Fact]
+    public async Task CreateStaffAsync_WithDuplicatePhone_IsRejected()
+    {
+        var existing = User.CreateRider("Test", "Rider", "phone@test.local", "+994501234567", "hash", "RIDER3");
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: existing);
+
+        var result = await fixture.Service.CreateStaffAsync(CreateStaffRequest() with
+        {
+            Email = "new-staff@test.local",
+            Phone = "0501234567"
+        });
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.PhoneNotUnique", result.Errors.Single().Code);
     }
 
     private static Fixture CreateFixture(
@@ -318,6 +348,11 @@ public sealed class AdminUserManagementTests
         public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Items.Any(user => user.Email == email.Trim().ToLowerInvariant()));
+        }
+
+        public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Items.Any(user => user.Phone == phone.Trim()));
         }
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default)

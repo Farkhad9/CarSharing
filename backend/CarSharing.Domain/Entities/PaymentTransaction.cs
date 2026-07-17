@@ -27,6 +27,9 @@ public class PaymentTransaction : BaseEntity
     public static PaymentTransaction CreateTripPayment(Guid userId, Guid tripId, decimal amount, DateTime now)
         => Create(userId, tripId, PaymentTransactionType.RidePayment, amount, "Balance", now);
 
+    public static PaymentTransaction CreateTripCardPayment(Guid userId, Guid tripId, decimal amount, DateTime now)
+        => Create(userId, tripId, PaymentTransactionType.RidePayment, amount, "Stripe", now);
+
     private static PaymentTransaction Create(Guid userId, Guid? tripId, PaymentTransactionType type, decimal amount, string method, DateTime now)
     {
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));

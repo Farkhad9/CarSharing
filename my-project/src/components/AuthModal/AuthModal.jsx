@@ -24,8 +24,10 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const [password, setPassword] = useState("Password123!");
   const [confirmPassword, setConfirmPassword] = useState("Password123!");
   const [licenseNumber, setLicenseNumber] = useState("AZE1234567");
+  const [age, setAge] = useState("25");
   const [email, setEmail] = useState("farhad@electrostreet.az");
-  const verificationLink = "";
+  const [verificationLink, setVerificationLink] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState("");
   const [authError, setAuthError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -45,21 +47,39 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const handleAuthSubmit = async (event) => {
     event.preventDefault();
     setAuthError("");
+    setVerificationNotice("");
     if (isRegister && password !== confirmPassword) {
       setAuthError("Passwords do not match.");
+      return;
+    }
+    const parsedAge = Number(age);
+    if (isRegister && (!Number.isInteger(parsedAge) || parsedAge < 18 || parsedAge > 65)) {
+      setAuthError("Age must be between 18 and 65.");
       return;
     }
     setIsSubmitting(true);
     try {
       if (isRegister) {
-        await authApi.register({
+        const registration = await authApi.register({
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           email: email.trim(),
           phone: phone.trim(),
+          age: parsedAge,
           password,
           driverLicenseNumber: licenseNumber.replace(/[^a-zA-Z0-9]/g, ""),
         });
+        if (registration?.emailVerificationUrl) {
+          setVerificationLink("");
+          setVerificationNotice(
+            registration.emailSent
+              ? "We sent a verification email. Open the link in your inbox to activate booking and payments."
+              : registration.emailDeliveryError || "We could not send the verification email right now. Please try again later."
+          );
+          return;
+        }
+        setVerificationNotice("We sent a verification email. Please confirm it before signing in.");
+        return;
       }
       const user = await authApi.login(email, password);
       if (onAuthSuccess) onAuthSuccess(user);
@@ -89,7 +109,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const outlineButtonClass =
     "auth-outline-button relative mt-7 overflow-hidden rounded-lg border border-white/80 px-11 py-3 text-xs font-black uppercase tracking-wide text-white transition duration-300 hover:-translate-y-1 hover:bg-white hover:text-red-700";
 
-  if (verificationLink) {
+  if (verificationNotice) {
     return (
       <main className="auth-page min-h-screen bg-gradient-to-br from-white via-zinc-50 to-red-50 px-4 py-6 text-zinc-900">
         <div className="mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-3xl items-center justify-center">
@@ -101,12 +121,18 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
               Email verification
             </p>
             <h1 className="mt-3 text-3xl font-black tracking-tight text-zinc-950">
-              Проверьте почту
+              Confirm your email
             </h1>
             <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-zinc-500">
+              {verificationNotice || `We sent a verification email to ${email}. Booking and payments stay locked until email is confirmed.`}
+            </p>
+            <h1 className="hidden">
+              Проверьте почту
+            </h1>
+            <p className="hidden">
               Мы отправили письмо на {email}. До подтверждения email бронирование и платежные функции будут ограничены.
             </p>
-            <div className="mt-6 rounded-2xl border border-dashed border-red-200 bg-red-50/60 p-4 text-left">
+            <div className="hidden">
               <p className="text-xs font-black uppercase tracking-wide text-red-500">
                 Demo email link
               </p>
@@ -120,8 +146,9 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
             <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
               <a
                 href={verificationLink}
-                className="rounded-lg bg-red-500 px-6 py-3 text-sm font-black text-white shadow-lg shadow-red-500/20 transition hover:bg-red-600"
+                className="hidden"
               >
+                <span className="text-white">Confirm email</span>
                 Подтвердить email
               </a>
               <button
@@ -599,7 +626,15 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 </div>
 
                 <div className="mb-5 grid w-full grid-cols-2 gap-3">
-                  <input className={inputClass} type="number" min="18" placeholder="Age" />
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="18"
+                    max="65"
+                    placeholder="Age"
+                    value={age}
+                    onChange={(event) => setAge(event.target.value)}
+                  />
                   <input className={inputClass} type="text" placeholder="License ID" value={licenseNumber} onChange={(event) => setLicenseNumber(event.target.value)} />
                 </div>
 

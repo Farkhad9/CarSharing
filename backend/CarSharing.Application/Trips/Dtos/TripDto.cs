@@ -30,3 +30,5 @@ public class TripDto
     public PricingBreakdownDto PricingBreakdown { get; set; } = null!;
     public TripCompletionRequestDto? LatestCompletionRequest { get; set; }
 }
+
+public sealed record ApplyTripPromoCodeRequest(string PromoCode);

@@ -1,3 +1,4 @@
+using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Users.Dtos;
 using CarSharing.Application.Users.Services;
@@ -10,10 +11,23 @@ namespace CarSharing.WebApi.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IUserService _userService;
+    private readonly IEmailVerificationSender _emailVerificationSender;
+    private readonly IConfiguration _configuration;
+    private readonly IWebHostEnvironment _environment;
+    private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IUserService userService)
+    public AuthController(
+        IUserService userService,
+        IEmailVerificationSender emailVerificationSender,
+        IConfiguration configuration,
+        IWebHostEnvironment environment,
+        ILogger<AuthController> logger)
     {
         _userService = userService;
+        _emailVerificationSender = emailVerificationSender;
+        _configuration = configuration;
+        _environment = environment;
+        _logger = logger;
     }
 
     [HttpPost("register")]
@@ -28,7 +42,44 @@ public class AuthController : ControllerBase
             return ToErrorResponse(result.Errors);
         }
 
-        return Created(string.Empty, result.Value);
+        var user = result.Value!;
+        var verificationUrl = BuildEmailVerificationUrl(user.Id);
+        var smtpEnabled = _configuration.GetValue<bool>("Smtp:Enabled");
+        var emailSent = false;
+        var exposeDevelopmentVerificationLink = _configuration.GetValue<bool>("Smtp:ExposeDevelopmentVerificationLink");
+        string? emailDeliveryError = null;
+
+        try
+        {
+            await _emailVerificationSender.SendVerificationAsync(
+                user.Email,
+                $"{user.FirstName} {user.LastName}".Trim(),
+                verificationUrl,
+                cancellationToken);
+            emailSent = smtpEnabled;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(exception, "Email verification delivery failed for {Email}.", user.Email);
+            emailDeliveryError = "Verification email could not be delivered. Please try again later.";
+        }
+
+        return Created(string.Empty, new
+        {
+            user,
+            emailSent,
+            emailDeliveryError,
+            emailVerificationUrl = !_environment.IsDevelopment() || !exposeDevelopmentVerificationLink
+                ? null
+                : verificationUrl
+        });
+    }
+
+    [HttpPost("verify-email/{id:guid}")]
+    public async Task<IActionResult> VerifyEmail(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _userService.VerifyEmailAsync(id, cancellationToken);
+        return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
     }
 
     [HttpPost("login")]
@@ -104,6 +155,16 @@ public class AuthController : ControllerBase
         }
 
         return BadRequest(new { errors });
+    }
+
+    private string BuildEmailVerificationUrl(Guid userId)
+    {
+        var origin = Request.Headers.Origin.FirstOrDefault();
+        var frontendBaseUrl = string.IsNullOrWhiteSpace(origin)
+            ? "http://localhost:5173"
+            : origin.TrimEnd('/');
+
+        return $"{frontendBaseUrl}/?verifyEmail={userId}";
     }
 
     private void AppendRefreshTokenCookie(AuthResponse response)

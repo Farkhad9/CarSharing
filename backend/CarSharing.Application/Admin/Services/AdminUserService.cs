@@ -14,6 +14,7 @@ public sealed class AdminUserService : IAdminUserService
     private static readonly Error SuperAdminRequired = new("AdminUsers.SuperAdminRequired", "Super admin access is required.");
     private static readonly Error NotFound = new("AdminUsers.NotFound", "User was not found.");
     private static readonly Error EmailNotUnique = new("AdminUsers.EmailNotUnique", "User with this email already exists.");
+    private static readonly Error PhoneNotUnique = new("AdminUsers.PhoneNotUnique", "User with this phone number already exists.");
     private static readonly Error CannotDisableSelf = new("AdminUsers.CannotDisableSelf", "You cannot disable your own account.");
     private static readonly Error CannotManageSuperAdmin = new("AdminUsers.CannotManageSuperAdmin", "Only SuperAdmin can manage a SuperAdmin account.");
     private static readonly Error CannotManageAdminAccount = new("AdminUsers.CannotManageAdminAccount", "Only SuperAdmin can manage admin accounts.");
@@ -102,16 +103,22 @@ public sealed class AdminUserService : IAdminUserService
         }
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var normalizedPhone = NormalizeAzerbaijanPhone(request.Phone);
         if (await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
         {
             return Result<AdminUserDto>.Failure(EmailNotUnique);
+        }
+
+        if (await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
+        {
+            return Result<AdminUserDto>.Failure(PhoneNotUnique);
         }
 
         var user = User.CreateStaff(
             request.FirstName,
             request.LastName,
             normalizedEmail,
-            request.Phone,
+            normalizedPhone,
             _passwordHasher.Hash(request.Password),
             request.DriverLicenseNumber);
 
@@ -205,15 +212,21 @@ public sealed class AdminUserService : IAdminUserService
         }
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var normalizedPhone = NormalizeAzerbaijanPhone(request.Phone);
         if (await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
         {
             return Result<AdminUserDto>.Failure(EmailNotUnique);
         }
 
+        if (await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
+        {
+            return Result<AdminUserDto>.Failure(PhoneNotUnique);
+        }
+
         var passwordHash = _passwordHasher.Hash(request.Password);
         var user = request.Role == UserRole.SuperAdmin
-            ? User.CreateSuperAdmin(request.FirstName, request.LastName, normalizedEmail, request.Phone, passwordHash, request.DriverLicenseNumber)
-            : User.CreateAdmin(request.FirstName, request.LastName, normalizedEmail, request.Phone, passwordHash, request.DriverLicenseNumber);
+            ? User.CreateSuperAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, request.DriverLicenseNumber)
+            : User.CreateAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, request.DriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -324,9 +337,13 @@ public sealed class AdminUserService : IAdminUserService
         {
             user.ApproveVerification();
         }
-        else
+        else if (request.Status == UserVerificationStatus.Rejected)
         {
             user.RejectVerification();
+        }
+        else
+        {
+            user.ResetVerificationToPending();
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -387,6 +404,8 @@ public sealed class AdminUserService : IAdminUserService
             user.Email,
             user.Phone,
             user.DriverLicenseNumber,
+            user.DriverLicenseDocumentUrl,
+            user.PassportDocumentUrl,
             user.Balance,
             user.PendingHold,
             user.EmailVerified,
@@ -398,6 +417,7 @@ public sealed class AdminUserService : IAdminUserService
             user.BlockedUntil,
             user.BlockedByUserId,
             user.CreatedAt,
+            user.VerificationSubmittedAt,
             user.VerifiedAt);
     }
 
@@ -410,5 +430,14 @@ public sealed class AdminUserService : IAdminUserService
             UserBlockDuration.Forever => null,
             _ => throw new ArgumentOutOfRangeException(nameof(duration), duration, null)
         };
+    }
+
+    private static string NormalizeAzerbaijanPhone(string phone)
+    {
+        var value = phone.Trim().Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "");
+        if (value.StartsWith("+994", StringComparison.Ordinal)) return value;
+        if (value.StartsWith("994", StringComparison.Ordinal)) return $"+{value}";
+        if (value.StartsWith("0", StringComparison.Ordinal)) return $"+994{value[1..]}";
+        return value;
     }
 }

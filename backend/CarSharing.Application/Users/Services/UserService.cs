@@ -15,6 +15,7 @@ public class UserService : IUserService
     private const int RefreshTokenExpirationDays = 14;
 
     private static readonly Error EmailNotUnique = new("User.EmailNotUnique", "User with this email already exists.");
+    private static readonly Error PhoneNotUnique = new("User.PhoneNotUnique", "User with this phone number already exists.");
     private static readonly Error InvalidCredentials = new("User.InvalidCredentials", "Invalid email or password.");
     private static readonly Error NotFound = new("User.NotFound", "User was not found.");
     private static readonly Error InvalidRefreshToken = new("User.InvalidRefreshToken", "Refresh token is invalid or expired.");
@@ -55,16 +56,22 @@ public class UserService : IUserService
         }
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var normalizedPhone = NormalizeAzerbaijanPhone(request.Phone);
         if (await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
         {
             return Result<UserDto>.Failure(EmailNotUnique);
+        }
+
+        if (await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
+        {
+            return Result<UserDto>.Failure(PhoneNotUnique);
         }
 
         var user = User.CreateRider(
             request.FirstName,
             request.LastName,
             normalizedEmail,
-            request.Phone,
+            normalizedPhone,
             _passwordHasher.Hash(request.Password),
             request.DriverLicenseNumber);
 
@@ -199,6 +206,25 @@ public class UserService : IUserService
         return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
     }
 
+    public async Task<Result<UserDto>> SubmitVerificationDocumentsAsync(
+        Guid id,
+        string driverLicenseDocumentUrl,
+        string passportDocumentUrl,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _userRepository.GetByIdAsync(id, cancellationToken);
+        if (user is null)
+        {
+            return Result<UserDto>.Failure(NotFound);
+        }
+
+        user.SubmitVerificationDocuments(driverLicenseDocumentUrl, passportDocumentUrl, DateTime.UtcNow);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<UserDto>.Success(_mapper.Map<UserDto>(user));
+    }
+
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
     {
         return validationResult.Errors
@@ -242,5 +268,14 @@ public class UserService : IUserService
             : " Blocked permanently.";
 
         return new Error("User.Blocked", $"User account is blocked. Reason: {user.BlockReason ?? "No reason provided."}.{unlockText}");
+    }
+
+    private static string NormalizeAzerbaijanPhone(string phone)
+    {
+        var value = phone.Trim().Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "");
+        if (value.StartsWith("+994", StringComparison.Ordinal)) return value;
+        if (value.StartsWith("994", StringComparison.Ordinal)) return $"+{value}";
+        if (value.StartsWith("0", StringComparison.Ordinal)) return $"+994{value[1..]}";
+        return value;
     }
 }

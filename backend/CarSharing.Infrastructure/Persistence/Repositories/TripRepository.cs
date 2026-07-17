@@ -30,6 +30,16 @@ public class TripRepository : ITripRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Trips
+            .Where(trip => trip.UserId == userId
+                && trip.Status != TripStatus.Completed
+                && trip.Status != TripStatus.Cancelled)
+            .OrderByDescending(trip => trip.StartedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default)
     {
         return await _dbContext.Trips

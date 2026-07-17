@@ -1204,6 +1204,7 @@ const AdminControlRoom = () => {
       if (message?.scope === "staffTasks") {
         loadAdminStatistics();
       } else if (message?.scope === "users") {
+        loadBackendUsers();
         loadAdminStatistics();
       }
     };
@@ -1227,7 +1228,7 @@ const AdminControlRoom = () => {
       connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
       stopConnection(connection).catch(() => {});
     };
-  }, [adminSession, loadAdminStatistics]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers]);
 
   useEffect(() => {
     if (activeSection === "billing") {
@@ -1293,21 +1294,27 @@ const AdminControlRoom = () => {
         : user.verificationStatus === USER_VERIFICATION_STATUSES.Verified
           ? "verified"
           : user.verificationStatus === USER_VERIFICATION_STATUSES.Rejected
-            ? "blocked"
+            ? "rejected"
             : "pending";
       const profile = kycProfiles.find((item) => item.userId === user.id) || {
         userId: user.id,
         status,
         risk: "medium",
         account: user.email || "No email",
-        documents: user.driverLicenseNumber || "No driver license number",
+        documents: user.driverLicenseDocumentUrl && user.passportDocumentUrl
+          ? "Driver license and passport uploaded"
+          : user.driverLicenseNumber || "No driver license number",
         identity: user.phone || "No phone number",
-        submittedAt: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Not submitted",
+        submittedAt: user.verificationSubmittedAt
+          ? new Date(user.verificationSubmittedAt).toLocaleString()
+          : "Not submitted",
         notes: user.blockReason
           || (status === "verified"
             ? "Verification approved."
             : status === "blocked"
-              ? "Verification rejected or account blocked."
+              ? "Account is blocked."
+              : status === "rejected"
+                ? "Verification rejected. Waiting for new documents."
               : "Awaiting admin verification decision."),
       };
 
@@ -1350,7 +1357,7 @@ const AdminControlRoom = () => {
           : user.verificationStatus === USER_VERIFICATION_STATUSES.Verified
             ? "verified"
             : user.verificationStatus === USER_VERIFICATION_STATUSES.Rejected
-              ? "blocked"
+              ? "rejected"
               : "pending";
 
       return {
@@ -1663,14 +1670,20 @@ const AdminControlRoom = () => {
   const updateKycStatus = async (userId, status) => {
     try {
       if (status === "verified") {
-        await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Verified);
+        const updatedUser = await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Verified);
+        setBackendUsers((items) => upsertAdminUser(items, updatedUser));
         showAdminNotice("Rider verification approved", "users");
-      } else if (status === "blocked") {
+      } else if (status === "rejected") {
         setBlockDraft((draft) => ({ ...draft, userId, reason: draft.reason || "KYC rejected by administrator" }));
-        await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Rejected);
-        showAdminNotice("Rider verification rejected. Use Block to restrict login if needed.", "users");
+        const updatedUser = await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Rejected);
+        setBackendUsers((items) => upsertAdminUser(items, updatedUser));
+        showAdminNotice("Rider verification rejected. The rider can upload new documents.", "users");
+      } else if (status === "pending") {
+        const updatedUser = await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Pending);
+        setBackendUsers((items) => upsertAdminUser(items, updatedUser));
+        showAdminNotice("Rider verification was returned to moderation.", "users");
       } else {
-        showAdminNotice("Backend supports approve or reject. Pending reset is not available.", "users");
+        showAdminNotice("Unsupported verification status.", "users", "error");
       }
       await loadBackendUsers();
     } catch (error) {
@@ -1719,10 +1732,11 @@ const AdminControlRoom = () => {
     }
 
     try {
-      await adminUsersApi.blockUser(userId, {
+      const updatedUser = await adminUsersApi.blockUser(userId, {
         reason: blockDraft.reason.trim(),
         duration: Number(blockDraft.duration),
       });
+      setBackendUsers((items) => upsertAdminUser(items, updatedUser));
       setBlockDraft({ userId: "", reason: "", duration: USER_BLOCK_DURATIONS.FifteenMinutes });
       await loadBackendUsers();
       showAdminNotice("User blocked successfully", "users");
@@ -1733,7 +1747,8 @@ const AdminControlRoom = () => {
 
   const unblockBackendUser = async (userId) => {
     try {
-      await adminUsersApi.unblockUser(userId);
+      const updatedUser = await adminUsersApi.unblockUser(userId);
+      setBackendUsers((items) => upsertAdminUser(items, updatedUser));
       await loadBackendUsers();
       setSelectedKycUserId((current) => (current === userId ? null : current));
       showAdminNotice("User unblocked successfully", "users");
@@ -2100,7 +2115,7 @@ const AdminControlRoom = () => {
               <p className="mt-1 text-xs font-semibold text-slate-400">
                 {adminStatisticsLoadedAt
                   ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
-                  : "Sign in with a backend admin account to load real dashboard metrics."}
+                  : "Sign in with an administrator account to load real dashboard metrics."}
               </p>
             </div>
             <button
@@ -2214,6 +2229,12 @@ const AdminControlRoom = () => {
         badge: "border-amber-400/35 bg-amber-500/12 text-amber-100",
         active: "border-amber-400/60 bg-amber-500/15 text-amber-100",
       },
+      rejected: {
+        label: "Rejected",
+        dot: "bg-orange-400",
+        badge: "border-orange-400/35 bg-orange-500/12 text-orange-100",
+        active: "border-orange-400/60 bg-orange-500/15 text-orange-100",
+      },
       verified: {
         label: "Активные",
         dot: "bg-emerald-400",
@@ -2232,7 +2253,7 @@ const AdminControlRoom = () => {
         acc[row.kyc.status] = (acc[row.kyc.status] || 0) + 1;
         return acc;
       },
-      { all: kycRows.length, pending: 0, verified: 0, blocked: 0 }
+      { all: kycRows.length, pending: 0, rejected: 0, verified: 0, blocked: 0 }
     );
     const tabItems = [
       { id: "all", label: "Все", count: statusCounts.all },
@@ -2251,6 +2272,7 @@ const AdminControlRoom = () => {
     const userStatusMeta = {
       verified: { label: "Verified", className: "bg-emerald-500/15 text-emerald-200" },
       pending: { label: "Pending", className: "bg-amber-500/15 text-amber-200" },
+      rejected: { label: "Rejected", className: "bg-orange-500/15 text-orange-200" },
       blocked: { label: "Blocked", className: "bg-red-500/15 text-red-200" },
       internal: { label: "Internal", className: "bg-blue-500/15 text-blue-200" },
       active_trip: { label: "In trip", className: "bg-cyan-500/15 text-cyan-200" },
@@ -2286,7 +2308,7 @@ const AdminControlRoom = () => {
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-sm font-black text-white">Create backend account</p>
+                <p className="text-sm font-black text-white">Create account</p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">Admin can create Staff. SuperAdmin can create Admin and SuperAdmin.</p>
               </div>
               <button type="button" onClick={loadBackendUsers} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
@@ -2364,7 +2386,7 @@ const AdminControlRoom = () => {
 
           {(backendUsersError || isLoadingBackendUsers) && (
             <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${backendUsersError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
-              {backendUsersError || "Loading backend users..."}
+              {backendUsersError || "Loading users..."}
             </p>
           )}
 
@@ -2430,7 +2452,10 @@ const AdminControlRoom = () => {
                           {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
                             <button
                               type="button"
-                              onClick={() => setBlockDraft((draft) => ({ ...draft, userId: row.id }))}
+                              onClick={() => {
+                                setBlockDraft((draft) => ({ ...draft, userId: row.id }));
+                                showAdminNotice("User selected. Add a block reason and press Block.", "users");
+                              }}
                               className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
                             >
                               Select
@@ -2550,38 +2575,58 @@ const AdminControlRoom = () => {
                     <p className="mt-3 rounded-xl bg-white/[0.04] px-3 py-2 text-xs font-semibold leading-5 text-slate-400">
                       {selectedKycUser.kyc.notes}
                     </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <a
+                        href={selectedKycUser.driverLicenseDocumentUrl || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`rounded-xl border px-3 py-3 text-center text-xs font-black transition ${
+                          selectedKycUser.driverLicenseDocumentUrl
+                            ? "border-white/10 bg-white/[0.06] text-slate-100 hover:bg-white/[0.1]"
+                            : "pointer-events-none border-white/5 bg-white/[0.02] text-slate-600"
+                        }`}
+                      >
+                        Open driver license
+                      </a>
+                      <a
+                        href={selectedKycUser.passportDocumentUrl || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`rounded-xl border px-3 py-3 text-center text-xs font-black transition ${
+                          selectedKycUser.passportDocumentUrl
+                            ? "border-white/10 bg-white/[0.06] text-slate-100 hover:bg-white/[0.1]"
+                            : "pointer-events-none border-white/5 bg-white/[0.02] text-slate-600"
+                        }`}
+                      >
+                        Open passport
+                      </a>
+                    </div>
                   </div>
 
-                  {selectedKycUser.isActive && selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Verified ? (
-                    <div className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-center text-xs font-black text-emerald-100">
-                      Verification approved
-                    </div>
-                  ) : selectedKycUser.isActive ? (
+                  {selectedKycUser.isActive ? (
                     <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
                         onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
+                        disabled={selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Verified}
                         className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         Approve
                       </button>
                       <button
                         type="button"
-                        onClick={() => updateKycStatus(selectedKycUser.id, "blocked")}
+                        onClick={() => updateKycStatus(selectedKycUser.id, "rejected")}
                         className="rounded-xl bg-amber-500 px-3 py-3 text-xs font-black text-amber-950 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         Reject KYC
                       </button>
                       <button
                         type="button"
-                        onClick={() => setBlockDraft((draft) => ({
-                          ...draft,
-                          userId: selectedKycUser.id,
-                          reason: draft.reason || "KYC or account policy violation",
-                        }))}
-                        className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black text-white"
+                        onClick={() => updateKycStatus(selectedKycUser.id, "pending")}
+                        disabled={selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Pending}
+                        className="rounded-xl bg-slate-700 px-3 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        Select block
+                        Reset
                       </button>
                     </div>
                   ) : (
@@ -2867,7 +2912,7 @@ const AdminControlRoom = () => {
             <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
               {billingInvoices.length === 0 ? (
                 <div className="bg-[#111a2b] px-4 py-5 text-sm font-semibold text-slate-400">
-                  No receipts yet. Completed top-ups and trip payments will generate PDF receipts after the backend invoice service is connected.
+                  No receipts yet. Completed top-ups and trip payments will generate PDF receipts automatically.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -3518,7 +3563,7 @@ const AdminControlRoom = () => {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-white">Ride revenue</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from backend statistics</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from live statistics</p>
                 </div>
                 <span className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
                   {Number(adminStatistics.revenue?.thisMonth || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
@@ -4811,7 +4856,7 @@ const AdminControlRoom = () => {
                       <p className="mt-1 text-xs font-semibold text-slate-400">
                         {adminStatisticsLoadedAt
                           ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
-                          : "Sign in with a backend admin account to load real dashboard metrics."}
+                          : "Sign in with an administrator account to load real dashboard metrics."}
                       </p>
                     </div>
                     <button

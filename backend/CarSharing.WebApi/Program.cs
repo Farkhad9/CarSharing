@@ -10,6 +10,7 @@ using CarSharing.Domain.Enums;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
+using System.Security.Claims;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -106,6 +107,48 @@ app.UseStaticFiles();
 app.UseCors(FrontendCorsPolicy);
 
 app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    if (context.User.Identity?.IsAuthenticated == true &&
+        !context.Request.Path.StartsWithSegments("/api/auth/logout") &&
+        !context.Request.Path.StartsWithSegments("/api/auth/refresh"))
+    {
+        var userIdValue = context.User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? context.User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub);
+
+        if (Guid.TryParse(userIdValue, out var userId))
+        {
+            var userRepository = context.RequestServices.GetRequiredService<IUserRepository>();
+            var user = await userRepository.GetByIdAsync(userId, context.RequestAborted);
+            var now = DateTime.UtcNow;
+
+            if (user is null || user.IsBlocked(now))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    errors = new[]
+                    {
+                        new
+                        {
+                            code = "User.Blocked",
+                            message = $"User account is blocked. Reason: {user?.BlockReason ?? "Account is not active."}"
+                        }
+                    }
+                }, context.RequestAborted);
+                return;
+            }
+
+            if (user.TryExpireBlock(now))
+            {
+                var unitOfWork = context.RequestServices.GetRequiredService<IUnitOfWork>();
+                await unitOfWork.SaveChangesAsync(context.RequestAborted);
+            }
+        }
+    }
+
+    await next();
+});
 app.UseAuthorization();
 
 app.MapControllers();

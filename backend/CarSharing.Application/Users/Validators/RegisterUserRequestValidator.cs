@@ -31,6 +31,10 @@ public class RegisterUserRequestValidator : AbstractValidator<RegisterUserReques
             .Matches(@"^(\+994|994|0)\d{9}$")
             .WithMessage("Phone number must be a valid Azerbaijan number.");
 
+        RuleFor(x => x.Age)
+            .InclusiveBetween(18, 65)
+            .WithMessage("Age must be between 18 and 65.");
+
         RuleFor(x => x.Password)
             .NotEmpty()
             .WithMessage("Password is required.")

@@ -8,4 +8,5 @@ export const paymentApi = {
     body: JSON.stringify({ amount: Number(amount) }),
   }),
   payTrip: (tripId) => apiRequest(`/api/payments/trips/${tripId}/pay`, { method: "POST" }),
+  createTripCheckout: (tripId) => apiRequest(`/api/payments/trips/${tripId}/checkout`, { method: "POST" }),
 };

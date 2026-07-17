@@ -11,7 +11,6 @@ import {
     FiMap,
     FiNavigation,
     FiPower,
-    FiSmartphone,
     FiTag,
     FiUserCheck,
     FiUsers,
@@ -21,9 +20,8 @@ import {
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { vehicles } from "../../data/vehicles";
-import { VEHICLE_STATUSES } from "../../data/statuses";
 import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
+import { reservationApi } from "../../api/reservationApi";
 
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
@@ -45,9 +43,6 @@ const userIcon = L.divIcon({
 L.Marker.prototype.options.icon = defaultIcon;
 
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
-const MAX_ACTIVE_RESERVATIONS = 2;
-const PROFILE_BALANCE_HOLD_AZN = 20;
-
 const toRadians = (degrees) => degrees * (Math.PI / 180);
 
 const getDistanceMeters = ([fromLat, fromLng], [toLat, toLng]) => {
@@ -134,26 +129,21 @@ const getVehiclePosition = (vehicle) => [
     vehicle.location?.lng || 49.8475,
 ];
 
-const getWalkingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
-    `https://router.project-osrm.org/route/v1/foot/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=false`;
-
-const getDistanceToUser = (userLocation, vehicle) =>
-    getDistanceMeters(userLocation, getVehiclePosition(vehicle));
-
-const getStoredReservations = () => {
+const getStoredUser = () => {
     try {
-        const reservedVehicles = JSON.parse(localStorage.getItem("reservedVehicles") || "null");
-
-        if (Array.isArray(reservedVehicles)) {
-            return reservedVehicles;
-        }
-
-        const legacyReservation = JSON.parse(localStorage.getItem("reservedVehicle") || "null");
-        return legacyReservation ? [legacyReservation] : [];
+        return JSON.parse(localStorage.getItem("electroStreetUser") || "null");
     } catch {
-        return [];
+        return null;
     }
 };
+
+const areRideDocumentsApproved = () => {
+    const verificationStatus = getStoredUser()?.verificationStatus;
+    return verificationStatus === 2 || String(verificationStatus).toLowerCase() === "verified";
+};
+
+const getWalkingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
+    `https://router.project-osrm.org/route/v1/foot/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=false`;
 
 const VehicleGalleryViewer = ({ vehicle }) => {
     const galleryImages = Array.isArray(vehicle.galleryImages) && vehicle.galleryImages.length
@@ -246,6 +236,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
     const [displayedRate, setDisplayedRate] = useState(0);
     const [isReservationConfirmed, setIsReservationConfirmed] = useState(false);
     const [reservationError, setReservationError] = useState("");
+    const [isCreatingReservation, setIsCreatingReservation] = useState(false);
     const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("card");
     const [isRouteVisible, setIsRouteVisible] = useState(false);
     const [currentUserLocation, setCurrentUserLocation] = useState(userLocation);
@@ -283,34 +274,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
     const baseRate = Number(vehicle.pricePerMinute || 0);
     const promoRate = Number((baseRate * 0.9).toFixed(2));
     const finalRate = isPromoApplied ? promoRate : baseRate;
-    const twoCarRate = (baseRate + baseRate * 0.75).toFixed(2);
-
-    const upsellVehicle = vehicles
-        .filter(
-            (candidate) =>
-                candidate.id !== vehicle.id &&
-                candidate.status === VEHICLE_STATUSES.AVAILABLE &&
-                candidate.seats >= passengerCount
-        )
-        .map((candidate) => ({
-            ...candidate,
-            distanceMeters: getDistanceToUser(currentUserLocation, candidate),
-        }))
-        .sort((a, b) => a.distanceMeters - b.distanceMeters)[0];
-
-    const secondCarSuggestion = vehicles
-        .filter(
-            (candidate) =>
-                candidate.id !== vehicle.id &&
-                candidate.status === VEHICLE_STATUSES.AVAILABLE &&
-                candidate.seats >= Math.min(passengerCount - vehicle.seats, vehicle.seats)
-        )
-        .map((candidate) => ({
-            ...candidate,
-            distanceMeters: getDistanceToUser(currentUserLocation, candidate),
-        }))
-        .sort((a, b) => a.distanceMeters - b.distanceMeters)[0];
-
     useEffect(() => {
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = "hidden";
@@ -362,9 +325,14 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         setPromoMessage('Promo "Farhad" applied. Your first ride gets 10% off.');
     };
 
-    const handleConfirmReservation = () => {
+    const handleConfirmReservation = async () => {
         if (currentUser?.emailVerified === false) {
             setReservationError("Please verify your email before confirming a reservation.");
+            return;
+        }
+
+        if (!areRideDocumentsApproved()) {
+            setReservationError("Driver license and passport must be verified before reserving a car.");
             return;
         }
 
@@ -373,73 +341,31 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return;
         }
 
-        if (selectedPaymentMethod === "profile_balance" && availableProfileBalance < PROFILE_BALANCE_HOLD_AZN) {
-            setReservationError(
-                `Profile balance needs at least ${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN available for the ride hold. Top up or choose card/wallet.`
-            );
-            return;
-        }
-
-        if (selectedPaymentMethod === "card" && savedCards.length === 0) {
-            setReservationError("Add a bank card in your personal cabinet before reserving a vehicle.");
-            return;
-        }
-
-        const existingReservations = getStoredReservations();
-
-        if (existingReservations.some((reservation) => reservation.vehicleId === vehicle.id)) {
-            setReservationError("This car is already in your cabinet.");
-            return;
-        }
-
-        if (existingReservations.length >= MAX_ACTIVE_RESERVATIONS) {
-            setReservationError("You can keep up to 2 active reservations in your cabinet.");
-            return;
-        }
-
         if (isOverCapacity) {
             return;
         }
 
+        setIsCreatingReservation(true);
         setReservationError("");
-        setIsReservationConfirmed(true);
+
+        try {
+            await reservationApi.create({
+                vehicleId: vehicle.id,
+                passengerCount,
+            });
+            localStorage.removeItem("reservedVehicle");
+            localStorage.removeItem("reservedVehicles");
+            window.dispatchEvent(new CustomEvent(RESERVATIONS_UPDATED_EVENT));
+            setIsReservationConfirmed(true);
+        } catch (error) {
+            setReservationError(error.message || "Reservation could not be created.");
+            setIsReservationConfirmed(false);
+        } finally {
+            setIsCreatingReservation(false);
+        }
     };
 
     const handleSuccessOk = () => {
-        const holdAmount = selectedPaymentMethod === "profile_balance" ? PROFILE_BALANCE_HOLD_AZN : 0;
-        const nextReservation = {
-            id: `reservation-${Date.now()}`,
-            vehicleId: vehicle.id,
-            brand: vehicle.brand,
-            model: vehicle.model,
-            plateNumber: vehicle.plateNumber,
-            image: vehicle.image,
-            rate: baseRate,
-            displayedRate: finalRate,
-            promoCode: isPromoApplied ? promoCode.trim().toLowerCase() : null,
-            discountPercent: isPromoApplied ? 10 : 0,
-            paymentMethod: selectedPaymentMethod,
-            holdAmount,
-            holdStatus: holdAmount > 0 ? "held" : "none",
-            reservedAt: new Date().toISOString(),
-        };
-        const existingReservations = getStoredReservations();
-        const nextReservations = [...existingReservations, nextReservation];
-
-        localStorage.setItem("reservedVehicles", JSON.stringify(nextReservations));
-        localStorage.removeItem("reservedVehicle");
-        window.dispatchEvent(new CustomEvent(RESERVATIONS_UPDATED_EVENT));
-
-        if (holdAmount > 0 && currentUser) {
-            localStorage.setItem(
-                "electroStreetUser",
-                JSON.stringify({
-                    ...currentUser,
-                    pendingHold: Number((profilePendingHold + holdAmount).toFixed(2)),
-                })
-            );
-        }
-
         window.location.href = "/dashboard";
     };
 
@@ -547,19 +473,12 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             detail: savedCards.length
                 ? `${savedCards[0].brand || "Card"} ending ${savedCards[0].last4}`
                 : "No saved card — add one in your cabinet",
-            unavailable: savedCards.length === 0,
-        },
-        {
-            id: "wallet",
-            icon: FiSmartphone,
-            label: "Wallet",
-            detail: "Apple Pay / Google Pay",
         },
         {
             id: "profile_balance",
             icon: FiDollarSign,
             label: "Profile balance",
-            detail: `${availableProfileBalance.toFixed(2)} AZN available / ${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN hold`,
+            detail: `${availableProfileBalance.toFixed(2)} AZN available`,
         },
     ];
 
@@ -1064,7 +983,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                 </div>
                                 <h3 className="reservation-alert-title">Reservation confirmed</h3>
                                 <p className="reservation-alert-text">
-                                    Your car is locked and saved to your future personal cabinet.
+                                    Your request is ready. We will create it and open your cabinet.
                                 </p>
                                 <div className="reservation-alert-car">
                                     {vehicle.brand} {vehicle.model} / {vehicle.plateNumber}
@@ -1072,9 +991,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                 <button
                                     type="button"
                                     onClick={handleSuccessOk}
+                                    disabled={isCreatingReservation}
                                     className="reservation-alert-ok"
                                 >
-                                    OK
+                                    {isCreatingReservation ? "Creating..." : "OK"}
                                 </button>
                             </motion.div>
                         </motion.div>
@@ -1198,36 +1118,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                                 <p className="text-sm font-black text-red-700">
                                                     Sorry, this car is only for {vehicle.seats} people.
                                                 </p>
-                                                {upsellVehicle ? (
-                                                    <p className="mt-2 text-xs font-bold text-red-700/80">
-                                                        Nearby option: {upsellVehicle.brand} {upsellVehicle.model} with{" "}
-                                                        {upsellVehicle.seats} seats, {formatDistance(upsellVehicle.distanceMeters)} away.
-                                                    </p>
-                                                ) : (
-                                                    <p className="mt-2 text-xs font-bold text-red-700/80">
-                                                        No larger car nearby. Add a second car with 25% off for the second vehicle.
-                                                    </p>
-                                                )}
+                                                <p className="mt-2 text-xs font-bold text-red-700/80">
+                                                    Pick another EV from the fleet with enough seats.
+                                                </p>
                                             </div>
-                                        </div>
-
-                                        <div className="mt-4 grid gap-2">
-                                            {upsellVehicle && (
-                                                <button
-                                                    type="button"
-                                                    className="rounded-lg bg-white px-4 py-3 text-xs font-black uppercase tracking-wide text-red-700 shadow-sm transition hover:bg-red-600 hover:text-white"
-                                                >
-                                                    Choose {upsellVehicle.brand} {upsellVehicle.model}
-                                                </button>
-                                            )}
-                                            {secondCarSuggestion && (
-                                                <button
-                                                    type="button"
-                                                    className="rounded-lg bg-red-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-700"
-                                                >
-                                                    Add {secondCarSuggestion.brand} {secondCarSuggestion.model} / 25% off second car
-                                                </button>
-                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -1380,13 +1274,9 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                                 data-active={isSelected}
                                                 onClick={() => {
                                                     setSelectedPaymentMethod(method.id);
-                                                    setReservationError(
-                                                        method.unavailable
-                                                            ? "Add a bank card in your personal cabinet before reserving a vehicle."
-                                                            : ""
-                                                    );
+                                                    setReservationError("");
                                                 }}
-                                                className={`payment-method-option text-left ${method.unavailable ? "opacity-60" : ""}`}
+                                                className="payment-method-option text-left"
                                                 aria-pressed={isSelected}
                                             >
                                                 <span className="payment-method-option__icon">
@@ -1410,7 +1300,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                     <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-800">
                                         {profileDebt > 0
                                             ? `Outstanding debt: ${profileDebt.toFixed(2)} AZN. New reservations are blocked until it is paid.`
-                                            : `${PROFILE_BALANCE_HOLD_AZN.toFixed(2)} AZN will be held from your profile balance before the ride. If the final fare is higher, the remaining amount is charged at payment.`}
+                                            : "The final ride fare will be charged after the ride photos are approved."}
                                     </div>
                                 )}
                             </motion.div>
@@ -1443,31 +1333,17 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                 </div>
                             </div>
 
-                            {isOverCapacity && !upsellVehicle && (
-                                <p className="mb-3 rounded-lg bg-gray-50 px-4 py-3 text-xs font-bold text-gray-600">
-                                    Two-car package estimate: {twoCarRate} AZN/min total, because the second car gets 25% off.
-                                </p>
-                            )}
-
                             {reservationError && (
                                 <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
                                     <p className="text-xs font-bold text-amber-700">
                                         {reservationError}
                                     </p>
-                                    {selectedPaymentMethod === "card" && savedCards.length === 0 && (
-                                        <a
-                                            href="/dashboard?tab=payments"
-                                            className="mt-3 inline-flex rounded-lg bg-amber-600 px-4 py-2 text-xs font-black text-white transition hover:bg-amber-700"
-                                        >
-                                            Go to payment methods
-                                        </a>
-                                    )}
                                 </div>
                             )}
 
                             <button
                                 type="button"
-                                disabled={isOverCapacity}
+                                disabled={isOverCapacity || isCreatingReservation}
                                 onClick={handleConfirmReservation}
                                 className="btn-12 w-full shadow-xl shadow-red-200 disabled:opacity-50 disabled:shadow-none"
                             >

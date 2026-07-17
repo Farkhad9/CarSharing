@@ -44,4 +44,8 @@ public sealed record InvoicePdfModel(
     DateTime PaidAt,
     decimal? FinalRate,
     int? DurationMinutes,
+    int? DurationSeconds,
+    string? PromoCode,
+    int? DiscountPercent,
+    decimal? DiscountAmount,
     decimal Total);

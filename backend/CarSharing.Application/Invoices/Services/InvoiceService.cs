@@ -67,6 +67,10 @@ public sealed class InvoiceService : IInvoiceService
             now,
             trip?.PricePerMinute,
             trip?.DurationMinutes,
+            GetTripDurationSeconds(trip),
+            trip?.PromoCode,
+            trip?.DiscountPercent > 0 ? trip.DiscountPercent : null,
+            trip?.DiscountAmount > 0 ? trip.DiscountAmount : null,
             transaction.Amount);
         var pdf = await _pdfGenerator.GenerateAsync(model, cancellationToken);
         var invoice = Invoice.Create(
@@ -198,5 +202,15 @@ public sealed class InvoiceService : IInvoiceService
         }
 
         return transaction.PaymentMethod ?? "Payment";
+    }
+
+    private static int? GetTripDurationSeconds(Trip? trip)
+    {
+        if (trip?.EndRequestedAt is null)
+        {
+            return null;
+        }
+
+        return Math.Max(1, (int)Math.Ceiling((trip.EndRequestedAt.Value - trip.StartedAt).TotalSeconds));
     }
 }

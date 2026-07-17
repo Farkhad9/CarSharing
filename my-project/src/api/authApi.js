@@ -3,11 +3,15 @@ import { normalizeRole } from "./adminUsersApi";
 
 const persistSession = (response) => {
   localStorage.setItem("electroStreetAccessToken", response.accessToken);
+  return persistUser(response.user);
+};
+
+const persistUser = (sourceUser) => {
   const user = {
-    ...response.user,
-    roleKey: normalizeRole(response.user.role),
-    name: `${response.user.firstName} ${response.user.lastName}`.trim(),
-    avatarInitial: response.user.firstName?.charAt(0)?.toUpperCase() || "U",
+    ...sourceUser,
+    roleKey: normalizeRole(sourceUser.role),
+    name: `${sourceUser.firstName} ${sourceUser.lastName}`.trim(),
+    avatarInitial: sourceUser.firstName?.charAt(0)?.toUpperCase() || "U",
   };
   localStorage.setItem("electroStreetUser", JSON.stringify(user));
   return user;
@@ -15,6 +19,7 @@ const persistSession = (response) => {
 
 export const authApi = {
   register: (request) => apiRequest("/api/auth/register", { method: "POST", body: JSON.stringify(request) }),
+  verifyEmail: async (id) => persistUser(await apiRequest(`/api/auth/verify-email/${id}`, { method: "POST" })),
   login: async (email, password) => persistSession(await apiRequest("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),

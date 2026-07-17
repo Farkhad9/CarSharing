@@ -75,6 +75,7 @@ public sealed class PaymentEngineTests
     private static Fixture CreateFixture(decimal balance, int battery)
     {
         var user = User.CreateRider("Test", "Rider", "rider@test.local", "+994501234567", "hash", "ABC12345");
+        user.VerifyEmail();
         if (balance > 0) user.CreditBalance(balance);
         var vehicle = Vehicle.Create("Tesla", "Model 3", 2025, "99AA999", 1000, battery, 300,
             1m, "AZN", 5, "White", "CCS", null, "Baku", "Center", 40.4, 49.8);
@@ -106,6 +107,7 @@ public sealed class PaymentEngineTests
         public Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult<User?>(user);
         public Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default) => Task.FromResult<User?>(null);
         public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
@@ -113,6 +115,7 @@ public sealed class PaymentEngineTests
     {
         public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(id == trip.Id ? trip : null);
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Trip>>([trip]);
         public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
         public Task AddAsync(Trip entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
@@ -155,6 +158,8 @@ public sealed class PaymentEngineTests
         public StripePaymentEvent? Event { get; set; }
         public Task<StripeCheckoutSession> CreateTopUpSessionAsync(Guid transactionId, Guid userId, string email, decimal amount, string currency, CancellationToken cancellationToken = default)
             => Task.FromResult(new StripeCheckoutSession("cs_test_123", "https://checkout.stripe.test/session"));
+        public Task<StripeCheckoutSession> CreateTripPaymentSessionAsync(Guid transactionId, Guid userId, Guid tripId, string email, decimal amount, string currency, CancellationToken cancellationToken = default)
+            => Task.FromResult(new StripeCheckoutSession("cs_trip_test_123", "https://checkout.stripe.test/trip-session"));
         public Task<StripePaymentEvent?> ParseCompletedCheckoutAsync(string payload, string signature, CancellationToken cancellationToken = default)
             => Task.FromResult(Event);
     }

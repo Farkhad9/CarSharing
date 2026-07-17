@@ -16,6 +16,8 @@ import AdminControlRoom from "./components/Admin/AdminControlRoom";
 import StaffLogin from "./components/Staff/StaffLogin";
 import StaffDashboard from "./components/Staff/StaffDashboard";
 import AdvancedReservationStage from "./components/AdvancedReservationStage/AdvancedReservationStage";
+import { authApi } from "./api/authApi";
+import { userApi } from "./api/userApi";
 import { FiArrowUp } from "react-icons/fi";
 import { AnimatePresence, motion } from "framer-motion";
 import AOS from "aos";
@@ -33,6 +35,7 @@ const App = () => {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [emailGateMessage, setEmailGateMessage] = useState("");
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [blockedNotice, setBlockedNotice] = useState("");
   const [user, setUser] = useState(() => {
     try {
       const storedUser = localStorage.getItem("electroStreetUser");
@@ -41,6 +44,7 @@ const App = () => {
       return null;
     }
   });
+  const userId = user?.id;
 
   useEffect(() => {
     AOS.init({
@@ -49,6 +53,45 @@ const App = () => {
       offset: 50,
     });
   }, []);
+
+  useEffect(() => {
+    if (!userId || !localStorage.getItem("electroStreetAccessToken")) return undefined;
+
+    let cancelled = false;
+    const refreshCurrentUser = async () => {
+      try {
+        const nextUser = await userApi.getMe();
+        if (cancelled) return;
+
+        if (nextUser.isActive === false) {
+          localStorage.removeItem("electroStreetAccessToken");
+          localStorage.removeItem("electroStreetUser");
+          setUser(null);
+          setBlockedNotice(nextUser.blockReason || "Your account is blocked. Contact support for details.");
+          return;
+        }
+
+        localStorage.setItem("electroStreetUser", JSON.stringify(nextUser));
+        setUser(nextUser);
+      } catch (error) {
+        if (cancelled) return;
+        const isBlocked = error.code === "User.Blocked" || error.errors?.some((item) => item.code === "User.Blocked");
+        if (isBlocked || error.status === 403) {
+          localStorage.removeItem("electroStreetAccessToken");
+          localStorage.removeItem("electroStreetUser");
+          setUser(null);
+          setBlockedNotice(error.message || "Your account is blocked. Contact support for details.");
+        }
+      }
+    };
+
+    refreshCurrentUser();
+    const interval = window.setInterval(refreshCurrentUser, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [userId]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -85,43 +128,41 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get("verifyEmail");
+    const handleBlockedSession = (event) => {
+      setUser(null);
+      setSelectedVehicle(null);
+      setBlockedNotice(event.detail || "Your account is blocked. Contact support for details.");
+    };
 
-    if (!token) {
+    window.addEventListener("electrostreet:account-blocked", handleBlockedSession);
+    return () => window.removeEventListener("electrostreet:account-blocked", handleBlockedSession);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const verificationUserId = params.get("verifyEmail");
+
+    if (!verificationUserId) {
       return;
     }
 
-    try {
-      const pending = JSON.parse(localStorage.getItem("electroStreetPendingEmailVerification") || "null");
-      const storedUser = JSON.parse(localStorage.getItem("electroStreetUser") || "null");
-
-      if (pending?.token === token && storedUser) {
-        const verifiedUser = {
-          ...storedUser,
-          emailVerified: true,
-          emailVerifiedAt: new Date().toISOString(),
-        };
-
-        localStorage.setItem("electroStreetUser", JSON.stringify(verifiedUser));
-        localStorage.removeItem("electroStreetPendingEmailVerification");
-        window.setTimeout(() => {
-          setUser(verifiedUser);
-          setEmailGateMessage("Email подтверждён. Теперь доступны бронирование и платежи.");
-        }, 0);
-      }
-    } catch {
-      window.setTimeout(() => {
-        setEmailGateMessage("Ссылка подтверждения устарела. Зарегистрируйтесь ещё раз или войдите в аккаунт.");
-      }, 0);
-    }
-
-    window.history.replaceState({}, "", window.location.pathname);
+    authApi.verifyEmail(verificationUserId)
+      .then((verifiedUser) => {
+        setUser(verifiedUser);
+        setEmailGateMessage("Email confirmed. Booking and balance top-up are now available.");
+      })
+      .catch((error) => {
+        setEmailGateMessage(error.message || "Email confirmation link could not be verified.");
+      })
+      .finally(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+      });
   }, []);
 
   const handleLogout = () => {
     localStorage.removeItem("electroStreetUser");
     localStorage.removeItem("electroStreetAccessToken");
+    setBlockedNotice("");
     setUser(null);
     window.location.href = "/";
   };
@@ -135,6 +176,11 @@ const App = () => {
   };
 
   const handleOpenVehicle = (vehicle) => {
+    if (blockedNotice || user?.isActive === false) {
+      setBlockedNotice(blockedNotice || user?.blockReason || "Your account is blocked. Contact support for details.");
+      return;
+    }
+
     if (user && user.emailVerified === false) {
       setEmailGateMessage("Подтвердите email, чтобы открыть бронирование автомобиля.");
       return;
@@ -143,6 +189,34 @@ const App = () => {
     setSelectedVehicle(vehicle);
   };
 
+  const renderBlockedNotice = () => blockedNotice ? (
+    <div className="fixed left-1/2 top-24 z-[160] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-2xl border border-red-200 bg-white px-5 py-4 text-sm font-bold text-zinc-800 shadow-2xl shadow-red-950/10">
+      <p className="text-red-600">Account blocked.</p>
+      <p className="mt-1 text-zinc-600">{blockedNotice}</p>
+    </div>
+  ) : null;
+
+  const renderBlockedPage = () => (
+    <main className="flex min-h-screen items-center justify-center bg-zinc-100 px-5">
+      <section className="w-full max-w-xl rounded-3xl border border-red-200 bg-white p-8 text-center shadow-2xl shadow-red-950/10">
+        <p className="text-sm font-black uppercase tracking-[0.24em] text-red-500">Account blocked</p>
+        <h1 className="mt-4 text-3xl font-black text-zinc-950">Access is restricted</h1>
+        <p className="mt-3 text-sm font-semibold leading-6 text-zinc-600">{blockedNotice}</p>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-6 rounded-2xl bg-zinc-950 px-5 py-3 text-sm font-black text-white transition hover:bg-red-500"
+        >
+          Back to sign in
+        </button>
+      </section>
+    </main>
+  );
+
+  if (blockedNotice && !isAdminPage && !isStaffLoginPage && !isStaffPage) {
+    return renderBlockedPage();
+  }
+
   if (isDashboardPage) {
     return <Dashboard onLogout={handleLogout} />;
   }
@@ -150,6 +224,7 @@ const App = () => {
   if (isPricingPage) {
     return (
       <div className="overflow-x-hidden">
+        {renderBlockedNotice()}
         <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
         <PricingPage user={user} onVehicleSelect={handleOpenVehicle} />
         <Footer />
@@ -166,6 +241,7 @@ const App = () => {
   if (isChargingPage) {
     return (
       <div className="overflow-x-hidden">
+        {renderBlockedNotice()}
         <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
         <ChargingPage />
         <Footer />
@@ -182,6 +258,7 @@ const App = () => {
   if (isAboutPage) {
     return (
       <div className="overflow-x-hidden">
+        {renderBlockedNotice()}
         <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
         <AboutPage />
         <Footer />
@@ -219,6 +296,7 @@ const App = () => {
     />
   ) : (
     <div className="overflow-x-hidden">
+      {renderBlockedNotice()}
       <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
       {user?.emailVerified === false && (
         <div className="fixed left-1/2 top-24 z-[95] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-2xl border border-amber-200 bg-white px-5 py-4 text-sm font-bold text-zinc-800 shadow-2xl shadow-amber-950/10">

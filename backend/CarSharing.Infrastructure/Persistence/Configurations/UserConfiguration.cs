@@ -31,6 +31,9 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
             .IsRequired()
             .HasMaxLength(20);
 
+        builder.HasIndex(user => user.Phone)
+            .IsUnique();
+
         builder.Property(user => user.PasswordHash)
             .IsRequired()
             .HasMaxLength(500);
@@ -44,6 +47,12 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.DriverLicenseNumber)
             .IsRequired()
             .HasMaxLength(20);
+
+        builder.Property(user => user.DriverLicenseDocumentUrl)
+            .HasMaxLength(600);
+
+        builder.Property(user => user.PassportDocumentUrl)
+            .HasMaxLength(600);
 
         builder.Property(user => user.EmailVerified)
             .IsRequired();

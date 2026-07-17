@@ -252,6 +252,9 @@ public class TripEngineTests
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Trips.LastOrDefault(trip => trip.UserId == userId));
 
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(Trips.Where(trip => trip.UserId == userId).ToList());
+
         public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Trips.SingleOrDefault(trip => trip.ReservationId == reservationId));
 

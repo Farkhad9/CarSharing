@@ -77,6 +77,12 @@ public class UserRepository : IUserRepository
             .AnyAsync(user => user.Email == email, cancellationToken);
     }
 
+    public async Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Users
+            .AnyAsync(user => user.Phone == phone, cancellationToken);
+    }
+
     public async Task AddAsync(User user, CancellationToken cancellationToken = default)
     {
         await _dbContext.Users.AddAsync(user, cancellationToken);

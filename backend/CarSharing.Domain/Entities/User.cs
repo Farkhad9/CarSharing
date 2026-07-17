@@ -16,11 +16,14 @@ public class User : BaseEntity
     public decimal Balance { get; private set; }
     public decimal PendingHold { get; private set; }
     public string DriverLicenseNumber { get; private set; } = null!;
+    public string? DriverLicenseDocumentUrl { get; private set; }
+    public string? PassportDocumentUrl { get; private set; }
     public bool EmailVerified { get; private set; }
     public UserVerificationStatus VerificationStatus { get; private set; } = UserVerificationStatus.Pending;
     public UserRole Role { get; private set; } = UserRole.Rider;
     public bool IsActive { get; private set; } = true;
     public DateTime CreatedAt { get; private set; }
+    public DateTime? VerificationSubmittedAt { get; private set; }
     public DateTime? VerifiedAt { get; private set; }
     public string? BlockReason { get; private set; }
     public DateTime? BlockedAt { get; private set; }
@@ -124,6 +127,21 @@ public class User : BaseEntity
     public void RejectVerification()
     {
         VerificationStatus = UserVerificationStatus.Rejected;
+        VerifiedAt = null;
+    }
+
+    public void ResetVerificationToPending()
+    {
+        VerificationStatus = UserVerificationStatus.Pending;
+        VerifiedAt = null;
+    }
+
+    public void SubmitVerificationDocuments(string driverLicenseDocumentUrl, string passportDocumentUrl, DateTime submittedAt)
+    {
+        DriverLicenseDocumentUrl = driverLicenseDocumentUrl.Trim();
+        PassportDocumentUrl = passportDocumentUrl.Trim();
+        VerificationStatus = UserVerificationStatus.Pending;
+        VerificationSubmittedAt = submittedAt;
         VerifiedAt = null;
     }
 

@@ -11,4 +11,9 @@ public interface IUserService
     Task<Result<bool>> LogoutAsync(string refreshToken, CancellationToken cancellationToken = default);
     Task<Result<UserDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Result<UserDto>> VerifyEmailAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<Result<UserDto>> SubmitVerificationDocumentsAsync(
+        Guid id,
+        string driverLicenseDocumentUrl,
+        string passportDocumentUrl,
+        CancellationToken cancellationToken = default);
 }

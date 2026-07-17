@@ -123,8 +123,8 @@ public sealed class UpdateUserVerificationRequestValidator : AbstractValidator<U
     public UpdateUserVerificationRequestValidator()
     {
         RuleFor(x => x.Status)
-            .Must(status => status is UserVerificationStatus.Verified or UserVerificationStatus.Rejected)
-            .WithMessage("Verification status must be Verified or Rejected.");
+            .Must(status => status is UserVerificationStatus.Pending or UserVerificationStatus.Verified or UserVerificationStatus.Rejected)
+            .WithMessage("Verification status must be Pending, Verified, or Rejected.");
     }
 }
 
