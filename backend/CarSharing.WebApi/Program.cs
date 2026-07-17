@@ -30,6 +30,7 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<ITripPhotoStorage, LocalTripPhotoStorage>();
+builder.Services.AddScoped<IVehicleImageStorage, LocalVehicleImageStorage>();
 builder.Services.AddHostedService<ReservationExpiryBackgroundService>();
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()

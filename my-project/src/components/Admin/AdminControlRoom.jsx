@@ -31,7 +31,6 @@ import {
   FiZap,
 } from "react-icons/fi";
 import { FaCarSide } from "react-icons/fa";
-import { vehicles } from "../../data/vehicles";
 import { trips } from "../../data/trips";
 import { users } from "../../data/users";
 import { chargingStations } from "../../data/chargingStations";
@@ -915,7 +914,7 @@ const AdminControlRoom = () => {
       return null;
     }
   });
-  const [liveVehicles, setLiveVehicles] = useState(() => vehicles.map(makeLiveVehicle));
+  const [liveVehicles, setLiveVehicles] = useState([]);
   const [managedChargingStations, setManagedChargingStations] = useState(() => {
     try {
       const storedStations = localStorage.getItem(CHARGING_STATIONS_STORAGE_KEY);
@@ -942,7 +941,7 @@ const AdminControlRoom = () => {
     }
   });
   const [managedZones, setManagedZones] = useState(parkingZones);
-  const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[2]?.id || vehicles[0]?.id);
+  const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [focusTarget, setFocusTarget] = useState(null);
   const adminRole = adminSession?.role || "admin";
   const isSuperAdmin = adminRole === "super-admin";
@@ -1006,6 +1005,7 @@ const AdminControlRoom = () => {
   const [staffTasksError, setStaffTasksError] = useState("");
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [backendVehiclesError, setBackendVehiclesError] = useState("");
+  const [isLoadingBackendVehicles, setIsLoadingBackendVehicles] = useState(false);
   const [staffTaskDraft, setStaffTaskDraft] = useState({
     title: "",
     description: "",
@@ -1041,9 +1041,7 @@ const AdminControlRoom = () => {
     lng: "",
     pickOnMap: false,
   });
-  const [events, setEvents] = useState(() =>
-    vehicles.slice(0, 5).map((vehicle, index) => makeEvent(makeLiveVehicle(vehicle, index), index))
-  );
+  const [events, setEvents] = useState([]);
   const [alertsEnabled, setAlertsEnabled] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const staffMembers = useMemo(
@@ -1155,14 +1153,30 @@ const AdminControlRoom = () => {
   }, []);
 
   const loadBackendVehicles = useCallback(async () => {
+    setIsLoadingBackendVehicles(true);
     setBackendVehiclesError("");
 
     try {
       const vehiclesFromBackend = await vehicleApi.getVehicles();
-      setBackendVehicles(Array.isArray(vehiclesFromBackend) ? vehiclesFromBackend : []);
+      const nextVehicles = Array.isArray(vehiclesFromBackend) ? vehiclesFromBackend : [];
+      const nextLiveVehicles = nextVehicles.map(makeLiveVehicle);
+
+      setBackendVehicles(nextVehicles);
+      setLiveVehicles(nextLiveVehicles);
+      setSelectedVehicleId((currentId) =>
+        nextLiveVehicles.some((vehicle) => vehicle.id === currentId)
+          ? currentId
+          : nextLiveVehicles[0]?.id || ""
+      );
+      setEvents(nextLiveVehicles.slice(0, 5).map((vehicle, index) => makeEvent(vehicle, index)));
     } catch (error) {
       setBackendVehicles([]);
+      setLiveVehicles([]);
+      setSelectedVehicleId("");
+      setEvents([]);
       setBackendVehiclesError(error.message || "Backend vehicles are unavailable.");
+    } finally {
+      setIsLoadingBackendVehicles(false);
     }
   }, []);
 
@@ -1250,7 +1264,7 @@ const AdminControlRoom = () => {
   };
 
   const selectedVehicle = useMemo(
-    () => liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || liveVehicles[0],
+    () => liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || liveVehicles[0] || null,
     [liveVehicles, selectedVehicleId]
   );
 
@@ -1627,7 +1641,7 @@ const AdminControlRoom = () => {
 
   const visibleSidebarItems = sidebarItems.filter((item) => isSuperAdmin || !item.superOnly);
 
-  const getVehicle = (vehicleId) => liveVehicles.find((vehicle) => vehicle.id === vehicleId) || vehicles.find((vehicle) => vehicle.id === vehicleId);
+  const getVehicle = (vehicleId) => liveVehicles.find((vehicle) => vehicle.id === vehicleId) || null;
   const activeTicket = tickets.find((ticket) => ticket.id === activeTicketId) || tickets[0];
   const showAdminNotice = (message, section = activeSection, tone = "success") => {
     setAdminNotice({ section, message, tone });
@@ -3442,6 +3456,7 @@ const AdminControlRoom = () => {
                 className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
               >
                 <option value="">No vehicle</option>
+                {isLoadingBackendVehicles && <option value="">Loading backend vehicles...</option>}
                 {backendVehicles.map((vehicle) => (
                   <option key={vehicle.id} value={vehicle.id}>
                     {vehicle.plateNumber} - {vehicle.brand} {vehicle.model}
@@ -4770,6 +4785,17 @@ const AdminControlRoom = () => {
                 </MapContainer>
               </div>
 
+              {!isOperationsMap && (isLoadingBackendVehicles || backendVehiclesError || !liveVehicles.length) && (
+                <div className="pointer-events-none absolute left-1/2 top-1/2 z-[505] w-[min(420px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-[#0b1424]/90 p-5 text-center shadow-2xl shadow-black/30 backdrop-blur-xl">
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-red-300">Backend fleet</p>
+                  <p className="mt-2 text-lg font-black text-white">
+                    {isLoadingBackendVehicles
+                      ? "Loading vehicles..."
+                      : backendVehiclesError || "No vehicles available from backend."}
+                  </p>
+                </div>
+              )}
+
               <div className="pointer-events-none absolute left-4 right-4 top-4 z-[500] grid gap-3 md:left-6 md:right-auto md:grid-cols-4">
                 {mapSummaryCards.map(([label, value, Icon, color]) => (
                   <div key={label} className="rounded-2xl border border-white/10 bg-[#0b1424]/82 px-4 py-3 shadow-2xl shadow-black/20 backdrop-blur-xl">
@@ -4782,7 +4808,7 @@ const AdminControlRoom = () => {
                 ))}
               </div>
 
-              {!isOperationsMap && (
+              {!isOperationsMap && selectedVehicle && (
               <div className="pointer-events-none absolute bottom-5 left-4 z-[500] w-[calc(100%-2rem)] rounded-2xl border border-white/10 bg-[#0b1424]/86 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl md:left-6 md:w-[410px]">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">

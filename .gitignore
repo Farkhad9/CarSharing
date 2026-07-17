@@ -15,3 +15,9 @@ obj/
 
 # Logs
 *.log
+*.out
+*.err
+
+# Runtime uploads
+backend/CarSharing.WebApi/wwwroot/uploads/
+backend/CarSharing.WebApi/wwwroot/invoices/

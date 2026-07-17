@@ -135,6 +135,28 @@ public class VehicleService : IVehicleService
         return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
     }
 
+    public async Task<Result<VehicleDto>> UpdateImagesAsync(
+        Guid id,
+        UpdateVehicleImagesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var vehicle = await _vehicleRepository.GetByIdAsync(id, cancellationToken);
+        if (vehicle is null)
+        {
+            return Result<VehicleDto>.Failure(NotFound);
+        }
+
+        vehicle.UpdateImages(
+            request.MainImageUrl,
+            request.GalleryImageUrl1,
+            request.GalleryImageUrl2,
+            request.GalleryImageUrl3);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+    }
+
     public async Task<Result<VehicleDto>> UpdateStatusAsync(Guid id, UpdateVehicleStatusRequest request, CancellationToken cancellationToken = default)
     {
         var validationResult = await _updateVehicleStatusValidator.ValidateAsync(request, cancellationToken);

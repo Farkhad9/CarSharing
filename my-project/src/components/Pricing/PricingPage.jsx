@@ -11,8 +11,8 @@ import {
   FiUserCheck,
   FiZap,
 } from "react-icons/fi";
-import { vehicles } from "../../data/vehicles";
 import { VEHICLE_STATUSES } from "../../data/statuses";
+import { useVehicles } from "../../hooks/useVehicles";
 
 const billingRules = [
   {
@@ -42,16 +42,20 @@ const serviceNotes = [
 const formatMoney = (value) => `${Number(value || 0).toFixed(2)} AZN`;
 
 const PricingPage = ({ user, onVehicleSelect }) => {
+  const { vehicles, isLoading, error } = useVehicles();
   const bookableVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE),
-    []
+    [vehicles]
   );
-  const [selectedVehicleId, setSelectedVehicleId] = useState(bookableVehicles[0]?.id || vehicles[0]?.id);
+  const selectableVehicles = bookableVehicles.length ? bookableVehicles : vehicles;
+  const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [minutes, setMinutes] = useState(25);
   const [comfortMode, setComfortMode] = useState(false);
 
-  const selectedVehicle =
-    bookableVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || bookableVehicles[0] || vehicles[0];
+  const selectedVehicle = useMemo(
+    () => selectableVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || selectableVehicles[0],
+    [selectableVehicles, selectedVehicleId]
+  );
   const baseRate = Number(selectedVehicle?.pricePerMinute || 0);
   const finalRate = Number((baseRate + (comfortMode ? 0.05 : 0)).toFixed(2));
   const estimate = Number((finalRate * minutes).toFixed(2));
@@ -85,6 +89,8 @@ const PricingPage = ({ user, onVehicleSelect }) => {
   ];
 
   const handleReserve = (vehicle = selectedVehicle) => {
+    if (!vehicle) return;
+
     if (!user) {
       window.location.href = "/auth";
       return;
@@ -92,6 +98,22 @@ const PricingPage = ({ user, onVehicleSelect }) => {
 
     onVehicleSelect?.(vehicle);
   };
+
+  if (isLoading || error || !selectedVehicle) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#f4f6f8] px-5 text-zinc-950">
+        <section className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-red-500">ElectroStreet pricing</p>
+          <h1 className="mt-4 text-3xl font-black">
+            {isLoading ? "Loading live vehicle rates..." : "Vehicle rates unavailable"}
+          </h1>
+          <p className="mt-3 text-sm font-semibold leading-6 text-zinc-500">
+            {isLoading ? "Please wait while the backend fleet is loaded." : error || "No vehicles available from backend."}
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-[#f4f6f8] text-zinc-950">
@@ -189,7 +211,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                   onChange={(event) => setSelectedVehicleId(event.target.value)}
                   className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-bold outline-none transition focus:border-red-400 focus:bg-white"
                 >
-                  {bookableVehicles.map((vehicle) => (
+                  {selectableVehicles.map((vehicle) => (
                     <option key={vehicle.id} value={vehicle.id}>
                       {vehicle.brand} {vehicle.model || "EV"} - {formatMoney(vehicle.pricePerMinute)}/min
                     </option>
@@ -296,7 +318,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {bookableVehicles.map((vehicle) => {
+              {bookableVehicles.map((vehicle) => {
               return (
                 <article
                   key={vehicle.id}

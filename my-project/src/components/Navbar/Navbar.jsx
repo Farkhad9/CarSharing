@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react';
 import { NavbarMenu } from "../../mockData/data"; 
-import { vehicles } from "../../data/vehicles"; 
 import { FaCar, FaBatteryFull, FaBatteryQuarter } from "react-icons/fa";
 import { MdMenu, MdLocationOn } from "react-icons/md";
 import { CiSearch } from "react-icons/ci";
 import { FiCreditCard, FiLogOut, FiUser } from "react-icons/fi";
 import ResponsiveMenu from '../ResponsiveMenu';
+import { useVehicles } from "../../hooks/useVehicles";
 
 const Navbar = ({ user, onLogout, onVehicleSelect }) => {
+    const { vehicles, isLoading: isLoadingVehicles, error: vehiclesError } = useVehicles();
     const [open, setOpen] = useState(false);
     const [isAuthTransitioning, setIsAuthTransitioning] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
@@ -28,7 +29,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
             const fullName = `${car.brand} ${car.model}`.toLowerCase();
             return fullName.includes(searchQuery.toLowerCase());
         });
-    }, [searchQuery]);
+    }, [searchQuery, vehicles]);
 
     // Обработчик клика по результату поиска
     const handleResultClick = (car) => {
@@ -208,7 +209,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                                                 <div className="mt-2 flex items-center justify-between">
                                                     <div className="flex items-center gap-1 text-[11px] text-gray-500">
                                                         <MdLocationOn className="text-gray-400 transition-colors group-hover:text-red-400" />
-                                                        <span className="truncate max-w-[120px]">{car.location.label}</span>
+                                                        <span className="truncate max-w-[120px]">{car.location?.label || "Baku"}</span>
                                                     </div>
                                                     <span className={`text-[10px] font-bold uppercase tracking-wider ${getStatusColor(car.status)}`}>
                                                         {car.status}
@@ -228,7 +229,9 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                         {/* --- ИНДИКАТОР ОНЛАЙН --- */}
                         <div className="hidden items-center gap-2 md:flex">
                             <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span>
-                            <span className="text-sm font-bold text-gray-500">{vehicles.length} EVs online</span>
+                            <span className="text-sm font-bold text-gray-500">
+                                {isLoadingVehicles ? "Loading EVs" : vehiclesError ? "Fleet offline" : `${vehicles.length} EVs online`}
+                            </span>
                         </div>
 
                         {/* --- КНОПКА LOGIN --- */}
