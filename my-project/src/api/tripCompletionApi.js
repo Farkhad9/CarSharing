@@ -161,7 +161,7 @@ export const tripCompletionApi = {
     }
 
     if (request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      throw new Error("The staff must approve the trip before payment.");
+      throw new Error("The trip photos must be approved before payment.");
     }
 
     const paidAt = new Date().toISOString();
@@ -228,7 +228,7 @@ export const tripCompletionApi = {
     }
 
     if (request.status !== TRIP_COMPLETION_STATUSES.APPROVED) {
-      throw new Error("The staff must approve the trip before payment.");
+      throw new Error("The trip photos must be approved before payment.");
     }
 
     const paidAt = new Date().toISOString();

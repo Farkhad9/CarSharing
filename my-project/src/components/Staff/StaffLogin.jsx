@@ -48,7 +48,7 @@ const StaffLogin = () => {
             </a>
             <h1 className="mt-6 text-4xl font-black tracking-tight sm:text-5xl">Staff workspace</h1>
             <p className="mt-4 max-w-xl text-sm font-semibold leading-6 text-zinc-400">
-              Sign in with a backend Staff, Admin, or SuperAdmin account. If the backend is unavailable or the account is blocked, access is denied instead of falling back to demo data.
+              Sign in with a Staff, Admin, or SuperAdmin account. If the service is unavailable or the account is blocked, access is denied instead of falling back to demo data.
             </p>
             <div className="mt-8 grid gap-3 text-sm font-bold text-zinc-300 sm:grid-cols-3">
               <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">Backend auth</div>
@@ -64,7 +64,7 @@ const StaffLogin = () => {
               </span>
               <div>
                 <h2 className="text-2xl font-black">Staff sign in</h2>
-                <p className="text-xs font-bold text-zinc-400">Use your backend account email and password</p>
+                <p className="text-xs font-bold text-zinc-400">Use your account email and password</p>
               </div>
             </div>
 

@@ -35,6 +35,10 @@ public class TripService : ITripService
     private static readonly Error CompletionRequestNotPending = new("TripCompletion.NotPending", "Trip completion request must be pending review.");
     private static readonly Error CompletionRequestNotRejected = new("TripCompletion.NotRejected", "New photos can be submitted only after the previous request was rejected.");
     private static readonly Error StaffRequired = new("TripCompletion.StaffRequired", "Only staff, admin, or super admin can review completion requests.");
+    private static readonly Error PromoCodeRequired = new("Trip.PromoCodeRequired", "Enter a promo code.");
+    private static readonly Error PromoCodeNotFound = new("Trip.PromoCodeNotFound", "Promo code was not found.");
+    private static readonly Error PromoAlreadyApplied = new("Trip.PromoAlreadyApplied", "A promo code is already applied to this trip.");
+    private static readonly Error PromoRequiresAwaitingPayment = new("Trip.PromoRequiresAwaitingPayment", "Promo code can only be applied before payment.");
 
     private readonly ITripRepository _tripRepository;
     private readonly ITripCompletionRequestRepository _completionRequestRepository;
@@ -148,22 +152,23 @@ public class TripService : ITripService
         return Result<TripDto>.Success(MapTrip(trip));
     }
 
-    public async Task<Result<TripDto?>> GetMyActiveAsync(CancellationToken cancellationToken = default)
+    public async Task<Result<IReadOnlyList<TripDto>>> GetMyActiveAsync(CancellationToken cancellationToken = default)
     {
         var userId = _currentUserService.UserId;
         if (userId is null)
         {
-            return Result<TripDto?>.Failure(Unauthenticated);
+            return Result<IReadOnlyList<TripDto>>.Failure(Unauthenticated);
         }
 
-        var trip = await _tripRepository.GetActiveByUserIdAsync(userId.Value, cancellationToken);
-        if (trip is null)
+        var trips = await _tripRepository.GetActiveTripsByUserIdAsync(userId.Value, cancellationToken);
+        var items = new List<TripDto>();
+        foreach (var trip in trips)
         {
-            return Result<TripDto?>.Success(null);
+            var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
+            items.Add(MapTrip(trip, latestRequest));
         }
 
-        var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-        return Result<TripDto?>.Success(MapTrip(trip, latestRequest));
+        return Result<IReadOnlyList<TripDto>>.Success(items);
     }
 
     public async Task<Result<TripDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -178,6 +183,65 @@ public class TripService : ITripService
         {
             return Result<TripDto>.Failure(Forbidden);
         }
+
+        var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
+        return Result<TripDto>.Success(MapTrip(trip, latestRequest));
+    }
+
+    public async Task<Result<TripDto>> ApplyPromoCodeAsync(
+        Guid tripId,
+        ApplyTripPromoCodeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var userId = _currentUserService.UserId;
+        if (userId is null)
+        {
+            return Result<TripDto>.Failure(Unauthenticated);
+        }
+
+        var promoCode = request.PromoCode?.Trim();
+        if (string.IsNullOrWhiteSpace(promoCode))
+        {
+            return Result<TripDto>.Failure(PromoCodeRequired);
+        }
+
+        var trip = await _tripRepository.GetByIdAsync(tripId, cancellationToken);
+        if (trip is null)
+        {
+            return Result<TripDto>.Failure(TripNotFound);
+        }
+
+        if (trip.UserId != userId.Value)
+        {
+            return Result<TripDto>.Failure(Forbidden);
+        }
+
+        if (trip.Status != TripStatus.AwaitingPayment)
+        {
+            return Result<TripDto>.Failure(PromoRequiresAwaitingPayment);
+        }
+
+        if (!string.IsNullOrWhiteSpace(trip.PromoCode))
+        {
+            return Result<TripDto>.Failure(PromoAlreadyApplied);
+        }
+
+        var discountPercent = promoCode.ToLowerInvariant() switch
+        {
+            "farkhad" => 20,
+            "electro10" => 10,
+            "electrostreet10" => 10,
+            "student10" => 10,
+            _ => 0
+        };
+
+        if (discountPercent == 0)
+        {
+            return Result<TripDto>.Failure(PromoCodeNotFound);
+        }
+
+        trip.ApplyPromoCode(promoCode.ToLowerInvariant(), discountPercent);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
         return Result<TripDto>.Success(MapTrip(trip, latestRequest));
@@ -443,6 +507,14 @@ public class TripService : ITripService
         dto.LatestCompletionRequest = latestCompletionRequest is null
             ? null
             : _mapper.Map<TripCompletionRequestDto>(latestCompletionRequest);
+        if (dto.LatestCompletionRequest is not null)
+        {
+            dto.LatestCompletionRequest.BaseRideCost = trip.BasePrice;
+            dto.LatestCompletionRequest.DiscountPercent = trip.DiscountPercent;
+            dto.LatestCompletionRequest.DiscountAmount = trip.DiscountAmount;
+            dto.LatestCompletionRequest.FinalRideCost = trip.TotalPrice;
+            dto.LatestCompletionRequest.PromoCode = trip.PromoCode;
+        }
 
         return dto;
     }
@@ -453,7 +525,16 @@ public class TripService : ITripService
     {
         var dto = _mapper.Map<TripCompletionRequestDto>(request);
         var trip = await _tripRepository.GetByIdAsync(request.TripId, cancellationToken);
-        dto.DurationMinutes = trip?.DurationMinutes ?? 0;
+        if (trip is not null)
+        {
+            dto.BaseRideCost = trip.BasePrice;
+            dto.DurationMinutes = trip.DurationMinutes;
+            dto.DiscountPercent = trip.DiscountPercent;
+            dto.DiscountAmount = trip.DiscountAmount;
+            dto.FinalRideCost = trip.TotalPrice;
+            dto.PromoCode = trip.PromoCode;
+        }
+
         return dto;
     }
 

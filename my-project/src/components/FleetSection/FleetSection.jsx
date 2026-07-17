@@ -252,7 +252,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
           {isLoadingVehicles ? (
             <div className="rounded-3xl border border-gray-100 bg-white p-8 text-sm font-black text-gray-500 shadow-sm md:col-span-2 lg:col-span-3">
-              Loading EVs from backend...
+              Loading EVs...
             </div>
           ) : filteredAndSortedVehicles.length ? filteredAndSortedVehicles.map((vehicle) => {
             const status = STATUS_STYLES[vehicle.status] || STATUS_STYLES[VEHICLE_STATUSES.AVAILABLE];

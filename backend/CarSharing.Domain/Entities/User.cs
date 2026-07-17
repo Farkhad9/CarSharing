@@ -130,6 +130,12 @@ public class User : BaseEntity
         VerifiedAt = null;
     }
 
+    public void ResetVerificationToPending()
+    {
+        VerificationStatus = UserVerificationStatus.Pending;
+        VerifiedAt = null;
+    }
+
     public void SubmitVerificationDocuments(string driverLicenseDocumentUrl, string passportDocumentUrl, DateTime submittedAt)
     {
         DriverLicenseDocumentUrl = driverLicenseDocumentUrl.Trim();

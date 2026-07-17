@@ -16,9 +16,7 @@ public sealed class UsersController : ControllerBase
     {
         "image/jpeg",
         "image/jpg",
-        "image/png",
-        "image/webp",
-        "application/pdf"
+        "image/png"
     };
 
     private readonly IUserService _userService;
@@ -83,12 +81,17 @@ public sealed class UsersController : ControllerBase
 
         if (file.Length > 10 * 1024 * 1024)
         {
-            return new Error("Validation.IdentityDocument", $"{label} document must be smaller than 10 MB.");
+            return new Error("Validation.IdentityDocument", $"{label} photo exceeds 10 MB. Please upload a smaller photo.");
         }
 
-        return AllowedContentTypes.Contains(file.ContentType)
+        var extension = Path.GetExtension(file.FileName);
+        var hasJpegExtension = extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+        var hasPngExtension = extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
+
+        return AllowedContentTypes.Contains(file.ContentType) && (hasJpegExtension || hasPngExtension)
             ? null
-            : new Error("Validation.IdentityDocument", $"{label} document must be an image or PDF.");
+            : new Error("Validation.IdentityDocument", $"Upload a photo in JPEG or PNG format for your {label}. PDF files are not accepted.");
     }
 
     private async Task<string> SaveDocumentAsync(Guid userId, string type, IFormFile file, CancellationToken cancellationToken)
@@ -105,7 +108,7 @@ public sealed class UsersController : ControllerBase
         var extension = Path.GetExtension(file.FileName);
         if (string.IsNullOrWhiteSpace(extension))
         {
-            extension = file.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ? ".pdf" : ".jpg";
+            extension = ".jpg";
         }
 
         var fileName = $"{type}-{Guid.NewGuid():N}{extension}";

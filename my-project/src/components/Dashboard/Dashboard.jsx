@@ -64,6 +64,7 @@ const USER_VERIFICATION_STATUS = {
 };
 
 const DASHBOARD_TAB_STORAGE_KEY = "electroStreetDashboardActiveTab";
+const AUTO_PAY_TRIP_STORAGE_KEY = "electroStreetAutoPayTripId";
 const LEGACY_DOCUMENTS_STORAGE_KEY = "electroStreetDocuments";
 const getDocumentsStorageKey = (userId) => `${LEGACY_DOCUMENTS_STORAGE_KEY}:${userId || "anonymous"}`;
 const EMPTY_DOCUMENTS = {
@@ -100,6 +101,19 @@ const tabs = [
   { id: "security", label: "Security", icon: FiLock },
   { id: "support", label: "Support", icon: FiHeadphones },
 ];
+
+const getInitialDashboardTab = () => {
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  if (tabs.some((tab) => tab.id === requestedTab)) return requestedTab;
+
+  const navigationType = window.performance?.getEntriesByType?.("navigation")?.[0]?.type;
+  if (navigationType === "reload") {
+    const storedTab = localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
+    if (tabs.some((tab) => tab.id === storedTab)) return storedTab;
+  }
+
+  return "trip";
+};
 
 const panelMotion = {
   initial: { opacity: 0, y: 18, scale: 0.99 },
@@ -277,14 +291,23 @@ const migrateLegacyReservations = (reservations) =>
       : reservation
   );
 
-const mapBackendRideState = ({ reservations, activeTrip, vehicles }) => {
-  if (activeTrip) {
+const mapBackendRideState = ({ reservations, activeTrips, vehicles }) => {
+  const mappedReservations = (Array.isArray(reservations) ? reservations : []).map((reservation) => {
+    const vehicle = vehicles.find((item) => item.id === reservation.vehicleId);
+    return {
+      ...reservation,
+      reservationId: reservation.id,
+      rate: Number(vehicle?.pricePerMinute || 0),
+    };
+  });
+
+  const mappedTrips = (Array.isArray(activeTrips) ? activeTrips : []).map((activeTrip) => {
     const completion = activeTrip.latestCompletionRequest;
     const completionStatus = completion?.status;
     const isRejected =
       completionStatus === COMPLETION_REQUEST_STATUS.Rejected ||
       String(completionStatus).toLowerCase() === "rejected";
-    return [{
+    return {
       id: activeTrip.reservationId || activeTrip.id,
       reservationId: activeTrip.reservationId || activeTrip.id,
       tripId: activeTrip.id,
@@ -309,17 +332,30 @@ const mapBackendRideState = ({ reservations, activeTrip, vehicles }) => {
       discountPercent: Number(activeTrip.discountPercent || 0),
       discountAmount: Number(activeTrip.discountAmount || 0),
       currency: activeTrip.currency || "AZN",
-    }];
-  }
-
-  return (Array.isArray(reservations) ? reservations : []).map((reservation) => {
-    const vehicle = vehicles.find((item) => item.id === reservation.vehicleId);
-    return {
-      ...reservation,
-      reservationId: reservation.id,
-      rate: Number(vehicle?.pricePerMinute || 0),
+      latestCompletionRequest: activeTrip.latestCompletionRequest || null,
     };
   });
+
+  if (mappedTrips.length) {
+    const tripsByReservationId = new Map(mappedTrips.map((trip) => [trip.reservationId, trip]));
+    const tripsByVehicleId = new Map(mappedTrips.map((trip) => [trip.vehicleId, trip]));
+    const usedTripIds = new Set();
+
+    const mergedReservations = mappedReservations.map((reservation) => {
+      const mappedTrip = tripsByReservationId.get(reservation.id || reservation.reservationId)
+        || tripsByVehicleId.get(reservation.vehicleId);
+      if (!mappedTrip) return reservation;
+      usedTripIds.add(mappedTrip.tripId);
+      return { ...reservation, ...mappedTrip };
+    });
+
+    return [
+      ...mappedTrips.filter((trip) => !usedTripIds.has(trip.tripId)),
+      ...mergedReservations,
+    ];
+  }
+
+  return mappedReservations;
 };
 
 const getVehiclePosition = (vehicle) => [
@@ -355,12 +391,7 @@ const ReservationMapBounds = ({ points }) => {
 };
 
 const Dashboard = ({ onLogout }) => {
-  const [activeTab, setActiveTab] = useState(() => {
-    const requestedTab = new URLSearchParams(window.location.search).get("tab");
-    if (tabs.some((tab) => tab.id === requestedTab)) return requestedTab;
-    const storedTab = localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
-    return tabs.some((tab) => tab.id === storedTab) ? storedTab : "trip";
-  });
+  const [activeTab, setActiveTab] = useState(getInitialDashboardTab);
   const [user, setUser] = useState(() =>
     getStoredJson("electroStreetUser", {
       name: "Farhad",
@@ -375,6 +406,7 @@ const Dashboard = ({ onLogout }) => {
   const [reservations, setReservations] = useState(() => migrateLegacyReservations(getStoredReservations()));
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [activeTrip, setActiveTrip] = useState(null);
+  const [activeTrips, setActiveTrips] = useState([]);
   const [isLoadingRideState, setIsLoadingRideState] = useState(false);
   const [rideStateError, setRideStateError] = useState("");
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
@@ -427,6 +459,7 @@ const Dashboard = ({ onLogout }) => {
   const [timerNow, setTimerNow] = useState(() => Date.now());
   const [userLocation, setUserLocation] = useState(DEFAULT_USER_LOCATION);
   const [routeStates, setRouteStates] = useState({});
+  const [selectedMapReservationId, setSelectedMapReservationId] = useState(null);
   const [cancelReservationTarget, setCancelReservationTarget] = useState(null);
   const [completionTarget, setCompletionTarget] = useState(null);
   const [completionPhotos, setCompletionPhotos] = useState({});
@@ -440,6 +473,7 @@ const Dashboard = ({ onLogout }) => {
   const [isLoadingPayments, setIsLoadingPayments] = useState(false);
   const [isPayingTrip, setIsPayingTrip] = useState(false);
   const [tripPaymentMethod, setTripPaymentMethod] = useState("balance");
+  const [hiddenPaymentTripIds, setHiddenPaymentTripIds] = useState(() => new Set());
   const [isOpeningTopUp, setIsOpeningTopUp] = useState(false);
   const [finishPromoCode, setFinishPromoCode] = useState("");
   const [finishPromoMessage, setFinishPromoMessage] = useState("");
@@ -452,6 +486,7 @@ const Dashboard = ({ onLogout }) => {
   const licenseInputRef = useRef(null);
   const passportInputRef = useRef(null);
   const supportReplyTimersRef = useRef([]);
+  const autoPayInFlightRef = useRef(false);
 
   const activeReservations = useMemo(() => {
     return reservations.map((reservation) => {
@@ -474,13 +509,24 @@ const Dashboard = ({ onLogout }) => {
       const rideElapsedSeconds = rideStartedAt
         ? Math.max(0, Math.floor((rideTimerEnd - getBackendTime(rideStartedAt)) / 1000))
         : 0;
-      const rideCost = isRideActive
+      const liveRideCost = isRideActive
         ? Number((((rideElapsedSeconds || 0) / 60) * Number(vehicle?.rate || vehicle?.pricePerMinute || 0)).toFixed(2))
         : 0;
+      const storedFinalCost = Number(
+        reservation?.latestCompletionRequest?.finalRideCost
+          || reservation?.finalRideCost
+          || reservation?.frozenRideCost
+          || reservation?.rideCost
+          || 0
+      );
+      const rideCost = isFinishingRide || isCompletionPending || isCompletionRejected || isAwaitingPayment
+        ? storedFinalCost
+        : liveRideCost;
+      const resolvedReservationId = reservation.reservationId || reservation.id || reservation.vehicleId || reservation.tripId;
 
       return {
         ...vehicle,
-        reservationId: reservation.id || reservation.vehicleId,
+        reservationId: resolvedReservationId,
         isVehicleUnlocked,
         rideStartedAt,
         isRideActive,
@@ -496,15 +542,24 @@ const Dashboard = ({ onLogout }) => {
     });
   }, [backendVehicles, reservations, timerNow]);
   const activeVehicle = activeReservations[0] || null;
-  const paymentVehicle = activeReservations.find((vehicle) => vehicle.isAwaitingPayment) || null;
-  const paymentRequest = activeTrip?.latestCompletionRequest || null;
+  const selectedMapVehicle = activeReservations.find((vehicle) => vehicle.reservationId === selectedMapReservationId)
+    || activeVehicle;
+  const paymentVehicle = activeReservations.find((vehicle) => {
+    const tripId = vehicle?.tripId || vehicle?.id;
+    return vehicle.isAwaitingPayment && !hiddenPaymentTripIds.has(tripId);
+  }) || null;
+  const paymentTrip = paymentVehicle
+    ? activeTrips.find((trip) => trip.id === paymentVehicle.tripId)
+    : null;
+  const paymentRequest = paymentVehicle?.latestCompletionRequest || paymentTrip?.latestCompletionRequest || null;
+  const tripCardAmount = toMoney(paymentRequest?.finalRideCost || paymentVehicle?.finalRideCost || paymentVehicle?.rideCost || 0);
+  const isTripCardAmountTooSmall = Boolean(paymentVehicle && tripCardAmount > 0 && tripCardAmount < 1.1);
   const activeSupportTicket = useMemo(
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
   );
   const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
-  const profilePendingHold = 0;
-  const availableProfileBalance = Math.max(0, profileBalance - profilePendingHold);
+  const profilePendingHold = Number(user.pendingHold ?? 0);
   const receiptByTransactionId = useMemo(() => {
     return new Map(
       paymentInvoices
@@ -542,8 +597,15 @@ const Dashboard = ({ onLogout }) => {
     const hasSubmittedDocuments = Boolean(nextUser?.driverLicenseDocumentUrl || nextUser?.passportDocumentUrl || nextUser?.verificationSubmittedAt);
     const isRejected = isUserVerificationStatus(verificationStatus, "Rejected");
     const isVerified = isUserVerificationStatus(verificationStatus, "Verified");
+    const hasPendingLocalSelection = Boolean(
+      identityDocumentFiles.license ||
+      identityDocumentFiles.passport ||
+      documents.license?.fileName ||
+      documents.passport?.fileName
+    );
 
     if (!hasSubmittedDocuments && !isRejected && !isVerified) {
+      if (hasPendingLocalSelection) return;
       persistDocuments(EMPTY_DOCUMENTS, nextUser?.id);
       return;
     }
@@ -638,12 +700,13 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const loadRideState = async () => {
+  const loadRideState = async (options = {}) => {
+    const silent = options.silent === true;
     if (!localStorage.getItem("electroStreetAccessToken")) {
       setRideStateError("Sign in again to load your reservations.");
       return;
     }
-    setIsLoadingRideState(true);
+    if (!silent) setIsLoadingRideState(true);
     setRideStateError("");
     try {
       const [vehiclesResult, reservationsResult, tripResult] = await Promise.allSettled([
@@ -653,13 +716,16 @@ const Dashboard = ({ onLogout }) => {
       ]);
       const vehicles = vehiclesResult.status === "fulfilled" ? vehiclesResult.value : [];
       const activeReservations = reservationsResult.status === "fulfilled" ? reservationsResult.value : [];
-      const nextActiveTrip = tripResult.status === "fulfilled" ? tripResult.value : null;
+      const nextActiveTrips = tripResult.status === "fulfilled"
+        ? Array.isArray(tripResult.value) ? tripResult.value : (tripResult.value ? [tripResult.value] : [])
+        : [];
 
       setBackendVehicles(Array.isArray(vehicles) ? vehicles : []);
-      setActiveTrip(nextActiveTrip || null);
+      setActiveTrips(nextActiveTrips);
+      setActiveTrip(nextActiveTrips[0] || null);
       setReservations(mapBackendRideState({
         reservations: activeReservations,
-        activeTrip: nextActiveTrip,
+        activeTrips: nextActiveTrips,
         vehicles: Array.isArray(vehicles) ? vehicles : [],
       }));
       localStorage.removeItem("reservedVehicle");
@@ -675,7 +741,7 @@ const Dashboard = ({ onLogout }) => {
     } catch (error) {
       setRideStateError(error.message || "Ride state could not be loaded.");
     } finally {
-      setIsLoadingRideState(false);
+      if (!silent) setIsLoadingRideState(false);
     }
   };
 
@@ -689,6 +755,31 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
+  const downloadTransactionReceipt = async (transaction) => {
+    if (!transaction?.id) return;
+
+    setPaymentError("");
+    const existingReceipt = receiptByTransactionId.get(transaction.id);
+    if (existingReceipt?.id) {
+      await downloadReceipt(existingReceipt);
+      return;
+    }
+
+    try {
+      const invoices = await invoiceApi.getMyInvoices();
+      const nextInvoices = Array.isArray(invoices) ? invoices : [];
+      setPaymentInvoices(nextInvoices);
+      const receipt = nextInvoices.find((invoice) => invoice?.paymentTransactionId === transaction.id);
+      if (receipt?.id) {
+        await invoiceApi.openMyReceipt(receipt.id);
+        return;
+      }
+      setPaymentError("Receipt is still being prepared. Please refresh in a moment.");
+    } catch (error) {
+      setPaymentError(error.message || "Receipt could not be opened.");
+    }
+  };
+
   useEffect(() => {
     localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, activeTab);
   }, [activeTab]);
@@ -696,7 +787,7 @@ const Dashboard = ({ onLogout }) => {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       loadUserProfile();
-      loadRideState();
+      loadRideState({ silent: true });
       loadPayments();
       const stripeResult = new URLSearchParams(window.location.search).get("stripe");
       if (stripeResult === "success") setTripNotice("Card payment was accepted. Balance will update after confirmation.");
@@ -710,12 +801,12 @@ const Dashboard = ({ onLogout }) => {
   useEffect(() => {
     const timer = window.setInterval(() => {
       loadUserProfile();
-      loadRideState();
+      loadRideState({ silent: true });
       loadPayments();
     }, 15000);
 
     return () => window.clearInterval(timer);
-    // Polling keeps customer payment state in sync after staff approval.
+    // Polling keeps customer payment state in sync after review approval.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -768,13 +859,33 @@ const Dashboard = ({ onLogout }) => {
 
   useEffect(() => {
     if (!activeReservations.length) {
+      const timer = window.setTimeout(() => setSelectedMapReservationId(null), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    if (!activeReservations.some((vehicle) => vehicle.reservationId === selectedMapReservationId)) {
+      const timer = window.setTimeout(() => setSelectedMapReservationId(activeReservations[0].reservationId), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    return undefined;
+  }, [activeReservations, selectedMapReservationId]);
+
+  useEffect(() => {
+    if (!activeReservations.length) {
       const clearRouteTimer = window.setTimeout(() => setRouteStates({}), 0);
       return () => window.clearTimeout(clearRouteTimer);
     }
 
     const controllers = [];
 
-    activeReservations.forEach((vehicle) => {
+    activeReservations
+      .filter((vehicle) =>
+        vehicle?.reservationId &&
+        Number.isFinite(Number(vehicle?.latitude)) &&
+        Number.isFinite(Number(vehicle?.longitude))
+      )
+      .forEach((vehicle) => {
       const controller = new AbortController();
       controllers.push(controller);
 
@@ -975,7 +1086,7 @@ const Dashboard = ({ onLogout }) => {
 
     const confirmed = await confirm({
       title: "Send photos for review?",
-      message: "Send these four photos to a staff member for review? You will not be able to finish the trip until they approve them.",
+      message: "Send these four photos for review? You will not be able to finish the trip until they are approved.",
       confirmLabel: "Send for review",
       tone: "info",
     });
@@ -991,7 +1102,7 @@ const Dashboard = ({ onLogout }) => {
       await tripApi.submitCompletion(completionTarget.tripId, completionPhotos);
       await loadRideState();
       setTripNotice(
-        "Four photos were sent to staff review. The ride will close after approval."
+        "Four photos were sent for review. The ride will close after approval."
       );
       setCompletionTarget(null);
       setCompletionPhotos({});
@@ -1029,20 +1140,39 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const handlePayTrip = async (targetVehicle = paymentVehicle) => {
+  const handleOpenTopUpForTrip = (targetVehicle = paymentVehicle) => {
     const tripId = targetVehicle?.tripId || targetVehicle?.id;
     if (!tripId) return;
-    const amount = toMoney(paymentRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
 
-    const confirmed = await confirm({
-      title: "Confirm payment",
-      message: `Confirm payment of ${amount.toFixed(2)} AZN from your ElectroStreet balance?`,
-      confirmLabel: "Pay now",
-      tone: "success",
-    });
+    const targetRequest = targetVehicle?.latestCompletionRequest || paymentRequest;
+    const amount = toMoney(targetRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
+    const missingAmount = Math.max(5, Math.ceil(Math.max(0, amount - profileBalance) * 100) / 100);
 
-    if (!confirmed) {
-      return;
+    localStorage.setItem(AUTO_PAY_TRIP_STORAGE_KEY, tripId);
+    setHiddenPaymentTripIds((items) => new Set([...items, tripId]));
+    setTopUpAmount(missingAmount.toFixed(2));
+    setPaymentError("");
+    setActiveTab("payments");
+    setIsTopUpModalOpen(true);
+  };
+
+  const handlePayTrip = async (targetVehicle = paymentVehicle, options = {}) => {
+    const tripId = targetVehicle?.tripId || targetVehicle?.id;
+    if (!tripId) return;
+    const targetRequest = targetVehicle?.latestCompletionRequest || paymentRequest;
+    const amount = toMoney(targetRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
+
+    if (!options.skipConfirm) {
+      const confirmed = await confirm({
+        title: "Confirm payment",
+        message: `Confirm payment of ${amount.toFixed(2)} AZN from your ElectroStreet balance?`,
+        confirmLabel: "Pay now",
+        tone: "success",
+      });
+
+      if (!confirmed) {
+        return;
+      }
     }
 
     setIsPayingTrip(true);
@@ -1055,21 +1185,46 @@ const Dashboard = ({ onLogout }) => {
       await loadRideState();
       await loadPayments();
       setTripNotice(`Payment of ${amount.toFixed(2)} AZN was successful. The ride is completed.`);
+      localStorage.removeItem(AUTO_PAY_TRIP_STORAGE_KEY);
+      setHiddenPaymentTripIds((items) => {
+        const next = new Set(items);
+        next.delete(tripId);
+        return next;
+      });
       setReviewTrip({ vehicleName: `${targetVehicle.brand} ${targetVehicle.model}` });
       setReviewRating(5);
       setReviewComment("");
       setReviewError("");
     } catch (error) {
-      setPaymentError(error.message || "The payment could not be completed.");
+      if (!options.silent) {
+        setPaymentError(error.message || "The payment could not be completed.");
+      }
       await loadPayments();
     } finally {
       setIsPayingTrip(false);
     }
   };
 
-  const handleFinishPromo = () => {
+  const handleFinishPromo = async () => {
     setFinishPromoMessage("");
-    setPaymentError("Promo codes are not available for backend trip payments yet.");
+    setPaymentError("");
+
+    const targetTrip = activeTrips.find((trip) => trip.id === paymentVehicle?.tripId)
+      || activeTrip;
+    const tripId = paymentVehicle?.tripId || targetTrip?.id;
+    const code = finishPromoCode.trim();
+    if (!tripId || !code) return;
+
+    try {
+      const updatedTrip = await tripApi.applyPromoCode(tripId, code);
+      setActiveTrip(updatedTrip);
+      setActiveTrips((items) => items.map((trip) => (trip.id === updatedTrip.id ? updatedTrip : trip)));
+      setFinishPromoCode("");
+      setFinishPromoMessage(`Promo code applied. You saved ${formatMoney(updatedTrip?.discountAmount || updatedTrip?.latestCompletionRequest?.discountAmount || 0)}.`);
+      await loadRideState();
+    } catch (error) {
+      setPaymentError(error.message || "Promo code could not be applied.");
+    }
   };
 
   const handlePayTripByCard = async (targetVehicle = paymentVehicle) => {
@@ -1082,7 +1237,7 @@ const Dashboard = ({ onLogout }) => {
       message: `Open secure card checkout and pay ${amount.toFixed(2)} AZN?`,
       confirmLabel: "Continue",
       tone: "success",
-    });
+      });
 
     if (!confirmed) return;
 
@@ -1099,6 +1254,33 @@ const Dashboard = ({ onLogout }) => {
       setIsPayingTrip(false);
     }
   };
+
+  useEffect(() => {
+    const tripId = localStorage.getItem(AUTO_PAY_TRIP_STORAGE_KEY);
+    if (!tripId || autoPayInFlightRef.current || isPayingTrip) return;
+
+    const targetVehicle = activeReservations.find((vehicle) => {
+      const vehicleTripId = vehicle?.tripId || vehicle?.id;
+      return vehicleTripId === tripId && vehicle.isAwaitingPayment;
+    });
+    if (!targetVehicle) return;
+
+    const targetRequest = targetVehicle.latestCompletionRequest;
+    const amount = toMoney(targetRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
+    if (amount <= 0 || profileBalance + 0.001 < amount) return;
+
+    autoPayInFlightRef.current = true;
+    const timer = window.setTimeout(() => {
+      handlePayTrip(targetVehicle, { skipConfirm: true, silent: true })
+        .finally(() => {
+          autoPayInFlightRef.current = false;
+        });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+    // This effect intentionally watches loaded payment/ride state and retries once the top-up appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeReservations, profileBalance, isPayingTrip]);
 
   const submitTripReview = () => {
     if (!reviewTrip) return;
@@ -1160,6 +1342,19 @@ const Dashboard = ({ onLogout }) => {
 
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      event.target.value = "";
+      setDocumentsError("This photo exceeds 10 MB. Please upload a smaller photo.");
+      return;
+    }
+
+    const isSupportedPhoto = file.type === "image/jpeg" || file.type === "image/png" || /\.(jpe?g|png)$/i.test(file.name);
+    if (!isSupportedPhoto) {
+      event.target.value = "";
+      setDocumentsError("Please upload a JPEG or PNG photo. PDF files are not accepted.");
+      return;
+    }
 
     setIdentityDocumentFiles((current) => ({
       ...current,
@@ -1276,6 +1471,7 @@ const Dashboard = ({ onLogout }) => {
         const routePositions = routeState.positions?.length > 1 ? routeState.positions : [userLocation, vehiclePosition];
         const routeMinutes = routeState.durationSeconds ? Math.max(1, Math.round(routeState.durationSeconds / 60)) : null;
         const routeDistanceKm = routeState.distanceMeters ? (routeState.distanceMeters / 1000).toFixed(1) : null;
+        const mapKey = `${vehicle.reservationId}-${vehicle.tripId || "reserved"}-${vehicle.vehicleId || vehicle.id || "vehicle"}`;
 
         return (
           <>
@@ -1291,7 +1487,7 @@ const Dashboard = ({ onLogout }) => {
         </span>
       </div>
       <div className="h-[220px]">
-        <MapContainer center={getVehiclePosition(vehicle)} zoom={13} scrollWheelZoom className="h-full w-full !z-0">
+        <MapContainer key={mapKey} center={vehiclePosition} zoom={13} scrollWheelZoom className="h-full w-full !z-0">
           <ReservationMapBounds points={routePositions} />
           <TileLayer
             url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -1334,7 +1530,7 @@ const Dashboard = ({ onLogout }) => {
             {activeVehicle ? "Vehicle reserved" : "Ready for the next trip"}
           </h2>
           {isLoadingRideState && (
-            <p className="mt-3 text-sm font-bold text-zinc-500">Syncing with backend...</p>
+            <p className="mt-3 text-sm font-bold text-zinc-500">Syncing your ride...</p>
           )}
           {rideStateError && (
             <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
@@ -1418,7 +1614,7 @@ const Dashboard = ({ onLogout }) => {
                       <div className="flex items-start gap-3">
                         <FiClock className="mt-0.5 shrink-0 text-amber-600" />
                         <div>
-                          <p className="text-sm font-black text-amber-900">Waiting for staff approval</p>
+                          <p className="text-sm font-black text-amber-900">Waiting for review approval</p>
                           <p className="mt-1 text-xs font-semibold leading-5 text-amber-700">
                             Your four vehicle photos were submitted. The ride remains in review and will close automatically after approval.
                           </p>
@@ -1451,7 +1647,7 @@ const Dashboard = ({ onLogout }) => {
                         <div>
                           <p className="text-sm font-black text-emerald-900">Photos approved — payment required</p>
                           <p className="mt-1 text-xs font-semibold leading-5 text-emerald-700">
-                            The staff approved the vehicle condition. Confirm payment to complete the ride.
+                            The vehicle condition was approved. Confirm payment to complete the ride.
                           </p>
                         </div>
                       </div>
@@ -1633,9 +1829,35 @@ const Dashboard = ({ onLogout }) => {
           </div>
         </div>
 
-        {activeReservations.length > 0 && (
+        {selectedMapVehicle && (
           <div className="grid gap-4">
-            {activeReservations.map((vehicle) => renderReservationMap(vehicle))}
+            {activeReservations.length > 1 && (
+              <div className="rounded-3xl border border-zinc-200 bg-white p-3 shadow-sm">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {activeReservations.map((vehicle) => {
+                    const isSelected = vehicle.reservationId === selectedMapVehicle.reservationId;
+                    return (
+                      <button
+                        key={`map-switch-${vehicle.reservationId}`}
+                        type="button"
+                        onClick={() => setSelectedMapReservationId(vehicle.reservationId)}
+                        className={`rounded-2xl px-4 py-3 text-left text-xs font-black transition ${
+                          isSelected
+                            ? "bg-zinc-950 text-white"
+                            : "bg-zinc-50 text-zinc-600 hover:bg-red-50 hover:text-red-600"
+                        }`}
+                      >
+                        <span className="block truncate">{vehicle.brand} {vehicle.model}</span>
+                        <span className={`mt-1 block text-[10px] uppercase tracking-wide ${isSelected ? "text-white/55" : "text-zinc-400"}`}>
+                          {vehicle.isRideActive ? "in ride" : "reserved"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {renderReservationMap(selectedMapVehicle)}
           </div>
         )}
 
@@ -1651,7 +1873,7 @@ const Dashboard = ({ onLogout }) => {
               onClick={verifyEmailNow}
               className="mt-5 rounded-2xl bg-zinc-950 px-5 py-3 text-sm font-black text-white transition hover:bg-zinc-800"
             >
-              Verify in demo
+              Verify email
             </button>
             {pendingVerification?.link && (
               <a href={pendingVerification.link} className="mt-3 block break-all text-xs font-bold text-amber-700 underline">
@@ -1671,9 +1893,6 @@ const Dashboard = ({ onLogout }) => {
           <div>
             <p className="text-xs font-black uppercase tracking-[0.22em] text-red-300">Profile balance</p>
             <p className="mt-4 text-5xl font-black tracking-tight">{formatMoney(profileBalance)}</p>
-            <p className="mt-3 text-sm font-semibold text-white/50">
-              Available now: {formatMoney(availableProfileBalance)}
-            </p>
           </div>
           <div className="rounded-2xl bg-white/10 p-4">
             <FiSmartphone className="text-3xl" />
@@ -1732,9 +1951,8 @@ const Dashboard = ({ onLogout }) => {
             </div>
           )}
           {paymentTransactions.map((transaction) => {
-            const receipt = receiptByTransactionId.get(transaction.id);
-            const isCompleted = transaction.status === 2 || transaction.status === "Completed";
-            const canDownloadReceipt = isCompleted && receipt?.id && (!receipt.status || receipt.status === "Ready" || receipt.status === 2);
+            const isCompleted = transaction.status === 2 || String(transaction.status).toLowerCase() === "completed";
+            const canDownloadReceipt = isCompleted;
 
             return (
             <div key={transaction.id} className="flex flex-col gap-3 rounded-2xl border border-zinc-100 bg-zinc-50 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1756,7 +1974,7 @@ const Dashboard = ({ onLogout }) => {
                 {isCompleted && (
                   <button
                     type="button"
-                    onClick={() => downloadReceipt(receipt)}
+                    onClick={() => downloadTransactionReceipt(transaction)}
                     disabled={!canDownloadReceipt}
                     className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-black text-zinc-700 transition hover:border-red-200 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
@@ -1818,8 +2036,8 @@ const Dashboard = ({ onLogout }) => {
             </div>
           )}
 
-          <input ref={licenseInputRef} type="file" accept="image/*,.pdf" className="hidden" onChange={(event) => handleDocumentUpload("license", event)} />
-          <input ref={passportInputRef} type="file" accept="image/*,.pdf" className="hidden" onChange={(event) => handleDocumentUpload("passport", event)} />
+          <input ref={licenseInputRef} type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" onChange={(event) => handleDocumentUpload("license", event)} />
+          <input ref={passportInputRef} type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" className="hidden" onChange={(event) => handleDocumentUpload("passport", event)} />
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             {documentCards.map((doc) => {
@@ -2364,9 +2582,18 @@ const Dashboard = ({ onLogout }) => {
             )}
 
             {paymentError && (
-              <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-                {paymentError}
-              </p>
+              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                <p>{paymentError}</p>
+                {paymentError.toLowerCase().includes("insufficient balance") && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenTopUpForTrip(paymentVehicle)}
+                    className="mt-3 text-left text-sm font-black text-red-700 underline decoration-2 underline-offset-4 transition hover:text-red-900"
+                  >
+                    Click here to top up your balance
+                  </button>
+                )}
+              </div>
             )}
 
             <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
@@ -2397,9 +2624,14 @@ const Dashboard = ({ onLogout }) => {
                 <button
                   type="button"
                   onClick={() => {
+                    if (isTripCardAmountTooSmall) {
+                      setPaymentError("Card checkout is available from 1.10 AZN. Use profile balance for smaller fares.");
+                      return;
+                    }
                     setTripPaymentMethod("card");
                     setPaymentError("");
                   }}
+                  disabled={isTripCardAmountTooSmall}
                   className={`rounded-xl border px-4 py-3 text-left text-sm font-black transition ${
                     tripPaymentMethod === "card"
                       ? "border-red-300 bg-red-50 text-red-600"
@@ -2408,7 +2640,7 @@ const Dashboard = ({ onLogout }) => {
                 >
                   Pay with card
                   <span className="mt-1 block text-xs font-bold opacity-70">
-                    Opens secure checkout
+                    {isTripCardAmountTooSmall ? "Available from 1.10 AZN" : "Opens secure checkout"}
                   </span>
                 </button>
               </div>
@@ -2422,7 +2654,7 @@ const Dashboard = ({ onLogout }) => {
                     ? handlePayTripByCard(paymentVehicle)
                     : handlePayTrip(paymentVehicle)
                 }
-                disabled={isPayingTrip}
+                disabled={isPayingTrip || (tripPaymentMethod === "card" && isTripCardAmountTooSmall)}
                 className={`w-full rounded-2xl px-5 py-4 text-sm font-black text-white transition disabled:opacity-50 ${
                   tripPaymentMethod === "card"
                     ? "bg-red-500 hover:bg-red-600"
@@ -2536,7 +2768,7 @@ const Dashboard = ({ onLogout }) => {
                   <p className="text-xs font-black uppercase tracking-[0.2em] text-red-500">Finish ride safely</p>
                   <h2 className="mt-2 text-3xl font-black text-zinc-950">Add four vehicle photos</h2>
                   <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-zinc-500">
-                    Photograph the complete front, rear, left, and right sides. A staff member will review them before the ride is closed.
+                    Photograph the complete front, rear, left, and right sides. The review team will approve them before the ride is closed.
                   </p>
                 </div>
                 <button

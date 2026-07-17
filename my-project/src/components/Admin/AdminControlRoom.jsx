@@ -1678,8 +1678,12 @@ const AdminControlRoom = () => {
         const updatedUser = await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Rejected);
         setBackendUsers((items) => upsertAdminUser(items, updatedUser));
         showAdminNotice("Rider verification rejected. The rider can upload new documents.", "users");
+      } else if (status === "pending") {
+        const updatedUser = await adminUsersApi.updateVerification(userId, USER_VERIFICATION_STATUSES.Pending);
+        setBackendUsers((items) => upsertAdminUser(items, updatedUser));
+        showAdminNotice("Rider verification was returned to moderation.", "users");
       } else {
-        showAdminNotice("Backend supports approve or reject. Pending reset is not available.", "users");
+        showAdminNotice("Unsupported verification status.", "users", "error");
       }
       await loadBackendUsers();
     } catch (error) {
@@ -2111,7 +2115,7 @@ const AdminControlRoom = () => {
               <p className="mt-1 text-xs font-semibold text-slate-400">
                 {adminStatisticsLoadedAt
                   ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
-                  : "Sign in with a backend admin account to load real dashboard metrics."}
+                  : "Sign in with an administrator account to load real dashboard metrics."}
               </p>
             </div>
             <button
@@ -2304,7 +2308,7 @@ const AdminControlRoom = () => {
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-sm font-black text-white">Create backend account</p>
+                <p className="text-sm font-black text-white">Create account</p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">Admin can create Staff. SuperAdmin can create Admin and SuperAdmin.</p>
               </div>
               <button type="button" onClick={loadBackendUsers} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
@@ -2382,7 +2386,7 @@ const AdminControlRoom = () => {
 
           {(backendUsersError || isLoadingBackendUsers) && (
             <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${backendUsersError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
-              {backendUsersError || "Loading backend users..."}
+              {backendUsersError || "Loading users..."}
             </p>
           )}
 
@@ -2599,15 +2603,12 @@ const AdminControlRoom = () => {
                     </div>
                   </div>
 
-                  {selectedKycUser.isActive && selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Verified ? (
-                    <div className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-center text-xs font-black text-emerald-100">
-                      Verification approved
-                    </div>
-                  ) : selectedKycUser.isActive ? (
+                  {selectedKycUser.isActive ? (
                     <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
                         onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
+                        disabled={selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Verified}
                         className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         Approve
@@ -2621,17 +2622,11 @@ const AdminControlRoom = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setBlockDraft((draft) => ({
-                            ...draft,
-                            userId: selectedKycUser.id,
-                            reason: draft.reason || "KYC or account policy violation",
-                          }));
-                          showAdminNotice("User selected. Add a block reason and press Block.", "users");
-                        }}
-                        className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black text-white"
+                        onClick={() => updateKycStatus(selectedKycUser.id, "pending")}
+                        disabled={selectedKycUser.verificationStatus === USER_VERIFICATION_STATUSES.Pending}
+                        className="rounded-xl bg-slate-700 px-3 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        Select block
+                        Reset
                       </button>
                     </div>
                   ) : (
@@ -2917,7 +2912,7 @@ const AdminControlRoom = () => {
             <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
               {billingInvoices.length === 0 ? (
                 <div className="bg-[#111a2b] px-4 py-5 text-sm font-semibold text-slate-400">
-                  No receipts yet. Completed top-ups and trip payments will generate PDF receipts after the backend invoice service is connected.
+                  No receipts yet. Completed top-ups and trip payments will generate PDF receipts automatically.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -3568,7 +3563,7 @@ const AdminControlRoom = () => {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-white">Ride revenue</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from backend statistics</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from live statistics</p>
                 </div>
                 <span className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
                   {Number(adminStatistics.revenue?.thisMonth || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
@@ -4861,7 +4856,7 @@ const AdminControlRoom = () => {
                       <p className="mt-1 text-xs font-semibold text-slate-400">
                         {adminStatisticsLoadedAt
                           ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
-                          : "Sign in with a backend admin account to load real dashboard metrics."}
+                          : "Sign in with an administrator account to load real dashboard metrics."}
                       </p>
                     </div>
                     <button

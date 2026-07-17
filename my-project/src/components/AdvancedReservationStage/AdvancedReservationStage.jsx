@@ -325,7 +325,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         setPromoMessage('Promo "Farhad" applied. Your first ride gets 10% off.');
     };
 
-    const handleConfirmReservation = () => {
+    const handleConfirmReservation = async () => {
         if (currentUser?.emailVerified === false) {
             setReservationError("Please verify your email before confirming a reservation.");
             return;
@@ -345,11 +345,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             return;
         }
 
-        setReservationError("");
-        setIsReservationConfirmed(true);
-    };
-
-    const handleSuccessOk = async () => {
         setIsCreatingReservation(true);
         setReservationError("");
 
@@ -361,13 +356,17 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             localStorage.removeItem("reservedVehicle");
             localStorage.removeItem("reservedVehicles");
             window.dispatchEvent(new CustomEvent(RESERVATIONS_UPDATED_EVENT));
-            window.location.href = "/dashboard";
+            setIsReservationConfirmed(true);
         } catch (error) {
             setReservationError(error.message || "Reservation could not be created.");
             setIsReservationConfirmed(false);
         } finally {
             setIsCreatingReservation(false);
         }
+    };
+
+    const handleSuccessOk = () => {
+        window.location.href = "/dashboard";
     };
 
     const handleLocationChange = useCallback((nextLocation) => {
@@ -984,7 +983,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                 </div>
                                 <h3 className="reservation-alert-title">Reservation confirmed</h3>
                                 <p className="reservation-alert-text">
-                                    Your request is ready. We will create it in the backend and open your cabinet.
+                                    Your request is ready. We will create it and open your cabinet.
                                 </p>
                                 <div className="reservation-alert-car">
                                     {vehicle.brand} {vehicle.model} / {vehicle.plateNumber}
@@ -1120,7 +1119,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                                     Sorry, this car is only for {vehicle.seats} people.
                                                 </p>
                                                 <p className="mt-2 text-xs font-bold text-red-700/80">
-                                                    Pick another EV from the backend fleet with enough seats.
+                                                    Pick another EV from the fleet with enough seats.
                                                 </p>
                                             </div>
                                         </div>
@@ -1301,7 +1300,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                     <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-800">
                                         {profileDebt > 0
                                             ? `Outstanding debt: ${profileDebt.toFixed(2)} AZN. New reservations are blocked until it is paid.`
-                                            : "The final ride fare will be charged from your backend balance after staff approval."}
+                                            : "The final ride fare will be charged after the ride photos are approved."}
                                     </div>
                                 )}
                             </motion.div>

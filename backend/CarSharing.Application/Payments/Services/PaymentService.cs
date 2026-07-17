@@ -168,11 +168,14 @@ public sealed class PaymentService : IPaymentService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            transaction.Fail("External payment gateway is unavailable.");
+            var gatewayMessage = string.IsNullOrWhiteSpace(exception.Message)
+                ? "External payment gateway is unavailable."
+                : exception.Message;
+            transaction.Fail(gatewayMessage);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return Result<TopUpCheckoutDto>.Failure(new Error(
                 "Payment.GatewayUnavailable",
-                "Stripe checkout is temporarily unavailable. Please try again later."));
+                $"Card checkout could not be opened: {gatewayMessage}"));
         }
     }
 

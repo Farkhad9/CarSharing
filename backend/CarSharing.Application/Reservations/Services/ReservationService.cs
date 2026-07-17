@@ -17,7 +17,7 @@ public class ReservationService : IReservationService
     private static readonly Error NotFound = new("Reservation.NotFound", "Reservation was not found.");
     private static readonly Error VehicleNotFound = new("Reservation.VehicleNotFound", "Vehicle was not found.");
     private static readonly Error VehicleNotAvailable = new("Reservation.VehicleNotAvailable", "Vehicle is not available for reservation.");
-    private static readonly Error TooManyActiveReservations = new("Reservation.TooManyActiveReservations", "User can have up to 2 active reservations.");
+    private static readonly Error TooManyActiveReservations = new("Reservation.TooManyActiveReservations", "You can have up to 2 active reservations.");
     private static readonly Error PassengerCapacityExceeded = new("Reservation.PassengerCapacityExceeded", "Passenger count exceeds vehicle seat capacity.");
     private static readonly Error Forbidden = new("Reservation.Forbidden", "User is not allowed to access this reservation.");
     private static readonly Error CannotCancel = new("Reservation.CannotCancel", "Only active reservations can be cancelled.");

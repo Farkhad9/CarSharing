@@ -60,6 +60,22 @@ public class TripsController : ControllerBase
         return Ok(result.Value);
     }
 
+    [HttpPost("{id:guid}/promo-code")]
+    public async Task<IActionResult> ApplyPromoCode(
+        Guid id,
+        ApplyTripPromoCodeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _tripService.ApplyPromoCodeAsync(id, request, cancellationToken);
+
+        if (result.IsFailure)
+        {
+            return ToErrorResponse(result.Errors);
+        }
+
+        return Ok(result.Value);
+    }
+
     [HttpPost("{id:guid}/completion-requests")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(70 * 1024 * 1024)]

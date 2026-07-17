@@ -107,6 +107,7 @@ public sealed class PaymentEngineTests
         public Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult<User?>(user);
         public Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default) => Task.FromResult<User?>(null);
         public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
@@ -114,6 +115,7 @@ public sealed class PaymentEngineTests
     {
         public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(id == trip.Id ? trip : null);
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Trip>>([trip]);
         public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
         public Task AddAsync(Trip entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }

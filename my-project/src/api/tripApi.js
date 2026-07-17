@@ -22,6 +22,10 @@ export const tripApi = {
   }),
   getMyActive: () => apiRequest("/api/trips/my/active"),
   getById: (id) => apiRequest(`/api/trips/${id}`),
+  applyPromoCode: (id, promoCode) => apiRequest(`/api/trips/${id}/promo-code`, {
+    method: "POST",
+    body: JSON.stringify({ promoCode }),
+  }),
   submitCompletion: async (tripId, photos) => {
     const formData = new FormData();
     await appendPhoto(formData, "FrontPhoto", photos.front);

@@ -96,6 +96,26 @@ public class Trip : BaseEntity
         Status = TripStatus.AwaitingPayment;
     }
 
+    public void ApplyPromoCode(string promoCode, int discountPercent)
+    {
+        if (Status != TripStatus.AwaitingPayment)
+        {
+            throw new InvalidOperationException("Promo code can only be applied before payment.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(PromoCode))
+        {
+            throw new InvalidOperationException("A promo code is already applied to this trip.");
+        }
+
+        var normalizedPercent = Math.Clamp(discountPercent, 0, 100);
+        var grossPrice = RoundMoney(DurationMinutes * PricePerMinute);
+        PromoCode = promoCode.Trim();
+        DiscountPercent = normalizedPercent;
+        DiscountAmount = RoundMoney(grossPrice * normalizedPercent / 100m);
+        TotalPrice = Math.Max(0, grossPrice - DiscountAmount);
+    }
+
     public void CompletePayment()
     {
         if (Status != TripStatus.AwaitingPayment)

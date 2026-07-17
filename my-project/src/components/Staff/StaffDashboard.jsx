@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiCamera, FiCheckCircle, FiClock, FiLogOut, FiRefreshCw, FiTool, FiX } from "react-icons/fi";
+import { FiAlertTriangle, FiCamera, FiCheckCircle, FiClock, FiLogOut, FiRefreshCw, FiTool, FiX } from "react-icons/fi";
 import { authApi } from "../../api/authApi";
 import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
@@ -63,18 +63,30 @@ const upsertTask = (items, nextTask) => {
     : [nextTask, ...items];
 };
 
+const areListsEqual = (first, second) => JSON.stringify(first) === JSON.stringify(second);
+
+const resolveFileUrl = (fileUrl) => {
+  if (!fileUrl) return "#";
+  if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+  return `${API_URL}${fileUrl.startsWith("/") ? "" : "/"}${fileUrl}`;
+};
+
 const parseLocalDate = (value) => {
   if (!value) return null;
-  return new Date(value);
+  const text = String(value);
+  const hasTimeZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+  return new Date(hasTimeZone ? text : `${text}Z`);
 };
 
 const formatDate = (value) => {
   const date = parseLocalDate(value);
   if (!date || Number.isNaN(date.getTime())) return "No deadline";
 
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Baku",
     dateStyle: "medium",
     timeStyle: "short",
+    hour12: false,
   }).format(date);
 };
 
@@ -112,6 +124,7 @@ const StaffDashboard = () => {
   const [session, setSession] = useState(readSession);
   const [tasks, setTasks] = useState([]);
   const [completionRequests, setCompletionRequests] = useState([]);
+  const [completionReviewHistory, setCompletionReviewHistory] = useState([]);
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -119,12 +132,14 @@ const StaffDashboard = () => {
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
   const [completionError, setCompletionError] = useState("");
+  const [rejectDraft, setRejectDraft] = useState({ requestId: null, reason: "Photos need to be retaken." });
   const [now, setNow] = useState(() => Date.now());
   const hasLoadedTasksRef = useRef(false);
 
-  const loadTasks = useCallback(async () => {
+  const loadTasks = useCallback(async (options = {}) => {
     if (!session) return;
-    setIsLoading(true);
+    const silent = options.silent === true;
+    if (!silent) setIsLoading(true);
     setRefreshNotice("");
     if (!hasLoadedTasksRef.current) {
       setActionError("");
@@ -135,9 +150,22 @@ const StaffDashboard = () => {
         vehicleApi.getVehicles(),
         tripCompletionRequestsApi.getPending(),
       ]);
-      setTasks(Array.isArray(nextTasks) ? nextTasks : []);
-      setBackendVehicles(Array.isArray(nextVehicles) ? nextVehicles : []);
-      setCompletionRequests(Array.isArray(nextCompletionRequests) ? nextCompletionRequests : []);
+      setTasks((current) => {
+        const normalized = Array.isArray(nextTasks) ? nextTasks : [];
+        return areListsEqual(current, normalized) ? current : normalized;
+      });
+      setBackendVehicles((current) => {
+        const normalized = Array.isArray(nextVehicles) ? nextVehicles : [];
+        return areListsEqual(current, normalized) ? current : normalized;
+      });
+      setCompletionRequests((current) => {
+        const existingStatuses = new Map(current.map((request) => [request.id, request.localStatus]));
+        const normalized = (Array.isArray(nextCompletionRequests) ? nextCompletionRequests : []).map((request) => ({
+          ...request,
+          localStatus: existingStatuses.get(request.id) || request.localStatus,
+        }));
+        return areListsEqual(current, normalized) ? current : normalized;
+      });
       hasLoadedTasksRef.current = true;
       setHasLoadedTasks(true);
     } catch (error) {
@@ -147,7 +175,7 @@ const StaffDashboard = () => {
         setActionError(error.message || "Tasks are unavailable. Please try again.");
       }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [session]);
 
@@ -159,6 +187,13 @@ const StaffDashboard = () => {
 
     const timer = window.setTimeout(loadTasks, 0);
     return () => window.clearTimeout(timer);
+  }, [loadTasks, session]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+
+    const timer = window.setInterval(() => loadTasks({ silent: true }), 10000);
+    return () => window.clearInterval(timer);
   }, [loadTasks, session]);
 
   useEffect(() => {
@@ -195,32 +230,61 @@ const StaffDashboard = () => {
     };
   }, [session]);
 
-  const completionTasks = useMemo(
+  const completionReviewItems = useMemo(
     () =>
-      completionRequests.map((request) => {
-        const vehicle = backendVehicles.find((item) => item.id === request.vehicleId);
-        const vehicleLabel = vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
-        return toCompletionTask(request, vehicleLabel);
-      }),
-    [backendVehicles, completionRequests]
+      [
+        ...completionRequests.map((request) => ({
+          ...request,
+          status: request.localStatus || STAFF_TASK_STATUSES.Waiting,
+        })),
+        ...completionReviewHistory,
+      ],
+    [completionRequests, completionReviewHistory]
   );
 
-  const allTasks = useMemo(() => [...completionTasks, ...tasks], [completionTasks, tasks]);
+  const reviewTasksForStats = useMemo(
+    () =>
+      completionReviewItems.map((request) => {
+        const vehicle = backendVehicles.find((item) => item.id === request.vehicleId);
+        const vehicleLabel = vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
+        return toCompletionTask({ ...request, localStatus: request.status }, vehicleLabel);
+      }),
+    [backendVehicles, completionReviewItems]
+  );
+
+  const allFilterItems = useMemo(() => [...reviewTasksForStats, ...tasks], [reviewTasksForStats, tasks]);
 
   const stats = useMemo(
     () => ({
-      all: allTasks.length,
-      [STAFF_TASK_STATUSES.Done]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
-      [STAFF_TASK_STATUSES.InProgress]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
-      [STAFF_TASK_STATUSES.Waiting]: allTasks.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
+      all: allFilterItems.length,
+      [STAFF_TASK_STATUSES.Done]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
+      [STAFF_TASK_STATUSES.InProgress]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
+      [STAFF_TASK_STATUSES.Waiting]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
     }),
-    [allTasks]
+    [allFilterItems]
   );
+
+  const pendingCompletionCount = useMemo(
+    () => completionReviewItems.filter((request) => request.status !== STAFF_TASK_STATUSES.Done).length,
+    [completionReviewItems]
+  );
+
+  const visibleCompletionReviews = useMemo(() => {
+    const filtered = activeFilter === "all"
+      ? completionReviewItems
+      : completionReviewItems.filter((request) => request.status === activeFilter);
+
+    return [...filtered].sort((first, second) => {
+      if (first.status === STAFF_TASK_STATUSES.Done && second.status !== STAFF_TASK_STATUSES.Done) return 1;
+      if (first.status !== STAFF_TASK_STATUSES.Done && second.status === STAFF_TASK_STATUSES.Done) return -1;
+      return new Date(second.requestedAt || 0).getTime() - new Date(first.requestedAt || 0).getTime();
+    });
+  }, [activeFilter, completionReviewItems]);
 
   const visibleTasks = useMemo(() => {
     const filtered = activeFilter === "all"
-      ? allTasks
-      : allTasks.filter((task) => task.status === activeFilter);
+      ? tasks
+      : tasks.filter((task) => task.status === activeFilter);
 
     return [...filtered].sort((first, second) => {
       const firstRemaining = getRemainingMs(first, now);
@@ -229,25 +293,11 @@ const StaffDashboard = () => {
       if (firstRemaining !== secondRemaining) return firstRemaining - secondRemaining;
       return new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime();
     });
-  }, [activeFilter, allTasks, now]);
+  }, [activeFilter, tasks, now]);
 
   const updateStatus = async (taskId, status) => {
     setActionError("");
     try {
-      if (String(taskId).startsWith("completion-")) {
-        const requestId = taskId.replace("completion-", "");
-        if (status === STAFF_TASK_STATUSES.Done) {
-          await reviewCompletionRequest(requestId, "approve");
-        } else {
-          setCompletionRequests((items) =>
-            items.map((item) =>
-              item.id === requestId ? { ...item, localStatus: status } : item
-            )
-          );
-        }
-        return;
-      }
-
       const updatedTask = await staffTasksApi.updateMyTaskStatus(taskId, status);
       setTasks((items) => items.map((task) => (task.id === taskId ? updatedTask : task)));
     } catch (error) {
@@ -255,25 +305,66 @@ const StaffDashboard = () => {
     }
   };
 
+  const updateCompletionStatus = async (requestId, status) => {
+    if (status === STAFF_TASK_STATUSES.Done) {
+      await reviewCompletionRequest(requestId, "approve");
+      return;
+    }
+
+    setCompletionRequests((items) =>
+      items.map((item) =>
+        item.id === requestId ? { ...item, localStatus: status } : item
+      )
+    );
+    setCompletionReviewHistory((items) =>
+      items.map((item) =>
+        item.id === requestId ? { ...item, status } : item
+      )
+    );
+  };
+
   const reviewCompletionRequest = async (requestId, action, rejectionReason = "") => {
     setCompletionError("");
     try {
+      const reviewItem = completionReviewItems.find((item) => item.id === requestId)
+        || completionRequests.find((item) => item.id === requestId);
       if (action === "approve") {
         await tripCompletionRequestsApi.approve(requestId);
       } else {
         await tripCompletionRequestsApi.reject(requestId, rejectionReason || "Photos need to be retaken.");
       }
       setCompletionRequests((items) => items.filter((item) => item.id !== requestId));
-      await loadTasks();
+      if (reviewItem) {
+        setCompletionReviewHistory((items) =>
+          upsertTask(items, {
+            ...reviewItem,
+            status: STAFF_TASK_STATUSES.Done,
+            localStatus: STAFF_TASK_STATUSES.Done,
+            reviewedAction: action,
+          })
+        );
+      }
+      await loadTasks({ silent: true });
     } catch (error) {
       setCompletionError(error.message || "Completion request could not be reviewed.");
     }
   };
 
   const rejectCompletionRequest = async (requestId) => {
-    const reason = window.prompt("Reason for rejection", "Photos need to be retaken.");
-    if (!reason?.trim()) return;
-    await reviewCompletionRequest(requestId, "reject", reason.trim());
+    setCompletionError("");
+    setRejectDraft({ requestId, reason: "Photos need to be retaken." });
+  };
+
+  const submitRejectCompletionRequest = async () => {
+    const reason = rejectDraft.reason.trim();
+    if (!reason) {
+      setCompletionError("Write a short rejection reason.");
+      return;
+    }
+
+    const requestId = rejectDraft.requestId;
+    setRejectDraft({ requestId: null, reason: "Photos need to be retaken." });
+    await reviewCompletionRequest(requestId, "reject", reason);
   };
 
   const getVehicleLabel = (vehicleId) => {
@@ -346,11 +437,11 @@ const StaffDashboard = () => {
               <div>
                 <h2 className="text-xl font-black">Trip completion reviews</h2>
                 <p className="text-sm font-semibold text-zinc-500">
-                  Customer photo submissions waiting for staff approval.
+                  Customer photo submissions waiting for review.
                 </p>
               </div>
               <span className="rounded-lg bg-red-50 px-3 py-2 text-xs font-black text-red-600">
-                {completionRequests.length} pending
+                {pendingCompletionCount} pending
               </span>
             </div>
 
@@ -361,15 +452,23 @@ const StaffDashboard = () => {
             )}
 
             <div className="mt-4 grid gap-3">
-              {completionRequests.length ? completionRequests.map((request) => (
+              {visibleCompletionReviews.length ? visibleCompletionReviews.map((request) => (
                 <article key={request.id} className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-black">{getVehicleName(request.vehicleId)}</h3>
+                        <span className={`rounded-full border px-3 py-1 text-xs font-black ${statusStyles[request.status]}`}>
+                          {statusLabels[request.status] || "Unknown"}
+                        </span>
                         <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
                           Attempt {request.attemptNumber}
                         </span>
+                        {request.reviewedAction && (
+                          <span className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-black text-zinc-500">
+                            {request.reviewedAction === "approve" ? "Approved" : "Rejected"}
+                          </span>
+                        )}
                       </div>
                       <p className="mt-2 text-sm font-semibold text-zinc-500">
                         Requested {formatDate(request.requestedAt)} · Fare {Number(request.finalRideCost || 0).toFixed(2)} {request.currency || "AZN"}
@@ -378,7 +477,7 @@ const StaffDashboard = () => {
                         {(request.photos || []).map((photo) => (
                           <a
                             key={photo.id || `${request.id}-${photo.angle}`}
-                            href={`${API_URL}${photo.fileUrl}`}
+                            href={resolveFileUrl(photo.fileUrl)}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-black text-zinc-600 transition hover:border-red-200 hover:text-red-600"
@@ -390,29 +489,50 @@ const StaffDashboard = () => {
                       </div>
                     </div>
 
-                    <div className="grid shrink-0 grid-cols-2 gap-2 sm:w-72">
-                      <button
-                        type="button"
-                        onClick={() => rejectCompletionRequest(request.id)}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-xs font-black text-red-600 transition hover:bg-red-50"
-                      >
-                        <FiX />
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => reviewCompletionRequest(request.id, "approve")}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-black text-white transition hover:bg-emerald-700"
-                      >
-                        <FiCheckCircle />
-                        Approve
-                      </button>
+                    <div className="grid shrink-0 gap-2 sm:w-80">
+                      {request.status !== STAFF_TASK_STATUSES.Done && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => rejectCompletionRequest(request.id)}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-xs font-black text-red-600 transition hover:bg-red-50"
+                          >
+                            <FiX />
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => reviewCompletionRequest(request.id, "approve")}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-black text-white transition hover:bg-emerald-700"
+                          >
+                            <FiCheckCircle />
+                            Approve
+                          </button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-3 gap-2">
+                        {statusOptions.map((status) => (
+                          <button
+                            key={status}
+                            type="button"
+                            onClick={() => updateCompletionStatus(request.id, status)}
+                            disabled={request.status === STAFF_TASK_STATUSES.Done}
+                            className={`rounded-lg border px-3 py-3 text-xs font-black transition disabled:cursor-not-allowed ${
+                              request.status === status
+                                ? statusStyles[status]
+                                : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+                            }`}
+                          >
+                            {statusLabels[status]}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </article>
               )) : (
                 <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-6 text-center">
-                  <p className="text-sm font-black text-zinc-500">No trip completion requests waiting.</p>
+                  <p className="text-sm font-black text-zinc-500">No trip completion requests in this view.</p>
                 </div>
               )}
             </div>
@@ -510,6 +630,57 @@ const StaffDashboard = () => {
           </div>
         </section>
       </section>
+
+      {rejectDraft.requestId && (
+        <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-zinc-950/55 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-4 p-5">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-red-50 text-red-600 ring-1 ring-red-100">
+                <FiAlertTriangle className="text-xl" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-lg font-black tracking-tight text-zinc-950">Reject trip photos?</h2>
+                  <button
+                    type="button"
+                    onClick={() => setRejectDraft({ requestId: null, reason: "Photos need to be retaken." })}
+                    className="rounded-full p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                    aria-label="Close reject dialog"
+                  >
+                    <FiX />
+                  </button>
+                </div>
+                <p className="mt-2 text-sm font-semibold leading-6 text-zinc-600">
+                  Add a clear message for the customer before sending the request back.
+                </p>
+                <textarea
+                  value={rejectDraft.reason}
+                  onChange={(event) => setRejectDraft((draft) => ({ ...draft, reason: event.target.value }))}
+                  rows={4}
+                  className="mt-4 w-full resize-none rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-semibold text-zinc-900 outline-none transition focus:border-red-300 focus:bg-white"
+                  placeholder="Explain what needs to be fixed"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-zinc-100 bg-zinc-50 px-5 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setRejectDraft({ requestId: null, reason: "Photos need to be retaken." })}
+                className="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-black text-zinc-700 transition hover:bg-zinc-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitRejectCompletionRequest}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-black text-white transition hover:bg-red-700"
+              >
+                Reject request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 };

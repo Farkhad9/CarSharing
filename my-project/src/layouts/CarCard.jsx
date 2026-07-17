@@ -6,7 +6,7 @@ const CarCard = ({ car, onRentClick }) => {
   return (
     <div className="bg-white rounded-2xl shadow p-4 max-w-sm w-full space-y-2">
       <img
-        src={car.image?.url} // This is conditional rendering if img not in backend still it works
+        src={car.image?.url}
         alt={car.name}
         className="h-48 object-contain w-full bg-gray-200 rounded-md"
       />

@@ -135,6 +135,9 @@ public sealed class StaffTaskManagementTests
         public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default) =>
             Task.FromResult(false);
 
+        public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }
