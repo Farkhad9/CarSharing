@@ -1,8 +1,8 @@
 import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { vehicles } from "../../data/vehicles";
 import { VEHICLE_STATUSES } from "../../data/statuses";
+import { useVehicles } from "../../hooks/useVehicles";
 
 const BAKU_CENTER = [40.3777, 49.892];
 
@@ -29,10 +29,6 @@ const STATUS_META = {
   },
 };
 
-const nearestVehicle =
-  vehicles.find((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE) ||
-  vehicles[0];
-
 const createVehicleIcon = (vehicle, status) =>
   L.divIcon({
     className: "ev-map-marker",
@@ -48,6 +44,26 @@ const createVehicleIcon = (vehicle, status) =>
   });
 
 const EVMap = () => {
+  const { vehicles, isLoading, error } = useVehicles();
+  const nearestVehicle =
+    vehicles.find((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE) ||
+    vehicles[0];
+
+  if (isLoading || error || !nearestVehicle) {
+    return (
+      <div className="flex h-[420px] w-full items-center justify-center rounded-lg border border-gray-200 bg-gray-100 p-6 text-center shadow-2xl shadow-gray-300/70 md:h-[500px]">
+        <div>
+          <p className="text-sm font-black uppercase tracking-[0.2em] text-[#E53E3E]">
+            Live EV map
+          </p>
+          <p className="mt-3 text-lg font-extrabold text-gray-900">
+            {isLoading ? "Loading vehicles..." : error || "No vehicles available from backend."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const nearestStatus =
     STATUS_META[nearestVehicle.status] ||
     STATUS_META[VEHICLE_STATUSES.COMPLETED];

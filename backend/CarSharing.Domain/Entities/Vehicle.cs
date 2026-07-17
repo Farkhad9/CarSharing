@@ -21,6 +21,10 @@ public class Vehicle : BaseEntity
     public int Seats { get; private set; }
     public string Color { get; private set; } = null!;
     public string ConnectorType { get; private set; } = null!;
+    public string? MainImageUrl { get; private set; }
+    public string? GalleryImageUrl1 { get; private set; }
+    public string? GalleryImageUrl2 { get; private set; }
+    public string? GalleryImageUrl3 { get; private set; }
     public Guid? ChargingStationId { get; private set; }
     public string LocationLabel { get; private set; } = null!;
     public string Zone { get; private set; } = null!;
@@ -116,6 +120,23 @@ public class Vehicle : BaseEntity
     public void ChangeStatus(VehicleStatus status)
     {
         Status = status;
+    }
+
+    public void UpdateImages(
+        string? mainImageUrl,
+        string? galleryImageUrl1,
+        string? galleryImageUrl2,
+        string? galleryImageUrl3)
+    {
+        MainImageUrl = NormalizeOptionalUrl(mainImageUrl) ?? MainImageUrl;
+        GalleryImageUrl1 = NormalizeOptionalUrl(galleryImageUrl1) ?? GalleryImageUrl1;
+        GalleryImageUrl2 = NormalizeOptionalUrl(galleryImageUrl2) ?? GalleryImageUrl2;
+        GalleryImageUrl3 = NormalizeOptionalUrl(galleryImageUrl3) ?? GalleryImageUrl3;
+    }
+
+    private static string? NormalizeOptionalUrl(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     public void StartCharging(Guid chargingStationId)

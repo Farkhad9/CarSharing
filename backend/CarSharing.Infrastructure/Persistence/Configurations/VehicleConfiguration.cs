@@ -45,6 +45,18 @@ public class VehicleConfiguration : IEntityTypeConfiguration<Vehicle>
             .IsRequired()
             .HasMaxLength(50);
 
+        builder.Property(vehicle => vehicle.MainImageUrl)
+            .HasMaxLength(500);
+
+        builder.Property(vehicle => vehicle.GalleryImageUrl1)
+            .HasMaxLength(500);
+
+        builder.Property(vehicle => vehicle.GalleryImageUrl2)
+            .HasMaxLength(500);
+
+        builder.Property(vehicle => vehicle.GalleryImageUrl3)
+            .HasMaxLength(500);
+
         builder.Property(vehicle => vehicle.LocationLabel)
             .IsRequired()
             .HasMaxLength(200);

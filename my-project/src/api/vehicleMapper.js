@@ -1,10 +1,6 @@
 import { VEHICLE_STATUSES } from "../data/statuses";
-import teslaModel3 from "../assets/img/fleet/Tesla Model3.png";
-import hyundaiIoniq from "../assets/img/fleet/Hyundai.png";
-import kiaEv6 from "../assets/img/fleet/Kia-Transparent.png";
-import porscheTaycan from "../assets/img/fleet/Porsche-Taycan.png";
-import cruze from "../assets/img/fleet/Cruze.png";
-import rr from "../assets/img/fleet/RR.png";
+import { API_URL } from "./apiClient";
+import vehicleComingSoon from "../assets/img/vehicle-coming-soon.png";
 
 const statusByValue = {
   1: VEHICLE_STATUSES.AVAILABLE,
@@ -19,33 +15,33 @@ const statusByValue = {
   Maintenance: VEHICLE_STATUSES.COMPLETED,
 };
 
-const fallbackImages = [
-  { match: ["tesla", "model 3"], image: teslaModel3 },
-  { match: ["hyundai", "ioniq"], image: hyundaiIoniq },
-  { match: ["kia", "ev6"], image: kiaEv6 },
-  { match: ["porsche", "taycan"], image: porscheTaycan },
-  { match: ["volkswagen", "id"], image: porscheTaycan },
-  { match: ["chevrolet", "cruze"], image: cruze },
-  { match: ["rr"], image: rr },
-  { match: ["range"], image: rr },
-];
-
-const getVehicleImage = (vehicle) => {
-  const text = `${vehicle?.brand || ""} ${vehicle?.model || ""}`.toLowerCase();
-  return fallbackImages.find((item) => item.match.some((part) => text.includes(part)))?.image || teslaModel3;
+const resolveVehicleImageUrl = (imageUrl) => {
+  if (!imageUrl || typeof imageUrl !== "string") return "";
+  const trimmedUrl = imageUrl.trim();
+  if (!trimmedUrl) return "";
+  if (/^https?:\/\//i.test(trimmedUrl) || trimmedUrl.startsWith("data:")) return trimmedUrl;
+  return `${API_URL}${trimmedUrl.startsWith("/") ? "" : "/"}${trimmedUrl}`;
 };
 
 export const normalizeVehicle = (vehicle) => {
   if (!vehicle) return null;
 
-  const image = getVehicleImage(vehicle);
+  const fallbackImage = vehicleComingSoon;
+  const image = resolveVehicleImageUrl(vehicle.mainImageUrl) || fallbackImage;
+  const galleryImages = [
+    image,
+    resolveVehicleImageUrl(vehicle.galleryImageUrl1),
+    resolveVehicleImageUrl(vehicle.galleryImageUrl2),
+    resolveVehicleImageUrl(vehicle.galleryImageUrl3),
+  ].map((item) => item || fallbackImage);
+
   return {
     ...vehicle,
     id: vehicle.id,
     status: statusByValue[vehicle.status] || vehicle.status || VEHICLE_STATUSES.AVAILABLE,
     pricePerMinute: Number(vehicle.pricePerMinute || 0),
     image,
-    galleryImages: [image, image, image, image],
+    galleryImages,
     location: {
       label: vehicle.locationLabel || "Baku",
       zone: vehicle.zone || "City",

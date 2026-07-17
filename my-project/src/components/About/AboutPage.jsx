@@ -15,7 +15,8 @@ import {
 import { FaCar } from "react-icons/fa";
 import headerImage from "../../assets/img/header-bg.png";
 import UserComments from "../UserComments/UserComments";
-import { vehicles } from "../../data/vehicles";
+import { VEHICLE_STATUSES } from "../../data/statuses";
+import { useVehicles } from "../../hooks/useVehicles";
 
 const operatingLayers = [
   {
@@ -79,6 +80,7 @@ const StatTile = ({ value, label, Icon, accent }) => (
 );
 
 const AboutPage = () => {
+  const { vehicles, isLoading, error } = useVehicles();
   const [activeLayer, setActiveLayer] = useState(operatingLayers[0].id);
   const [spotlightIndex, setSpotlightIndex] = useState(0);
   const { scrollYProgress } = useScroll();
@@ -86,24 +88,42 @@ const AboutPage = () => {
   const heroOpacity = useTransform(scrollYProgress, [0, 0.28], [1, 0.55]);
 
   const activeLayerData = operatingLayers.find((layer) => layer.id === activeLayer) || operatingLayers[0];
-  const availableVehicles = vehicles.filter((vehicle) => vehicle.status === "available").length;
+  const availableVehicles = vehicles.filter((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE).length;
   const averageBattery = Math.round(
-    vehicles.reduce((total, vehicle) => total + Number(vehicle.batteryPercent || 0), 0) / vehicles.length
+    vehicles.reduce((total, vehicle) => total + Number(vehicle.batteryPercent || 0), 0) / Math.max(vehicles.length, 1)
   );
-  const spotlightVehicle = vehicles[spotlightIndex % vehicles.length];
+  const spotlightVehicle = vehicles[spotlightIndex % Math.max(vehicles.length, 1)];
 
   const cityZones = useMemo(
     () => [...new Set(vehicles.map((vehicle) => vehicle.location?.zone).filter(Boolean))],
-    []
+    [vehicles]
   );
 
   useEffect(() => {
+    if (!vehicles.length) return undefined;
+
     const intervalId = window.setInterval(() => {
       setSpotlightIndex((current) => (current + 1) % vehicles.length);
     }, 3200);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [vehicles.length]);
+
+  if (isLoading || error || !spotlightVehicle) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white px-5 text-zinc-950">
+        <section className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-red-500">ElectroStreet About</p>
+          <h1 className="mt-4 text-3xl font-black">
+            {isLoading ? "Loading live fleet..." : "Fleet data unavailable"}
+          </h1>
+          <p className="mt-3 text-sm font-semibold leading-6 text-zinc-500">
+            {isLoading ? "Please wait while the backend fleet is loaded." : error || "No vehicles available from backend."}
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="bg-white text-zinc-950">

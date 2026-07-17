@@ -18,6 +18,10 @@ public class VehicleDto
     public int Seats { get; set; }
     public string Color { get; set; } = null!;
     public string ConnectorType { get; set; } = null!;
+    public string? MainImageUrl { get; set; }
+    public string? GalleryImageUrl1 { get; set; }
+    public string? GalleryImageUrl2 { get; set; }
+    public string? GalleryImageUrl3 { get; set; }
     public Guid? ChargingStationId { get; set; }
     public string LocationLabel { get; set; } = null!;
     public string Zone { get; set; } = null!;
