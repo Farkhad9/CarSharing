@@ -53,6 +53,7 @@ public sealed class ChargingSystemTests
             fixture.Station.Id,
             fixture.StaffId));
         Assert.True(start.IsSuccess);
+        fixture.Tasks.Items.Single().ChangeStatus(StaffTaskStatus.InProgress, DateTime.UtcNow.AddMinutes(-40));
         fixture.CurrentUser.Role = UserRole.Staff;
         fixture.CurrentUser.UserIdValue = fixture.StaffId;
 
@@ -76,6 +77,7 @@ public sealed class ChargingSystemTests
             fixture.Vehicle.Id,
             fixture.Station.Id,
             fixture.StaffId));
+        fixture.Tasks.Items.Single().ChangeStatus(StaffTaskStatus.InProgress, DateTime.UtcNow.AddMinutes(-40));
         fixture.CurrentUser.Role = UserRole.Staff;
         fixture.CurrentUser.UserIdValue = fixture.StaffId;
         await fixture.Service.CompleteChargingAsync(start.Value!.Session.Id, new CompleteChargingSessionRequest(100));
@@ -88,6 +90,52 @@ public sealed class ChargingSystemTests
         Assert.Equal(VehicleStatus.Available, fixture.Vehicle.Status);
         Assert.Null(fixture.Vehicle.ChargingStationId);
         Assert.Equal(100, fixture.Vehicle.BatteryPercent);
+    }
+
+    [Fact]
+    public async Task DeleteStationAsync_RemovesUnusedStation()
+    {
+        var fixture = CreateFixture();
+
+        var result = await fixture.Service.DeleteStationAsync(fixture.Station.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(fixture.Stations.Removed);
+    }
+
+    [Fact]
+    public async Task DeleteStationAsync_RejectsStationInUse()
+    {
+        var fixture = CreateFixture();
+        fixture.Stations.HasAssignedVehicles = true;
+
+        var result = await fixture.Service.DeleteStationAsync(fixture.Station.Id);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("Charging.StationInUse", result.Errors.Single().Code);
+        Assert.False(fixture.Stations.Removed);
+    }
+
+    [Fact]
+    public async Task CreateStationAsync_ReturnsExistingStationForDuplicateSubmit()
+    {
+        var fixture = CreateFixture();
+
+        var result = await fixture.Service.CreateStationAsync(new CreateChargingStationRequest(
+            fixture.Station.Name,
+            fixture.Station.Status,
+            fixture.Station.LocationLabel,
+            fixture.Station.Zone,
+            fixture.Station.Latitude,
+            fixture.Station.Longitude,
+            fixture.Station.PowerKw,
+            fixture.Station.TotalPorts,
+            fixture.Station.AvailablePorts,
+            fixture.Station.GetConnectorTypes()));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(fixture.Station.Id, result.Value!.Id);
+        Assert.Equal(0, fixture.Stations.AddedCount);
     }
 
     private static Fixture CreateFixture(
@@ -135,13 +183,14 @@ public sealed class ChargingSystemTests
         var vehicles = new VehicleRepo(vehicle);
         var service = new ChargingService(stations, sessions, tasks, vehicles, currentUser, new UnitOfWork());
 
-        return new Fixture(service, vehicle, station, sessions, tasks, currentUser, adminId, staffId);
+        return new Fixture(service, vehicle, station, stations, sessions, tasks, currentUser, adminId, staffId);
     }
 
     private sealed record Fixture(
         ChargingService Service,
         Vehicle Vehicle,
         ChargingStation Station,
+        StationRepo Stations,
         SessionRepo Sessions,
         TaskRepo Tasks,
         CurrentUser CurrentUser,
@@ -150,14 +199,56 @@ public sealed class ChargingSystemTests
 
     private sealed class StationRepo(ChargingStation station) : IChargingStationRepository
     {
+        private ChargingStation? _station = station;
+
+        public bool HasActiveSessions { get; set; }
+        public bool HasAssignedVehicles { get; set; }
+        public int AddedCount { get; private set; }
+        public bool Removed { get; private set; }
+
         public Task<IReadOnlyList<ChargingStation>> GetAllAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ChargingStation>>([station]);
+            Task.FromResult<IReadOnlyList<ChargingStation>>(_station is null ? [] : [_station]);
 
         public Task<ChargingStation?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<ChargingStation?>(id == station.Id ? station : null);
+            Task.FromResult(id == _station?.Id ? _station : null);
 
-        public Task AddAsync(ChargingStation entity, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task<ChargingStation?> FindMatchingAsync(
+            string name,
+            string locationLabel,
+            double latitude,
+            double longitude,
+            CancellationToken cancellationToken = default)
+        {
+            var matches = _station is not null
+                && string.Equals(_station.Name, name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_station.LocationLabel, locationLabel, StringComparison.OrdinalIgnoreCase)
+                && Math.Abs(_station.Latitude - latitude) < 0.00001
+                && Math.Abs(_station.Longitude - longitude) < 0.00001;
+
+            return Task.FromResult(matches ? _station : null);
+        }
+
+        public Task<bool> HasActiveSessionsAsync(Guid stationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(HasActiveSessions);
+
+        public Task<bool> HasAssignedVehiclesAsync(Guid stationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(HasAssignedVehicles);
+
+        public Task AddAsync(ChargingStation entity, CancellationToken cancellationToken = default)
+        {
+            _station = entity;
+            AddedCount++;
+            return Task.CompletedTask;
+        }
+
+        public void Remove(ChargingStation station)
+        {
+            if (_station?.Id == station.Id)
+            {
+                _station = null;
+                Removed = true;
+            }
+        }
     }
 
     private sealed class SessionRepo : IChargingSessionRepository
@@ -172,6 +263,9 @@ public sealed class ChargingSystemTests
 
         public Task<ChargingSession?> GetActiveByVehicleIdAsync(Guid vehicleId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Items.FirstOrDefault(x => x.VehicleId == vehicleId && x.Status == ChargingSessionStatus.Active));
+
+        public Task<ChargingSession?> GetActiveByStaffTaskIdAsync(Guid staffTaskId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.FirstOrDefault(x => x.StaffTaskId == staffTaskId && x.Status == ChargingSessionStatus.Active));
 
         public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default)
         {

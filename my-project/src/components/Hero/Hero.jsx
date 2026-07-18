@@ -4,10 +4,14 @@ import img from "../../assets/img/hero.png";
 import { VEHICLE_STATUSES } from "../../data/statuses";
 import { useVehicles } from "../../hooks/useVehicles";
 
+const LOW_CHARGE_RESERVATION_LIMIT = 30;
+
 const Hero = ({ onReserveClick, onFeaturedReserve }) => {
   const { vehicles, isLoading, error } = useVehicles();
   const availableVehicle = vehicles.find(
-    (vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE
+    (vehicle) =>
+      vehicle.status === VEHICLE_STATUSES.AVAILABLE &&
+      Number(vehicle.batteryPercent) > LOW_CHARGE_RESERVATION_LIMIT
   );
   const onlineVehiclesCount = vehicles.length;
   const primaryPrice = availableVehicle

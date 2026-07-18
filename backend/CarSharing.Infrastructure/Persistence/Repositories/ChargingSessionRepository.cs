@@ -37,6 +37,15 @@ public sealed class ChargingSessionRepository : IChargingSessionRepository
                 cancellationToken);
     }
 
+    public async Task<ChargingSession?> GetActiveByStaffTaskIdAsync(Guid staffTaskId, CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.ChargingSessions
+            .FirstOrDefaultAsync(
+                session => session.StaffTaskId == staffTaskId
+                    && session.Status == ChargingSessionStatus.Active,
+                cancellationToken);
+    }
+
     public async Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default)
     {
         await _dbContext.ChargingSessions.AddAsync(session, cancellationToken);

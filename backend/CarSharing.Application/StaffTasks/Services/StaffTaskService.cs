@@ -18,6 +18,7 @@ public sealed class StaffTaskService : IStaffTaskService
     private static readonly Error AssigneeMustBeStaff = new("StaffTask.AssigneeMustBeStaff", "Task assignee must be an active staff user.");
 
     private readonly IStaffTaskRepository _staffTaskRepository;
+    private readonly IChargingSessionRepository _chargingSessionRepository;
     private readonly IUserRepository _userRepository;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
@@ -25,12 +26,14 @@ public sealed class StaffTaskService : IStaffTaskService
 
     public StaffTaskService(
         IStaffTaskRepository staffTaskRepository,
+        IChargingSessionRepository chargingSessionRepository,
         IUserRepository userRepository,
         ICurrentUserService currentUser,
         IUnitOfWork unitOfWork,
         IValidator<CreateStaffTaskRequest> createStaffTaskValidator)
     {
         _staffTaskRepository = staffTaskRepository;
+        _chargingSessionRepository = chargingSessionRepository;
         _userRepository = userRepository;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
@@ -90,6 +93,47 @@ public sealed class StaffTaskService : IStaffTaskService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<StaffTaskDto>.Success(Map(task));
+    }
+
+    public async Task<Result<ReassignStaffTaskResult>> ReassignAsync(Guid taskId, ReassignStaffTaskRequest request, CancellationToken cancellationToken = default)
+    {
+        var accessError = RequireAdmin();
+        if (accessError is not null) return Result<ReassignStaffTaskResult>.Failure(accessError);
+
+        if (request.AssigneeId == Guid.Empty)
+        {
+            return Result<ReassignStaffTaskResult>.Failure(new Error("Validation.AssigneeId", "Assignee is required."));
+        }
+
+        var task = await _staffTaskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task is null) return Result<ReassignStaffTaskResult>.Failure(TaskNotFound);
+
+        var assignee = await _userRepository.GetByIdAsync(request.AssigneeId, cancellationToken);
+        if (assignee is null)
+        {
+            return Result<ReassignStaffTaskResult>.Failure(AssigneeNotFound);
+        }
+
+        if (assignee.Role != UserRole.Staff || !assignee.IsActive || assignee.IsBlocked(DateTime.UtcNow))
+        {
+            return Result<ReassignStaffTaskResult>.Failure(AssigneeMustBeStaff);
+        }
+
+        var previousAssigneeId = task.AssigneeId;
+        if (previousAssigneeId == request.AssigneeId)
+        {
+            return Result<ReassignStaffTaskResult>.Success(new ReassignStaffTaskResult(Map(task), previousAssigneeId));
+        }
+
+        var now = DateTime.UtcNow;
+        task.Reassign(request.AssigneeId, now);
+
+        var activeChargingSession = await _chargingSessionRepository.GetActiveByStaffTaskIdAsync(task.Id, cancellationToken);
+        activeChargingSession?.ReassignStaff(request.AssigneeId);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<ReassignStaffTaskResult>.Success(new ReassignStaffTaskResult(Map(task), previousAssigneeId));
     }
 
     public async Task<Result<StaffTaskDto>> UpdateStatusAsync(Guid taskId, UpdateStaffTaskStatusRequest request, CancellationToken cancellationToken = default)

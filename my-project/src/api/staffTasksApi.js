@@ -30,4 +30,8 @@ export const adminStaffTasksApi = {
     method: "PATCH",
     body: JSON.stringify({ status }),
   }),
+  reassignTask: (id, assigneeId) => apiRequest(`/api/admin/staff/tasks/${id}/assignee`, {
+    method: "PATCH",
+    body: JSON.stringify({ assigneeId }),
+  }),
 };

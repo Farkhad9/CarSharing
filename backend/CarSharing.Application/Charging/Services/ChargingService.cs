@@ -9,6 +9,8 @@ namespace CarSharing.Application.Charging.Services;
 public sealed class ChargingService : IChargingService
 {
     private const int FullBatteryPercent = 100;
+    private const int MinimumCompletionBatteryPercent = 80;
+    private const int ChargingPercentPerMinute = 10;
 
     private static readonly Error Unauthenticated = new("Charging.Unauthenticated", "User must be authenticated.");
     private static readonly Error StaffRequired = new("Charging.StaffRequired", "Only staff, admin, or super admin can manage charging.");
@@ -18,9 +20,10 @@ public sealed class ChargingService : IChargingService
     private static readonly Error SessionNotFound = new("Charging.SessionNotFound", "Charging session was not found.");
     private static readonly Error VehicleMustNeedCharging = new("Charging.VehicleMustNeedCharging", "Vehicle must be in charging status before assigning a station.");
     private static readonly Error StationUnavailable = new("Charging.StationUnavailable", "Charging station is unavailable for this vehicle.");
+    private static readonly Error StationInUse = new("Charging.StationInUse", "Charging station is used by active charging sessions or assigned vehicles.");
     private static readonly Error ActiveSessionExists = new("Charging.ActiveSessionExists", "Vehicle already has an active charging session.");
     private static readonly Error SessionNotActive = new("Charging.SessionNotActive", "Charging session must be active.");
-    private static readonly Error VehicleNotReady = new("Charging.VehicleNotReady", "Vehicle must be fully charged before activation.");
+    private static readonly Error VehicleNotReady = new("Charging.VehicleNotReady", "Vehicle must be charged to at least 80% before activation.");
 
     private readonly IChargingStationRepository _stationRepository;
     private readonly IChargingSessionRepository _sessionRepository;
@@ -67,22 +70,67 @@ public sealed class ChargingService : IChargingService
         var errors = ValidateStation(request);
         if (errors.Count > 0) return Result<ChargingStationDto>.Failure(errors);
 
+        var name = request.Name.Trim();
+        var locationLabel = request.LocationLabel.Trim();
+        var existingStation = await _stationRepository.FindMatchingAsync(
+            name,
+            locationLabel,
+            request.Latitude,
+            request.Longitude,
+            cancellationToken);
+        if (existingStation is not null)
+        {
+            return Result<ChargingStationDto>.Success(MapStation(existingStation));
+        }
+
         var station = ChargingStation.Create(
-            request.Name,
+            name,
             request.Status,
-            request.LocationLabel,
-            request.Zone,
+            locationLabel,
+            request.Zone.Trim(),
             request.Latitude,
             request.Longitude,
             request.PowerKw,
             request.TotalPorts,
-            request.AvailablePorts,
+            NormalizeAvailablePorts(request.Status, request.TotalPorts, request.AvailablePorts),
             request.ConnectorTypes);
 
         await _stationRepository.AddAsync(station, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<ChargingStationDto>.Success(MapStation(station));
+    }
+
+    public async Task<Result<bool>> DeleteStationAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var accessError = RequireAdmin();
+        if (accessError is not null) return Result<bool>.Failure(accessError);
+
+        var station = await _stationRepository.GetByIdAsync(id, cancellationToken);
+        if (station is null) return Result<bool>.Failure(StationNotFound);
+
+        var hasActiveSessions = await _stationRepository.HasActiveSessionsAsync(id, cancellationToken);
+        var hasAssignedVehicles = await _stationRepository.HasAssignedVehiclesAsync(id, cancellationToken);
+        if (hasActiveSessions || hasAssignedVehicles) return Result<bool>.Failure(StationInUse);
+
+        var stations = await _stationRepository.GetAllAsync(cancellationToken);
+        var duplicateStations = stations
+            .Where(item => IsSameStation(item, station))
+            .ToList();
+
+        foreach (var duplicateStation in duplicateStations)
+        {
+            var duplicateHasActiveSessions = await _stationRepository.HasActiveSessionsAsync(duplicateStation.Id, cancellationToken);
+            var duplicateHasAssignedVehicles = await _stationRepository.HasAssignedVehiclesAsync(duplicateStation.Id, cancellationToken);
+            if (!duplicateHasActiveSessions && !duplicateHasAssignedVehicles)
+            {
+                _stationRepository.Remove(duplicateStation);
+            }
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<bool>.Success(true);
     }
 
     public async Task<Result<ChargingStationDto>> UpdateStationStatusAsync(Guid id, UpdateChargingStationStatusRequest request, CancellationToken cancellationToken = default)
@@ -105,7 +153,14 @@ public sealed class ChargingService : IChargingService
         if (accessError is not null) return Result<IReadOnlyList<ChargingSessionDto>>.Failure(accessError);
 
         var sessions = await _sessionRepository.GetActiveAsync(cancellationToken);
-        return Result<IReadOnlyList<ChargingSessionDto>>.Success(sessions.Select(MapSession).ToList());
+        var mappedSessions = new List<ChargingSessionDto>();
+        foreach (var session in sessions)
+        {
+            var task = await _staffTaskRepository.GetByIdAsync(session.StaffTaskId, cancellationToken);
+            mappedSessions.Add(MapSession(session, task, DateTime.UtcNow));
+        }
+
+        return Result<IReadOnlyList<ChargingSessionDto>>.Success(mappedSessions);
     }
 
     public async Task<Result<ChargingSessionDetailsDto>> StartChargingAsync(StartChargingSessionRequest request, CancellationToken cancellationToken = default)
@@ -164,9 +219,9 @@ public sealed class ChargingService : IChargingService
         var accessError = RequireStaffOrAdmin();
         if (accessError is not null) return Result<ChargingSessionDetailsDto>.Failure(accessError);
 
-        if (request.FinalBatteryPercent != FullBatteryPercent)
+        if (request.FinalBatteryPercent is < MinimumCompletionBatteryPercent or > FullBatteryPercent)
         {
-            return Result<ChargingSessionDetailsDto>.Failure(new Error("Validation.FinalBatteryPercent", "Charging must be completed at 100%."));
+            return Result<ChargingSessionDetailsDto>.Failure(new Error("Validation.FinalBatteryPercent", "Charging can be completed only between 80% and 100%."));
         }
 
         var session = await _sessionRepository.GetByIdAsync(sessionId, cancellationToken);
@@ -183,15 +238,21 @@ public sealed class ChargingService : IChargingService
         if (task is null) return Result<ChargingSessionDetailsDto>.Failure(new Error("Charging.StaffTaskNotFound", "Staff task was not found."));
 
         var now = DateTime.UtcNow;
-        session.Complete(_currentUser.UserId!.Value, FullBatteryPercent, request.Notes, now);
-        vehicle.UpdateBattery(FullBatteryPercent);
+        var currentBatteryPercent = CalculateCurrentBatteryPercent(session, task, now);
+        if (request.FinalBatteryPercent > currentBatteryPercent)
+        {
+            return Result<ChargingSessionDetailsDto>.Failure(new Error("Validation.FinalBatteryPercent", $"Current charging progress is {currentBatteryPercent}%."));
+        }
+
+        session.Complete(_currentUser.UserId!.Value, request.FinalBatteryPercent, request.Notes, now);
+        vehicle.UpdateBattery(request.FinalBatteryPercent);
         station.ReleasePort();
         task.ChangeStatus(StaffTaskStatus.Done, now);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<ChargingSessionDetailsDto>.Success(new ChargingSessionDetailsDto(
-            MapSession(session),
+            MapSession(session, task, now),
             MapTask(task),
             MapStation(station)));
     }
@@ -203,12 +264,12 @@ public sealed class ChargingService : IChargingService
 
         var vehicle = await _vehicleRepository.GetByIdAsync(vehicleId, cancellationToken);
         if (vehicle is null) return Result<bool>.Failure(VehicleNotFound);
-        if (vehicle.Status != VehicleStatus.Charging || vehicle.BatteryPercent < FullBatteryPercent)
+        if (vehicle.Status != VehicleStatus.Charging || vehicle.BatteryPercent < MinimumCompletionBatteryPercent)
         {
             return Result<bool>.Failure(VehicleNotReady);
         }
 
-        vehicle.MarkAvailableAfterCharging(FullBatteryPercent);
+        vehicle.MarkAvailableAfterCharging(vehicle.BatteryPercent);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<bool>.Success(true);
@@ -240,6 +301,21 @@ public sealed class ChargingService : IChargingService
         return errors;
     }
 
+    private static int NormalizeAvailablePorts(ChargingStationStatus status, int totalPorts, int availablePorts)
+    {
+        if (status == ChargingStationStatus.Online) return totalPorts;
+        if (status is ChargingStationStatus.Busy or ChargingStationStatus.Maintenance or ChargingStationStatus.Offline) return 0;
+        return Math.Max(0, Math.Min(totalPorts, availablePorts));
+    }
+
+    private static bool IsSameStation(ChargingStation first, ChargingStation second)
+    {
+        return string.Equals(first.Name.Trim(), second.Name.Trim(), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(first.LocationLabel.Trim(), second.LocationLabel.Trim(), StringComparison.OrdinalIgnoreCase)
+            && Math.Abs(first.Latitude - second.Latitude) < 0.00001
+            && Math.Abs(first.Longitude - second.Longitude) < 0.00001;
+    }
+
     private static IReadOnlyList<Error> ValidateStartRequest(StartChargingSessionRequest request)
     {
         var errors = new List<Error>();
@@ -263,7 +339,25 @@ public sealed class ChargingService : IChargingService
         station.AvailablePorts,
         station.GetConnectorTypes());
 
-    private static ChargingSessionDto MapSession(ChargingSession session) => new(
+    private static int CalculateCurrentBatteryPercent(ChargingSession session, StaffTask? task, DateTime now)
+    {
+        if (session.Status != ChargingSessionStatus.Active)
+        {
+            return session.CurrentBatteryPercent;
+        }
+
+        if (task?.Status != StaffTaskStatus.InProgress)
+        {
+            return session.StartBatteryPercent;
+        }
+
+        var elapsedMinutes = Math.Max(0, (now - task.UpdatedAt).TotalMinutes);
+        return Math.Min(
+            session.TargetBatteryPercent,
+            (int)Math.Round(session.StartBatteryPercent + elapsedMinutes * ChargingPercentPerMinute));
+    }
+
+    private static ChargingSessionDto MapSession(ChargingSession session, StaffTask? task = null, DateTime? now = null) => new(
         session.Id,
         session.VehicleId,
         session.ChargingStationId,
@@ -276,7 +370,7 @@ public sealed class ChargingService : IChargingService
         session.CompletedAt,
         session.StartBatteryPercent,
         session.TargetBatteryPercent,
-        session.CurrentBatteryPercent,
+        CalculateCurrentBatteryPercent(session, task, now ?? DateTime.UtcNow),
         session.Notes);
 
     private static StaffTaskDto MapTask(StaffTask task) => new(

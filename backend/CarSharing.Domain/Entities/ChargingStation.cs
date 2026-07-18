@@ -92,7 +92,11 @@ public class ChargingStation : BaseEntity
     public void ChangeStatus(ChargingStationStatus status)
     {
         Status = status;
-        if (status is ChargingStationStatus.Maintenance or ChargingStationStatus.Offline)
+        if (status is ChargingStationStatus.Online)
+        {
+            AvailablePorts = TotalPorts;
+        }
+        else if (status is ChargingStationStatus.Busy or ChargingStationStatus.Maintenance or ChargingStationStatus.Offline)
         {
             AvailablePorts = 0;
         }

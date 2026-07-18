@@ -23,3 +23,7 @@ public sealed record CreateStaffTaskRequest(
     DateTime? DueAt);
 
 public sealed record UpdateStaffTaskStatusRequest(StaffTaskStatus Status);
+
+public sealed record ReassignStaffTaskRequest(Guid AssigneeId);
+
+public sealed record ReassignStaffTaskResult(StaffTaskDto Task, Guid PreviousAssigneeId);

@@ -33,8 +33,8 @@ import {
 import { FaCarSide } from "react-icons/fa";
 import { trips } from "../../data/trips";
 import { users } from "../../data/users";
-import { chargingStations } from "../../data/chargingStations";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
+import { chargingApi } from "../../api/chargingApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { authApi } from "../../api/authApi";
 import { adminStatisticsApi } from "../../api/adminStatisticsApi";
@@ -107,9 +107,11 @@ const mapBackendStaffUser = (user) => ({
 
 const BAKU_CENTER = [40.3777, 49.8499];
 const CRITICAL_BATTERY_PERCENT = 10;
+const LOW_CHARGE_RECOMMENDATION_PERCENT = 30;
+const MIN_CHARGING_COMPLETION_PERCENT = 80;
+const CHARGING_PERCENT_PER_MINUTE = 10;
 const CHARGING_TECHNICIAN_ID = "tech-003";
 const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
-const CHARGING_STATIONS_STORAGE_KEY = "electroStreetChargingStations";
 const SERVICE_POINTS_STORAGE_KEY = "electroStreetServicePoints";
 const LEGACY_DEVELOPMENT_ADMIN_EMAIL = "admin@carsharing.local";
 
@@ -135,15 +137,6 @@ const servicePointsSeed = [
     },
   },
 ];
-
-const isTestTeoChargingStation = (station) => {
-  const searchable = [station?.name, station?.location?.label, station?.location?.zone]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return searchable.includes("тэо") || searchable.includes("тео") || searchable.includes("teo");
-};
 
 const STATUS_META = {
   available: {
@@ -185,28 +178,30 @@ const STATUS_META = {
 };
 
 const STATION_STATUS_META = {
-  [CHARGING_STATION_STATUSES.ONLINE]: {
-    label: "Онлайн",
-    color: "#22c55e",
-    tone: "emerald",
-  },
-  [CHARGING_STATION_STATUSES.BUSY]: {
-    label: "Занята",
-    color: "#f59e0b",
-    tone: "amber",
-  },
-  [CHARGING_STATION_STATUSES.MAINTENANCE]: {
-    label: "ТО станции",
-    color: "#ef4444",
-    tone: "red",
-  },
+  [CHARGING_STATION_STATUSES.ONLINE]: { label: "Online", color: "#22c55e", tone: "emerald" },
+  [CHARGING_STATION_STATUSES.BUSY]: { label: "Busy", color: "#f59e0b", tone: "amber" },
+  [CHARGING_STATION_STATUSES.MAINTENANCE]: { label: "Maintenance", color: "#ef4444", tone: "red" },
+  [CHARGING_STATION_STATUSES.OFFLINE]: { label: "Offline", color: "#71717a", tone: "zinc" },
 };
+
+const CHARGING_STATUS_OPTIONS = [
+  { status: CHARGING_STATION_STATUSES.ONLINE, label: "Online" },
+  { status: CHARGING_STATION_STATUSES.BUSY, label: "Busy" },
+  { status: CHARGING_STATION_STATUSES.MAINTENANCE, label: "Maintenance" },
+  { status: CHARGING_STATION_STATUSES.OFFLINE, label: "Offline" },
+];
 
 const statusFromVehicle = (vehicle) => {
   if (vehicle.status === VEHICLE_STATUSES.IN_USE) return "in_use";
-  if (vehicle.status === VEHICLE_STATUSES.CHARGING || vehicle.batteryPercent < 30) return "low_charge";
+  if (vehicle.status === VEHICLE_STATUSES.CHARGING || vehicle.batteryPercent <= LOW_CHARGE_RECOMMENDATION_PERCENT) return "low_charge";
   if (vehicle.status === VEHICLE_STATUSES.COMPLETED) return "service";
   return "available";
+};
+
+const isCurrentlyBlockedUser = (user) => {
+  if (!user?.blockReason) return false;
+  if (!user.blockedUntil) return true;
+  return new Date(user.blockedUntil).getTime() > Date.now();
 };
 
 const parkingZones = [
@@ -387,7 +382,7 @@ const staffSeed = [
     id: "field-002",
     name: "Elvin",
     role: "Полевой сотрудник",
-    specialty: "Ремонт и отвоз сломанных автомобилей в сервис",
+    specialty: "Repair and towing to service",
     kycRating: 7.9,
     ordersCompleted: 24,
     avgCompletionMinutes: 27.4,
@@ -652,8 +647,15 @@ const getDistanceKm = (from, to) => {
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 };
 
-const getNearestChargingStation = (vehicle) =>
-  chargingStations
+const parseApiDateMs = (value) => {
+  if (!value) return Number.NaN;
+  const text = String(value);
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`;
+  return new Date(normalized).getTime();
+};
+
+const getNearestChargingStation = (vehicle, stations) =>
+  stations
     .filter(
       (station) =>
         station.status === CHARGING_STATION_STATUSES.ONLINE && station.availablePorts > 0
@@ -663,6 +665,32 @@ const getNearestChargingStation = (vehicle) =>
       distanceKm: getDistanceKm(vehicle?.location, station.location),
     }))
     .sort((first, second) => first.distanceKm - second.distanceKm)[0] || null;
+
+const getChargingSessionProgress = (session, task) => {
+  const startBattery = Number(session.startBatteryPercent || session.currentBatteryPercent || 0);
+  const targetBattery = Number(session.targetBatteryPercent || 100);
+  if (task?.status !== STAFF_TASK_STATUSES.InProgress) {
+    return {
+      currentBatteryPercent: startBattery,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - startBattery) / CHARGING_PERCENT_PER_MINUTE)),
+    };
+  }
+
+  const chargingStartedAtMs = parseApiDateMs(task.updatedAt);
+  const elapsedMinutes = Number.isFinite(chargingStartedAtMs)
+    ? Math.max(0, (Date.now() - chargingStartedAtMs) / 60000)
+    : 0;
+  const currentBatteryPercent = Math.min(
+    targetBattery,
+    Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE)
+  );
+  const minutesRemaining = Math.max(
+    0,
+    Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)
+  );
+
+  return { currentBatteryPercent, minutesRemaining };
+};
 
 const makeLiveVehicle = (vehicle, index) => ({
   ...vehicle,
@@ -831,9 +859,9 @@ const AdminLogin = ({ onLogin }) => {
       >
         <div className="mb-7">
           <p className="text-xs font-black uppercase tracking-[0.24em] text-red-300">ElectroStreet Admin</p>
-          <h1 className="mt-2 text-2xl font-black tracking-tight text-white">Вход в панель</h1>
+          <h1 className="mt-2 text-2xl font-black tracking-tight text-white">Situation Center</h1>
           <p className="mt-2 text-sm font-semibold text-slate-400">
-            Введите отдельный логин и пароль администратора.
+            Enter the dedicated administrator login and password.
           </p>
         </div>
 
@@ -853,7 +881,7 @@ const AdminLogin = ({ onLogin }) => {
         </label>
 
         <label className="mt-4 grid gap-2 text-sm font-bold text-slate-300">
-          Пароль
+          Password
           <span className="flex items-center rounded-xl border border-white/10 bg-[#0f1a2b] pr-3 transition focus-within:border-red-400">
             <input
               type={isPasswordVisible ? "text" : "password"}
@@ -863,7 +891,7 @@ const AdminLogin = ({ onLogin }) => {
                 setError("");
               }}
               className="min-w-0 flex-1 rounded-xl bg-transparent px-4 py-3 font-semibold text-white outline-none placeholder:text-slate-600"
-              placeholder="Введите пароль"
+              placeholder="Enter password"
               autoComplete="current-password"
             />
             <button
@@ -915,22 +943,7 @@ const AdminControlRoom = () => {
     }
   });
   const [liveVehicles, setLiveVehicles] = useState([]);
-  const [managedChargingStations, setManagedChargingStations] = useState(() => {
-    try {
-      const storedStations = localStorage.getItem(CHARGING_STATIONS_STORAGE_KEY);
-      const parsedStations = storedStations ? JSON.parse(storedStations) : null;
-      if (!Array.isArray(parsedStations)) return chargingStations;
-
-      const cleanedStations = parsedStations.filter((station) => !isTestTeoChargingStation(station));
-      if (cleanedStations.length !== parsedStations.length) {
-        localStorage.setItem(CHARGING_STATIONS_STORAGE_KEY, JSON.stringify(cleanedStations));
-      }
-
-      return cleanedStations;
-    } catch {
-      return chargingStations;
-    }
-  });
+  const [managedChargingStations, setManagedChargingStations] = useState([]);
   const [managedServicePoints, setManagedServicePoints] = useState(() => {
     try {
       const storedPoints = localStorage.getItem(SERVICE_POINTS_STORAGE_KEY);
@@ -977,6 +990,8 @@ const AdminControlRoom = () => {
   const [adminStatisticsError, setAdminStatisticsError] = useState("");
   const [isLoadingAdminStatistics, setIsLoadingAdminStatistics] = useState(false);
   const [adminStatisticsLoadedAt, setAdminStatisticsLoadedAt] = useState(null);
+  const [chargingStationsError, setChargingStationsError] = useState("");
+  const [isLoadingChargingStations, setIsLoadingChargingStations] = useState(false);
   const [backendUsers, setBackendUsers] = useState([]);
   const [isLoadingBackendUsers, setIsLoadingBackendUsers] = useState(false);
   const [backendUsersError, setBackendUsersError] = useState("");
@@ -1006,6 +1021,12 @@ const AdminControlRoom = () => {
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [backendVehiclesError, setBackendVehiclesError] = useState("");
   const [isLoadingBackendVehicles, setIsLoadingBackendVehicles] = useState(false);
+  const [activeChargingSessions, setActiveChargingSessions] = useState([]);
+  const [isLoadingChargingSessions, setIsLoadingChargingSessions] = useState(false);
+  const [chargingSessionsError, setChargingSessionsError] = useState("");
+  const [chargingProgressTick, setChargingProgressTick] = useState(() => Date.now());
+  const [chargingAssignmentDraft, setChargingAssignmentDraft] = useState({});
+  const [chargingAssignmentVehicleId, setChargingAssignmentVehicleId] = useState("");
   const [staffTaskDraft, setStaffTaskDraft] = useState({
     title: "",
     description: "",
@@ -1046,7 +1067,12 @@ const AdminControlRoom = () => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const staffMembers = useMemo(
     () => backendUsers
-      .filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL && user.role === USER_ROLES.Staff && user.isActive)
+      .filter((user) =>
+        user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL &&
+        user.role === USER_ROLES.Staff &&
+        user.isActive &&
+        !isCurrentlyBlockedUser(user)
+      )
       .map((user) => ({
         id: user.id,
         name: `${user.firstName} ${user.lastName}`.trim() || user.email,
@@ -1054,6 +1080,48 @@ const AdminControlRoom = () => {
         role: "Staff",
       })),
     [backendUsers]
+  );
+  const activeStaffTaskCounts = useMemo(() => {
+    const counts = {};
+    staffTasks
+      .filter((task) => task.status !== STAFF_TASK_STATUSES.Done)
+      .forEach((task) => {
+        counts[task.assigneeId] = (counts[task.assigneeId] || 0) + 1;
+      });
+    return counts;
+  }, [staffTasks]);
+  const activeChargingVehicleIds = useMemo(
+    () => new Set(activeChargingSessions.map((session) => session.vehicleId)),
+    [activeChargingSessions]
+  );
+  const readyChargingVehicles = useMemo(
+    () =>
+      backendVehicles.filter((vehicle) =>
+        vehicle.status === VEHICLE_STATUSES.CHARGING &&
+        Number(vehicle.batteryPercent) >= MIN_CHARGING_COMPLETION_PERCENT &&
+        !activeChargingVehicleIds.has(vehicle.id)
+      ),
+    [activeChargingVehicleIds, backendVehicles]
+  );
+  const chargingRecommendations = useMemo(
+    () =>
+      backendVehicles
+        .filter((vehicle) =>
+          Number(vehicle.batteryPercent) <= LOW_CHARGE_RECOMMENDATION_PERCENT &&
+          [VEHICLE_STATUSES.AVAILABLE, VEHICLE_STATUSES.CHARGING].includes(vehicle.status) &&
+          !activeChargingVehicleIds.has(vehicle.id)
+        )
+        .sort((first, second) => Number(first.batteryPercent) - Number(second.batteryPercent)),
+    [activeChargingVehicleIds, backendVehicles]
+  );
+  const getCompatibleChargingStations = useCallback(
+    (vehicle) =>
+      managedChargingStations.filter((station) =>
+        station.status === CHARGING_STATION_STATUSES.ONLINE &&
+        Number(station.availablePorts) > 0 &&
+        (!vehicle?.connectorType || station.connectorTypes.includes(vehicle.connectorType))
+      ),
+    [managedChargingStations]
   );
   const canManageUserAccount = useCallback((user) => {
     if (!user || user.id === adminSession?.id) return false;
@@ -1088,10 +1156,6 @@ const AdminControlRoom = () => {
 
     localStorage.setItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY, activeSection);
   }, [activeSection, adminSession]);
-
-  useEffect(() => {
-    localStorage.setItem(CHARGING_STATIONS_STORAGE_KEY, JSON.stringify(managedChargingStations));
-  }, [managedChargingStations]);
 
   useEffect(() => {
     localStorage.setItem(SERVICE_POINTS_STORAGE_KEY, JSON.stringify(managedServicePoints));
@@ -1139,8 +1203,9 @@ const AdminControlRoom = () => {
     }
   }, []);
 
-  const loadStaffTasks = useCallback(async () => {
-    setIsLoadingStaffTasks(true);
+  const loadStaffTasks = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingStaffTasks(true);
     setStaffTasksError("");
 
     try {
@@ -1148,12 +1213,13 @@ const AdminControlRoom = () => {
     } catch (error) {
       setStaffTasksError(error.message || "Backend staff tasks are unavailable.");
     } finally {
-      setIsLoadingStaffTasks(false);
+      if (!silent) setIsLoadingStaffTasks(false);
     }
   }, []);
 
-  const loadBackendVehicles = useCallback(async () => {
-    setIsLoadingBackendVehicles(true);
+  const loadBackendVehicles = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingBackendVehicles(true);
     setBackendVehiclesError("");
 
     try {
@@ -1176,9 +1242,46 @@ const AdminControlRoom = () => {
       setEvents([]);
       setBackendVehiclesError(error.message || "Backend vehicles are unavailable.");
     } finally {
-      setIsLoadingBackendVehicles(false);
+      if (!silent) setIsLoadingBackendVehicles(false);
     }
   }, []);
+
+  const loadChargingStations = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingChargingStations(true);
+    setChargingStationsError("");
+
+    try {
+      setManagedChargingStations(await chargingApi.getStations());
+    } catch (error) {
+      setManagedChargingStations([]);
+      setChargingStationsError(error.message || "Backend charging stations are unavailable.");
+    } finally {
+      if (!silent) setIsLoadingChargingStations(false);
+    }
+  }, []);
+
+  const loadChargingSessions = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingChargingSessions(true);
+    setChargingSessionsError("");
+
+    try {
+      setActiveChargingSessions(await chargingApi.getActiveSessions());
+    } catch (error) {
+      setActiveChargingSessions([]);
+      setChargingSessionsError(error.message || "Backend charging sessions are unavailable.");
+    } finally {
+      if (!silent) setIsLoadingChargingSessions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!adminSession) return undefined;
+
+    const progressTimer = window.setInterval(() => setChargingProgressTick(Date.now()), 30000);
+    return () => window.clearInterval(progressTimer);
+  }, [adminSession]);
 
   useEffect(() => {
     if (!adminSession) return undefined;
@@ -1187,15 +1290,27 @@ const AdminControlRoom = () => {
     const initialUsersTimer = window.setTimeout(loadBackendUsers, 0);
     const initialTasksTimer = window.setTimeout(loadStaffTasks, 0);
     const initialVehiclesTimer = window.setTimeout(loadBackendVehicles, 0);
+    const initialChargingTimer = window.setTimeout(loadChargingStations, 0);
+    const initialChargingSessionsTimer = window.setTimeout(loadChargingSessions, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
+    const vehiclesTimer = window.setInterval(() => loadBackendVehicles({ silent: true }), 5000);
+    const chargingSessionsTimer = window.setInterval(() => {
+      loadChargingSessions({ silent: true });
+      loadChargingStations({ silent: true });
+      loadStaffTasks({ silent: true });
+    }, 10000);
     return () => {
       window.clearTimeout(initialStatisticsTimer);
       window.clearTimeout(initialUsersTimer);
       window.clearTimeout(initialTasksTimer);
       window.clearTimeout(initialVehiclesTimer);
+      window.clearTimeout(initialChargingTimer);
+      window.clearTimeout(initialChargingSessionsTimer);
       window.clearInterval(statisticsTimer);
+      window.clearInterval(vehiclesTimer);
+      window.clearInterval(chargingSessionsTimer);
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadBackendVehicles]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadBackendVehicles, loadChargingStations, loadChargingSessions]);
 
   useEffect(() => {
     if (!adminSession) return undefined;
@@ -1220,6 +1335,14 @@ const AdminControlRoom = () => {
       } else if (message?.scope === "users") {
         loadBackendUsers();
         loadAdminStatistics();
+      } else if (message?.scope === "chargingStations") {
+        loadChargingStations({ silent: true });
+        loadAdminStatistics();
+      } else if (message?.scope === "chargingSessions") {
+        loadChargingSessions({ silent: true });
+        loadChargingStations({ silent: true });
+        loadBackendVehicles();
+        loadStaffTasks();
       }
     };
 
@@ -1242,7 +1365,7 @@ const AdminControlRoom = () => {
       connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
       stopConnection(connection).catch(() => {});
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadStaffTasks]);
 
   useEffect(() => {
     if (activeSection === "billing") {
@@ -1504,10 +1627,14 @@ const AdminControlRoom = () => {
 
     const feedTimer = window.setInterval(() => {
       setLiveVehicles((current) => {
+        if (current.length === 0) return current;
+
         const next = [...current];
         const index = Math.floor(Math.random() * next.length);
         const vehicle = next[index];
-        const lowCharge = vehicle.liveStatus !== "in_use" && vehicle.batteryPercent < 18;
+        if (!vehicle) return current;
+
+        const lowCharge = vehicle.liveStatus !== "in_use" && vehicle.batteryPercent <= LOW_CHARGE_RECOMMENDATION_PERCENT;
         const nextStatus = lowCharge ? "low_charge" : vehicle.liveStatus;
         next[index] = { ...vehicle, liveStatus: nextStatus };
 
@@ -1542,7 +1669,7 @@ const AdminControlRoom = () => {
         (trip) => trip.vehicleId === vehicle.id && trip.status === TRIP_STATUSES.ACTIVE
       );
       const rider = users.find((user) => user.id === activeTrip?.userId);
-      const nearestStation = getNearestChargingStation(vehicle);
+      const nearestStation = getNearestChargingStation(vehicle, managedChargingStations);
       const noticeBody = `Заряд автомобиля ${Math.round(vehicle.batteryPercent)}%. Аренда приостановлена, полевой сотрудник отвезет машину на зарядку.`;
 
       setServiceTasks((items) => {
@@ -1624,7 +1751,7 @@ const AdminControlRoom = () => {
         ].slice(0, 9);
       });
     });
-  }, [liveVehicles, serviceTasks]);
+  }, [liveVehicles, managedChargingStations, serviceTasks]);
 
   const focusVehicle = (vehicleId) => {
     const vehicle = liveVehicles.find((item) => item.id === vehicleId);
@@ -1899,8 +2026,158 @@ const AdminControlRoom = () => {
     }
   };
 
+  const reassignStaffTask = async (taskId, assigneeId, noticeSection = "tasks") => {
+    if (!taskId || !assigneeId) {
+      showAdminNotice("Select an active staff member first.", noticeSection, "error");
+      return;
+    }
+
+    const staffMember = staffMembers.find((item) => item.id === assigneeId);
+
+    try {
+      const updatedTask = await adminStaffTasksApi.reassignTask(taskId, assigneeId);
+      setStaffTasks((items) => upsertStaffTask(items, updatedTask));
+      setActiveChargingSessions((items) =>
+        items.map((session) =>
+          session.staffTaskId === taskId ? { ...session, assignedStaffId: assigneeId } : session
+        )
+      );
+      await Promise.all([
+        loadStaffTasks({ silent: true }),
+        loadChargingSessions({ silent: true }),
+      ]);
+      showAdminNotice(`Task reassigned to ${staffMember?.name || "staff"}.`, noticeSection);
+    } catch (error) {
+      showAdminNotice(error.message || "Task could not be reassigned.", noticeSection, "error");
+    }
+  };
+
   const updateChargingDraft = (field, value) => {
     setChargingDraft((draft) => ({ ...draft, [field]: value }));
+  };
+
+  const updateChargingAssignmentDraft = (vehicleId, field, value) => {
+    setChargingAssignmentDraft((draft) => ({
+      ...draft,
+      [vehicleId]: {
+        ...(draft[vehicleId] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const assignChargingRecommendation = async (vehicle) => {
+    const draft = chargingAssignmentDraft[vehicle.id] || {};
+    const stationId = draft.stationId || getCompatibleChargingStations(vehicle)[0]?.id || "";
+    const assigneeId = draft.assigneeId || staffMembers[0]?.id || "";
+    const station = managedChargingStations.find((item) => item.id === stationId);
+    const staffMember = staffMembers.find((item) => item.id === assigneeId);
+
+    if (![VEHICLE_STATUSES.AVAILABLE, VEHICLE_STATUSES.CHARGING].includes(vehicle.status)) {
+      showAdminNotice("Only parked vehicles can be assigned to charging. In-use or reserved cars are blocked.", "chargers", "error");
+      return;
+    }
+
+    if (!stationId) {
+      showAdminNotice("Select an online compatible charging station with free ports.", "chargers", "error");
+      return;
+    }
+
+    if (!assigneeId) {
+      showAdminNotice("Select an active staff member for this charging task.", "chargers", "error");
+      return;
+    }
+
+    try {
+      setChargingAssignmentVehicleId(vehicle.id);
+      if (vehicle.status !== VEHICLE_STATUSES.CHARGING) {
+        await vehicleApi.updateVehicleStatus(vehicle.id, VEHICLE_STATUSES.CHARGING);
+      }
+      const details = await chargingApi.startSession({
+        vehicleId: vehicle.id,
+        chargingStationId: stationId,
+        assignedStaffId: assigneeId,
+      });
+
+      if (details?.session) {
+        setActiveChargingSessions((items) => [details.session, ...items.filter((item) => item.id !== details.session.id)]);
+      }
+      if (details?.staffTask) {
+        setStaffTasks((items) => upsertStaffTask(items, details.staffTask));
+      }
+      if (details?.station) {
+        setManagedChargingStations((items) => items.map((item) => (item.id === details.station.id ? details.station : item)));
+      }
+      setChargingAssignmentDraft((drafts) => {
+        const next = { ...drafts };
+        delete next[vehicle.id];
+        return next;
+      });
+      await Promise.all([
+        loadBackendVehicles(),
+        loadChargingStations({ silent: true }),
+        loadChargingSessions({ silent: true }),
+        loadStaffTasks(),
+      ]);
+      showAdminNotice(`Charging task assigned: ${vehicle.brand} ${vehicle.model} to ${staffMember?.name || "staff"} at ${station?.name || "station"}.`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Charging task could not be assigned.", "chargers", "error");
+    } finally {
+      setChargingAssignmentVehicleId("");
+    }
+  };
+
+  const completeChargingSession = async (session) => {
+    const task = staffTasks.find((item) => item.id === session.staffTaskId);
+    const progress = getChargingSessionProgress(session, task);
+    if (progress.currentBatteryPercent < MIN_CHARGING_COMPLETION_PERCENT) {
+      showAdminNotice(`Charging can be completed only from ${MIN_CHARGING_COMPLETION_PERCENT}%. Current charge is ${progress.currentBatteryPercent}%.`, "chargers", "error");
+      return;
+    }
+
+    if (progress.currentBatteryPercent < 100) {
+      const confirmed = await confirm({
+        title: `Finish charging at ${progress.currentBatteryPercent}%?`,
+        message: "The vehicle is not fully charged yet. You can finish now and keep the current battery level, or continue charging to 100%.",
+        confirmLabel: `Finish at ${progress.currentBatteryPercent}%`,
+        cancelLabel: "Keep charging",
+        tone: "warning",
+      });      if (!confirmed) return;
+    }
+
+    try {
+      const details = await chargingApi.completeSession(session.id, {
+        finalBatteryPercent: progress.currentBatteryPercent,
+        notes: "Charging completed by administrator.",
+      });
+      if (details?.staffTask) {
+        setStaffTasks((items) => upsertStaffTask(items, details.staffTask));
+      }
+      setActiveChargingSessions((items) => items.filter((item) => item.id !== session.id));
+      await Promise.all([
+        loadBackendVehicles({ silent: true }),
+        loadChargingStations({ silent: true }),
+        loadChargingSessions({ silent: true }),
+        loadStaffTasks({ silent: true }),
+      ]);
+      showAdminNotice(`Charging session completed at ${progress.currentBatteryPercent}%. Vehicle is ready for activation.`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Charging session could not be completed.", "chargers", "error");
+    }
+  };
+
+  const activateReadyVehicle = async (vehicle) => {
+    try {
+      await chargingApi.activateVehicle(vehicle.id);
+      await Promise.all([
+        loadBackendVehicles({ silent: true }),
+        loadChargingSessions({ silent: true }),
+        loadChargingStations({ silent: true }),
+      ]);
+      showAdminNotice(`Vehicle activated: ${vehicle.brand} ${vehicle.model}`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Vehicle could not be activated.", "chargers", "error");
+    }
   };
 
   const setChargingDraftPoint = ([lat, lng]) => {
@@ -1913,62 +2190,69 @@ const AdminControlRoom = () => {
     showAdminNotice("Координаты точки зарядки выбраны на карте", "chargers");
   };
 
-  const saveChargingPoint = () => {
+  const saveChargingPoint = async () => {
     const lat = Number(chargingDraft.lat);
     const lng = Number(chargingDraft.lng);
     const ports = Number(chargingDraft.ports);
 
     if (!chargingDraft.address.trim() || Number.isNaN(lat) || Number.isNaN(lng)) {
-      showAdminNotice("Укажите адрес и координаты точки зарядки", "chargers");
+      showAdminNotice("Enter address and coordinates for the charging station.", "chargers", "error");
       return;
     }
 
-    const nextStation = {
-      id: `station-custom-${managedChargingStations.length + 1}`,
-      name: chargingDraft.name.trim() || chargingDraft.address.trim(),
-      status: chargingDraft.status,
-      location: {
-        label: chargingDraft.address.trim(),
+    try {
+      const station = await chargingApi.createStation({
+        name: chargingDraft.name.trim() || chargingDraft.address.trim(),
+        status: chargingDraft.status,
+        locationLabel: chargingDraft.address.trim(),
         zone: "Custom",
-        lat,
-        lng,
-      },
-      powerKw: chargingDraft.chargerType === "Type2" ? 22 : chargingDraft.chargerType === "CHAdeMO" ? 50 : 120,
-      totalPorts: ports,
-      availablePorts: chargingDraft.status === CHARGING_STATION_STATUSES.ONLINE ? ports : 0,
-      connectorTypes: [chargingDraft.chargerType],
-    };
+        latitude: lat,
+        longitude: lng,
+        powerKw: chargingDraft.chargerType === "Type2" ? 22 : chargingDraft.chargerType === "CHAdeMO" ? 50 : 120,
+        totalPorts: ports,
+        availablePorts: chargingDraft.status === CHARGING_STATION_STATUSES.ONLINE ? ports : 0,
+        connectorTypes: [chargingDraft.chargerType],
+      });
 
-    setManagedChargingStations((items) => [nextStation, ...items]);
-    setFocusTarget({ id: nextStation.id, lat, lng });
-    setChargingDraft({
-      name: "",
-      address: "",
-      chargerType: "CCS2",
-      ports: 2,
-      status: CHARGING_STATION_STATUSES.ONLINE,
-      lat: "",
-      lng: "",
-      pickOnMap: false,
-    });
-    showAdminNotice(`Добавлена точка зарядки: ${nextStation.name}`, "chargers");
+      setManagedChargingStations((items) => [station, ...items.filter((item) => item.id !== station.id)]);
+      loadChargingStations({ silent: true });
+      setFocusTarget({ id: station.id, lat, lng });
+      setChargingDraft({ name: "", address: "", chargerType: "CCS2", ports: 2, status: CHARGING_STATION_STATUSES.ONLINE, lat: "", lng: "", pickOnMap: false });
+      showAdminNotice(`Charging station added: ${station.name}`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Charging station could not be saved.", "chargers", "error");
+    }
+  };
+
+  const updateChargingStationStatus = async (stationId, status) => {
+    try {
+      const station = await chargingApi.updateStationStatus(stationId, status);
+      setManagedChargingStations((items) => items.map((item) => (item.id === station.id ? station : item)));
+      loadChargingStations({ silent: true });
+      showAdminNotice(`Station status updated: ${station.name}`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Station status could not be updated.", "chargers", "error");
+    }
   };
 
   const deleteChargingPoint = async (station) => {
     const confirmed = await confirm({
-      title: "Удалить точку зарядки?",
-      message: `Точка "${station.name}" будет удалена с карты. Связанные задачи останутся без выбранной станции.`,
-      confirmLabel: "Удалить",
-      cancelLabel: "Оставить",
+      title: "Delete charging station?",
+      message: `Station "${station.name}" will be removed from the backend. Active sessions or assigned vehicles can block deletion.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Keep",
       tone: "danger",
     });
     if (!confirmed) return;
 
-    setManagedChargingStations((items) => items.filter((item) => item.id !== station.id));
-    setServiceTasks((items) =>
-      items.map((task) => (task.chargingStationId === station.id ? { ...task, chargingStationId: null } : task))
-    );
-    showAdminNotice(`Точка зарядки удалена: ${station.name}`, "chargers");
+    try {
+      await chargingApi.deleteStation(station.id);
+      loadChargingStations({ silent: true });
+      setServiceTasks((items) => items.map((task) => (task.chargingStationId === station.id ? { ...task, chargingStationId: null } : task)));
+      showAdminNotice(`Charging station deleted: ${station.name}`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Charging station could not be deleted.", "chargers", "error");
+    }
   };
 
   const updateServicePointDraft = (field, value) => {
@@ -2693,7 +2977,7 @@ const AdminControlRoom = () => {
       )}
       <div className="grid gap-4 overflow-y-auto p-5">
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-sm font-black text-white">Редактор полигона</p>
+          <p className="text-sm font-black text-white">Polygon editor</p>
           <p className="mt-2 text-xs font-semibold leading-5 text-slate-400">
             Цвет выбирает тип новой зоны. Потом нажми Draw, поставь точки на карте и сохрани зону.
           </p>
@@ -2778,7 +3062,7 @@ const AdminControlRoom = () => {
                 onClick={() => showAdminNotice(`${selectedRule.name}: режим редактирования открыт`)}
                 className="rounded-xl bg-blue-500 px-3 py-3 text-xs font-black text-white"
               >
-                <FiEdit3 className="inline" /> Редактировать
+                <FiEdit3 className="inline" /> Edit
               </button>
               <button
                 type="button"
@@ -3149,7 +3433,7 @@ const AdminControlRoom = () => {
       ["name", "Сотрудник"],
       ["ordersCompleted", "Заказы"],
       ["avgCompletionMinutes", "Среднее время"],
-      ["rating", "Рейтинг"],
+      ["rating", "Rating"],
       ["complaints", "Жалобы"],
       ["praises", "Похвалы"],
       ["activeShiftHours", "Активное время"],
@@ -3310,7 +3594,7 @@ const AdminControlRoom = () => {
                   <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
                     <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Заказы</p><p className="font-black text-white">{manager.ordersCompleted}</p></div>
                     <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Среднее</p><p className="font-black text-white">{manager.avgCompletionMinutes} мин</p></div>
-                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Рейтинг</p><p className="font-black text-emerald-200">{manager.rating}/10</p></div>
+                    <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Rating</p><p className="font-black text-emerald-200">{manager.rating}/10</p></div>
                     <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Смена</p><p className="font-black text-white">{manager.activeShiftHours} ч</p></div>
                     <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Жалобы</p><p className="font-black text-red-200">{manager.complaints}</p></div>
                     <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Похвалы</p><p className="font-black text-blue-200">{manager.praises}</p></div>
@@ -3490,7 +3774,7 @@ const AdminControlRoom = () => {
             </p>
           )}
           {staffTasks.map((task) => {
-            const staff = staffMembers.find((item) => item.id === task.assigneeId);
+            const taskAssigneeIsActive = staffMembers.some((item) => item.id === task.assigneeId);
             const taskVehicle = backendVehicles.find((vehicle) => vehicle.id === task.vehicleId);
             const priorityStyle =
               STAFF_TASK_PRIORITY_STYLES[task.priority] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
@@ -3521,7 +3805,26 @@ const AdminControlRoom = () => {
                 <div className="mt-4 grid gap-2 md:grid-cols-3">
                   <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.045] p-3">
                     <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Assignee</p>
-                    <p className="mt-1 truncate text-sm font-black text-white">{staff?.name || "Unassigned"}</p>
+                    <select
+                      value={task.assigneeId}
+                      onChange={(event) => reassignStaffTask(task.id, event.target.value, "tasks")}
+                      className="mt-1 min-h-9 w-full rounded-lg border border-white/10 bg-[#0f1828] px-3 py-2 text-xs font-bold text-white outline-none"
+                    >
+                      {!taskAssigneeIsActive && task.assigneeId && (
+                        <option value={task.assigneeId}>
+                          Inactive or removed staff - reassign
+                        </option>
+                      )}
+                      {staffMembers.length === 0 && <option value="">No active staff</option>}
+                      {staffMembers.map((member) => {
+                        const taskCount = activeStaffTaskCounts[member.id] || 0;
+                        return (
+                          <option key={member.id} value={member.id}>
+                            {member.name} - {taskCount} active tasks
+                          </option>
+                        );
+                      })}
+                    </select>
                   </div>
                   <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.045] p-3">
                     <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Vehicle</p>
@@ -3560,186 +3863,179 @@ const AdminControlRoom = () => {
 
   const renderChargersPanel = () => (
     <>
+      {void chargingProgressTick}
       {renderPanelHeader(
         "Charging Map",
-        "Карта зарядок",
-        <button
-          type="button"
-          onClick={() => updateChargingDraft("pickOnMap", !chargingDraft.pickOnMap)}
-          className={`rounded-xl px-3 py-2 text-xs font-black ${chargingDraft.pickOnMap ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}
-        >
-          <FiPlus className="inline" /> Добавить точку зарядки
+        "Charging stations",
+        <button type="button" onClick={() => updateChargingDraft("pickOnMap", !chargingDraft.pickOnMap)} className={`rounded-xl px-3 py-2 text-xs font-black ${chargingDraft.pickOnMap ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}>
+          <FiPlus className="inline" /> Add charging station
         </button>
       )}
       <div className="grid gap-3 overflow-y-auto p-5">
-        {adminStatistics && (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-black text-white">Ride revenue</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-400">Last 7 calendar days from live statistics</p>
-                </div>
-                <span className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
-                  {Number(adminStatistics.revenue?.thisMonth || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
-                </span>
-              </div>
-              <div className="mt-4 grid h-36 grid-cols-7 items-end gap-2">
-                {(adminStatistics.revenueChart || []).slice(-7).map((point) => {
-                  const maxRevenue = Math.max(...(adminStatistics.revenueChart || []).slice(-7).map((item) => Number(item.revenue || 0)), 1);
-                  const height = Math.max(8, Math.round((Number(point.revenue || 0) / maxRevenue) * 100));
-
-                  return (
-                    <div key={point.date} className="flex h-full flex-col justify-end gap-2">
-                      <div
-                        className="rounded-t-lg bg-emerald-400/80"
-                        style={{ height: `${height}%` }}
-                        title={`${Number(point.revenue || 0).toFixed(2)} ${adminStatistics.revenue?.currency || "AZN"}`}
-                      />
-                      <span className="truncate text-center text-[10px] font-black text-slate-500">
-                        {String(point.date).slice(5)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+        {(chargingStationsError || isLoadingChargingStations) && (
+          <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${chargingStationsError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+            {chargingStationsError || "Loading charging stations..."}
+          </p>
+        )}
+        {(chargingSessionsError || isLoadingChargingSessions) && (
+          <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${chargingSessionsError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+            {chargingSessionsError || "Loading charging sessions..."}
+          </p>
+        )}
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-white">Charging recommendations</p>
             </div>
+            <span className="rounded-lg bg-amber-400/15 px-2 py-1 text-[10px] font-black text-amber-100">{chargingRecommendations.length}</span>
+          </div>
+          <div className="mt-3 grid gap-3">
+            {chargingRecommendations.length === 0 && (
+              <p className="rounded-xl border border-white/10 bg-white/[0.035] px-3 py-3 text-xs font-bold text-slate-300">No low-battery vehicles need charging right now.</p>
+            )}
+            {chargingRecommendations.map((vehicle) => {
+              const draft = chargingAssignmentDraft[vehicle.id] || {};
+              const compatibleStations = getCompatibleChargingStations(vehicle);
+              const selectedStationId = draft.stationId || compatibleStations[0]?.id || "";
+              const selectedAssigneeId = draft.assigneeId || staffMembers[0]?.id || "";
+              const isAssigning = chargingAssignmentVehicleId === vehicle.id;
+              const canAssign = Boolean(selectedStationId && selectedAssigneeId && !isAssigning);
 
-            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-              <p className="text-sm font-black text-white">Top vehicles</p>
-              <div className="mt-4 grid gap-2">
-                {(adminStatistics.topVehicles || []).length ? (
-                  adminStatistics.topVehicles.map((vehicle) => (
-                    <div key={vehicle.vehicleId} className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-black text-white">{vehicle.label}</p>
-                        <p className="mt-1 text-[10px] font-bold text-slate-500">{vehicle.plateNumber} В· {vehicle.completedTrips} trips</p>
-                      </div>
-                      <span className="shrink-0 text-xs font-black text-emerald-200">
-                        {Number(vehicle.revenue || 0).toFixed(2)} {adminStatistics.revenue?.currency || "AZN"}
-                      </span>
+              return (
+                <article key={vehicle.id} className="rounded-xl border border-white/10 bg-[#111a2b] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-white">{vehicle.brand} {vehicle.model}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">{vehicle.plateNumber} - {vehicle.connectorType || "Connector unknown"}</p>
                     </div>
-                  ))
-                ) : (
-                  <p className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-4 text-xs font-semibold text-slate-400">
-                    No completed ride payments yet.
-                  </p>
-                )}
-              </div>
+                    <span className="rounded-lg bg-amber-400/15 px-2 py-1 text-xs font-black text-amber-100">{vehicle.batteryPercent}%</span>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <select
+                      value={selectedStationId}
+                      onChange={(event) => updateChargingAssignmentDraft(vehicle.id, "stationId", event.target.value)}
+                      className="min-h-11 rounded-xl border border-white/10 bg-[#0f1828] px-3 py-2 text-xs font-bold text-white outline-none"
+                    >
+                      {compatibleStations.length === 0 && <option value="">No compatible free station</option>}
+                      {compatibleStations.map((station) => (
+                        <option key={station.id} value={station.id}>
+                          {station.name} - {station.availablePorts}/{station.totalPorts} free
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={selectedAssigneeId}
+                      onChange={(event) => updateChargingAssignmentDraft(vehicle.id, "assigneeId", event.target.value)}
+                      className="min-h-11 rounded-xl border border-white/10 bg-[#0f1828] px-3 py-2 text-xs font-bold text-white outline-none"
+                    >
+                      {staffMembers.length === 0 && <option value="">No active staff</option>}
+                      {staffMembers.map((member) => {
+                        const taskCount = activeStaffTaskCounts[member.id] || 0;
+                        return (
+                          <option key={member.id} value={member.id}>
+                            {member.name} - {taskCount} active tasks
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => assignChargingRecommendation(vehicle)}
+                      disabled={!canAssign}
+                      className="min-h-11 rounded-xl bg-red-500 px-3 py-3 text-xs font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                    >
+                      {isAssigning ? "Assigning..." : "Assign charging task"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+        {activeChargingSessions.length > 0 && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-sm font-black text-white">Active charging sessions</p>
+            <div className="mt-3 grid gap-2">
+              {activeChargingSessions.map((session) => {
+                const vehicle = backendVehicles.find((item) => item.id === session.vehicleId);
+                const station = managedChargingStations.find((item) => item.id === session.chargingStationId);
+                const assignee = staffMembers.find((item) => item.id === session.assignedStaffId);
+                const task = staffTasks.find((item) => item.id === session.staffTaskId);
+                const selectedAssigneeId = task?.assigneeId || session.assignedStaffId || "";
+                const selectedAssigneeIsActive = staffMembers.some((item) => item.id === selectedAssigneeId);
+                const progress = getChargingSessionProgress(session, task);
+                const canComplete = progress.currentBatteryPercent >= MIN_CHARGING_COMPLETION_PERCENT;
+
+                return (
+                  <div key={session.id} className="rounded-xl bg-white/[0.04] p-3">
+                    <p className="truncate text-xs font-black text-white">{vehicle ? `${vehicle.brand} ${vehicle.model}` : "Vehicle"} - {progress.currentBatteryPercent}% / {session.targetBatteryPercent}%</p>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-400">
+                      {station?.name || "Station"} - {assignee?.name || "Inactive or removed staff"}
+                    </p>
+                    <p className="mt-1 text-[11px] font-black text-emerald-200">
+                      {progress.currentBatteryPercent >= 100 ? "Fully charged" : `${progress.minutesRemaining} min to full`}
+                      {task ? ` - ${STAFF_TASK_STATUS_LABELS[task.status] || "Task active"}` : ""}
+                    </p>
+                    <label className="mt-3 grid gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">Assignee</span>
+                      <select
+                        value={selectedAssigneeId}
+                        onChange={(event) => reassignStaffTask(session.staffTaskId, event.target.value, "chargers")}
+                        className="min-h-9 rounded-lg border border-white/10 bg-[#0f1828] px-3 py-2 text-[11px] font-bold text-white outline-none"
+                      >
+                        {!selectedAssigneeIsActive && selectedAssigneeId && (
+                          <option value={selectedAssigneeId}>
+                            Inactive or removed staff - reassign
+                          </option>
+                        )}
+                        {staffMembers.length === 0 && <option value="">No active staff</option>}
+                        {staffMembers.map((member) => {
+                          const taskCount = activeStaffTaskCounts[member.id] || 0;
+                          return (
+                            <option key={member.id} value={member.id}>
+                              {member.name} - {taskCount} active tasks
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => completeChargingSession(session)}
+                      disabled={!canComplete}
+                      className="mt-3 inline-flex min-h-9 w-full items-center justify-center rounded-lg bg-emerald-500 px-3 py-2 text-[10px] font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                    >
+                      Complete session
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
-
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-semibold leading-5 text-slate-300">
-          Отдельная карта зарядной инфраструктуры: здесь видны только станции, их статус, мощность и свободные порты для планирования перегонов.
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-black text-white">Новая точка зарядки</p>
-            <span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">
-              {chargingDraft.pickOnMap ? "Кликните по карте" : "Форма"}
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2">
-            <input
-              value={chargingDraft.name}
-              onChange={(event) => updateChargingDraft("name", event.target.value)}
-              placeholder="Название точки"
-              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-            />
-            <input
-              value={chargingDraft.address}
-              onChange={(event) => updateChargingDraft("address", event.target.value)}
-              placeholder="Адрес"
-              className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                value={chargingDraft.lat}
-                onChange={(event) => updateChargingDraft("lat", event.target.value)}
-                placeholder="Lat или клик по карте"
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-              />
-              <input
-                value={chargingDraft.lng}
-                onChange={(event) => updateChargingDraft("lng", event.target.value)}
-                placeholder="Lng или клик по карте"
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
-              />
+        {readyChargingVehicles.length > 0 && (
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+            <p className="text-sm font-black text-white">Ready to activate</p>
+            <div className="mt-3 grid gap-2">
+              {readyChargingVehicles.map((vehicle) => (
+                <div key={vehicle.id} className="rounded-xl bg-white/[0.04] p-3">
+                  <p className="truncate text-xs font-black text-white">{vehicle.brand} {vehicle.model} - {vehicle.batteryPercent}%</p>
+                  <p className="mt-1 text-[11px] font-semibold text-slate-400">{vehicle.plateNumber} - charging complete</p>
+                  <button
+                    type="button"
+                    onClick={() => activateReadyVehicle(vehicle)}
+                    className="mt-3 inline-flex min-h-9 w-full items-center justify-center rounded-lg bg-red-500 px-3 py-2 text-[10px] font-black text-white transition hover:bg-red-600"
+                  >
+                    Activate vehicle
+                  </button>
+                </div>
+              ))}
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                value={chargingDraft.chargerType}
-                onChange={(event) => updateChargingDraft("chargerType", event.target.value)}
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
-              >
-                <option value="CCS2">CCS2 fast</option>
-                <option value="Type2">Type2 city</option>
-                <option value="CHAdeMO">CHAdeMO</option>
-              </select>
-              <select
-                value={chargingDraft.status}
-                onChange={(event) => updateChargingDraft("status", event.target.value)}
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
-              >
-                <option value={CHARGING_STATION_STATUSES.ONLINE}>Работает</option>
-                <option value={CHARGING_STATION_STATUSES.MAINTENANCE}>Не работает</option>
-              </select>
-            </div>
-            <label className="grid gap-1">
-              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">Количество портов</span>
-              <select
-                value={chargingDraft.ports}
-                onChange={(event) => updateChargingDraft("ports", Number(event.target.value))}
-                className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
-              >
-                {CHARGING_PORT_OPTIONS.map((ports) => (
-                  <option key={ports} value={ports}>
-                    {ports}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="button" onClick={saveChargingPoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">
-              Сохранить точку зарядки
-            </button>
           </div>
-        </div>
-        {managedChargingStations.map((station) => {
-          const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
-
-          return (
-            <button
-              key={station.id}
-              type="button"
-              onClick={() =>
-                setFocusTarget({
-                  id: station.id,
-                  lat: station.location.lat,
-                  lng: station.location.lng,
-                })
-              }
-              className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left transition hover:bg-white/[0.07]"
-            >
-              <span className="flex items-start justify-between gap-3">
-                <span>
-                  <span className="block text-sm font-black text-white">{station.name}</span>
-                  <span className="mt-1 block text-xs font-semibold text-slate-400">
-                    {station.location.label} · {station.location.zone}
-                  </span>
-                </span>
-                <span className="rounded-xl px-2 py-1 text-[10px] font-black text-white" style={{ backgroundColor: meta.color }}>
-                  {meta.label}
-                </span>
-              </span>
-              <span className="mt-4 grid grid-cols-3 gap-2">
-                <span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Порты</span><span className="font-black text-white">{station.availablePorts}/{station.totalPorts}</span></span>
-                <span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Мощность</span><span className="font-black text-white">{station.powerKw} kW</span></span>
-                <span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Типы</span><span className="font-black text-white">{station.connectorTypes.join(", ")}</span></span>
-              </span>
-            </button>
-          );
-        })}
+        )}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-black text-white">New charging station</p><span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">{chargingDraft.pickOnMap ? "Click on the map" : "Form"}</span></div><div className="mt-3 grid gap-2"><input value={chargingDraft.name} onChange={(event) => updateChargingDraft("name", event.target.value)} placeholder="Station name" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><input value={chargingDraft.address} onChange={(event) => updateChargingDraft("address", event.target.value)} placeholder="Address" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><div className="grid grid-cols-2 gap-2"><input value={chargingDraft.lat} onChange={(event) => updateChargingDraft("lat", event.target.value)} placeholder="Lat or click map" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><input value={chargingDraft.lng} onChange={(event) => updateChargingDraft("lng", event.target.value)} placeholder="Lng or click map" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /></div><div className="grid grid-cols-2 gap-2"><select value={chargingDraft.chargerType} onChange={(event) => updateChargingDraft("chargerType", event.target.value)} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"><option value="CCS2">CCS2 fast</option><option value="Type2">Type2 city</option><option value="CHAdeMO">CHAdeMO</option></select><select value={chargingDraft.status} onChange={(event) => updateChargingDraft("status", event.target.value)} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"><option value={CHARGING_STATION_STATUSES.ONLINE}>Online</option><option value={CHARGING_STATION_STATUSES.BUSY}>Busy</option><option value={CHARGING_STATION_STATUSES.MAINTENANCE}>Maintenance</option><option value={CHARGING_STATION_STATUSES.OFFLINE}>Offline</option></select></div><label className="grid gap-1"><span className="text-[10px] font-black uppercase tracking-wide text-slate-500">Port count</span><select value={chargingDraft.ports} onChange={(event) => updateChargingDraft("ports", Number(event.target.value))} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none">{CHARGING_PORT_OPTIONS.map((ports) => (<option key={ports} value={ports}>{ports}</option>))}</select></label><button type="button" onClick={saveChargingPoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">Save charging station</button></div></div>
+        {managedChargingStations.map((station) => { const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE]; return (<button key={station.id} type="button" onClick={() => setFocusTarget({ id: station.id, lat: station.location.lat, lng: station.location.lng })} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left transition hover:bg-white/[0.07]"><span className="flex items-start justify-between gap-3"><span><span className="block text-sm font-black text-white">{station.name}</span><span className="mt-1 block text-xs font-semibold text-slate-400">{station.location.label} - {station.location.zone}</span></span><span className="rounded-xl px-2 py-1 text-[10px] font-black text-white" style={{ backgroundColor: meta.color }}>{meta.label}</span></span><span className="mt-4 grid grid-cols-3 gap-2"><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Free</span><span className="font-black text-white">{station.availablePorts} / {station.totalPorts}</span></span><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Power</span><span className="font-black text-white">{station.powerKw} kW</span></span><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Types</span><span className="font-black text-white">{station.connectorTypes.join(", ")}</span></span></span></button>); })}
+        {managedChargingStations.length > 0 && (<div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4"><p className="text-sm font-black text-white">Station status</p><div className="mt-3 grid gap-3">{managedChargingStations.map((station) => (<div key={`${station.id}-status`} className="rounded-xl bg-white/[0.04] p-3"><p className="truncate text-xs font-black text-white">{station.name}</p><div className="mt-2 grid grid-cols-2 gap-2">{CHARGING_STATUS_OPTIONS.map((option) => (<button key={option.status} type="button" onClick={() => updateChargingStationStatus(station.id, option.status)} className={`min-h-9 rounded-lg border px-3 py-2 text-[10px] font-black leading-none transition-colors ${station.status === option.status ? "border-red-500 bg-red-500 text-white" : "border-white/10 bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"}`}>{option.label}</button>))}</div><button type="button" onClick={() => deleteChargingPoint(station)} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-500 hover:text-white"><FiTrash2 />Delete station</button></div>))}</div></div>)}
       </div>
     </>
   );
@@ -4177,25 +4473,10 @@ const AdminControlRoom = () => {
   const isServicePointsMap = activeSection === "service-points";
   const isOperationsMap = isChargingMap || isServicePointsMap;
   const mapSummaryCards = isChargingMap
-    ? [
-        ["Станций", managedChargingStations.length, FiZap, "text-cyan-200"],
-        ["Онлайн", stationStats.onlineStations, FiActivity, "text-emerald-200"],
-        ["Порты", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"],
-        ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"],
-      ]
+    ? [["Stations", managedChargingStations.length, FiZap, "text-cyan-200"], ["Online", stationStats.onlineStations, FiActivity, "text-emerald-200"], ["Ports", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"], ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"]]
     : isServicePointsMap
-      ? [
-          ["Сервисов", managedServicePoints.length, FiTool, "text-cyan-200"],
-          ["Активные", managedServicePoints.length, FiActivity, "text-emerald-200"],
-          ["Карта", "Service", FiMap, "text-blue-200"],
-          ["Задачи", serviceTasks.length, FiShield, "text-amber-200"],
-        ]
-      : [
-          ["Онлайн", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"],
-          ["Свободны", fleetStats.available, FiMap, "text-emerald-200"],
-          ["В пути", fleetStats.activeTrips, FiNavigation, "text-blue-200"],
-          ["Заряд", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"],
-        ];
+      ? [["Service points", managedServicePoints.length, FiTool, "text-cyan-200"], ["Active", managedServicePoints.length, FiActivity, "text-emerald-200"], ["Map", "Service", FiMap, "text-blue-200"], ["Tasks", serviceTasks.length, FiShield, "text-amber-200"]]
+      : [["Online", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"], ["Available", fleetStats.available, FiMap, "text-emerald-200"], ["In use", fleetStats.activeTrips, FiNavigation, "text-blue-200"], ["Battery", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"]];
   const isFullWidthPanel =
     activeSection === "users" ||
     activeSection === "billing" ||
@@ -4473,7 +4754,7 @@ const AdminControlRoom = () => {
                 <div className="min-w-0">
                   <p className="text-xs font-black uppercase tracking-[0.24em] text-red-300">ElectroStreet Admin</p>
                   <h1 className="truncate text-xl font-black tracking-tight text-white sm:text-2xl">
-                    Ситуационный Центр
+                    Situation Center
                   </h1>
                 </div>
               </div>
@@ -4488,8 +4769,7 @@ const AdminControlRoom = () => {
                     onClick={handleAdminLogout}
                     className="rounded-lg px-3 py-2 text-xs font-black text-slate-400 transition hover:text-white"
                   >
-                    Выйти
-                  </button>
+                    Sign out</button>
                 </div>
                 <label className="hidden min-w-[280px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-400 md:flex">
                   <FiSearch className="text-slate-500" />
@@ -4497,7 +4777,7 @@ const AdminControlRoom = () => {
                     type="search"
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Поиск по номеру, машине, зоне"
+                    placeholder="Search by plate, vehicle, zone"
                     className="w-full bg-transparent font-semibold outline-none placeholder:text-slate-500"
                   />
                 </label>

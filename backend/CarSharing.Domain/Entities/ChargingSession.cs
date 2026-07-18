@@ -60,4 +60,14 @@ public class ChargingSession : BaseEntity
         Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
         Status = ChargingSessionStatus.Completed;
     }
+
+    public void ReassignStaff(Guid assignedStaffId)
+    {
+        if (Status != ChargingSessionStatus.Active)
+        {
+            throw new InvalidOperationException("Only an active charging session can be reassigned.");
+        }
+
+        AssignedStaffId = assignedStaffId;
+    }
 }

@@ -65,12 +65,41 @@ public sealed class AdminStaffTasksController : ControllerBase
         return Ok(task);
     }
 
+    [HttpPatch("{id:guid}/assignee")]
+    public async Task<IActionResult> Reassign(
+        Guid id,
+        ReassignStaffTaskRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _staffTaskService.ReassignAsync(id, request, cancellationToken);
+        if (result.IsFailure)
+        {
+            return ToErrorResponse(result.Errors);
+        }
+
+        var reassignment = result.Value!;
+        await BroadcastStaffTaskReassignedAsync(reassignment.Task, reassignment.PreviousAssigneeId, cancellationToken);
+        return Ok(reassignment.Task);
+    }
+
     private async Task BroadcastStaffTaskAsync(string eventName, StaffTaskDto task, CancellationToken cancellationToken)
     {
         await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
             .SendAsync(eventName, task, cancellationToken);
         await _operationsHub.Clients.Group(OperationsHub.GetStaffGroup(task.AssigneeId))
             .SendAsync(eventName, task, cancellationToken);
+        await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
+            .SendAsync("AdminDataChanged", new { scope = "staffTasks" }, cancellationToken);
+    }
+
+    private async Task BroadcastStaffTaskReassignedAsync(StaffTaskDto task, Guid previousAssigneeId, CancellationToken cancellationToken)
+    {
+        await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
+            .SendAsync("StaffTaskUpdated", task, cancellationToken);
+        await _operationsHub.Clients.Group(OperationsHub.GetStaffGroup(previousAssigneeId))
+            .SendAsync("StaffTaskUpdated", task, cancellationToken);
+        await _operationsHub.Clients.Group(OperationsHub.GetStaffGroup(task.AssigneeId))
+            .SendAsync("StaffTaskUpdated", task, cancellationToken);
         await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
             .SendAsync("AdminDataChanged", new { scope = "staffTasks" }, cancellationToken);
     }
