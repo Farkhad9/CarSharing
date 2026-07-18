@@ -139,6 +139,17 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    const handleSessionRefresh = (event) => {
+      if (event.detail) {
+        setUser(event.detail);
+      }
+    };
+
+    window.addEventListener("electrostreet:session-refreshed", handleSessionRefresh);
+    return () => window.removeEventListener("electrostreet:session-refreshed", handleSessionRefresh);
+  }, []);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const verificationUserId = params.get("verifyEmail");
 

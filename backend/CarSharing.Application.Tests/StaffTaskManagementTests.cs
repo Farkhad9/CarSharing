@@ -82,12 +82,47 @@ public sealed class StaffTaskManagementTests
         Assert.Equal(task.Id, result.Value![0].Id);
     }
 
-    private static Fixture CreateFixture(UserRole currentRole, User staff, Guid? currentUserId = null)
+    [Fact]
+    public async Task ReassignAsync_ForAdmin_MovesTaskToActiveStaff()
+    {
+        var firstStaff = User.CreateStaff("First", "Staff", "staff-reassign-a@test.local", "+994501234504", "hash", "STAFFT5");
+        var secondStaff = User.CreateStaff("Second", "Staff", "staff-reassign-b@test.local", "+994501234505", "hash", "STAFFT6");
+        var fixture = CreateFixture(UserRole.Admin, firstStaff, null, secondStaff);
+        var task = StaffTask.Create("Charge vehicle", "Move EV to charging station", firstStaff.Id, null, StaffTaskPriority.High, null, DateTime.UtcNow);
+        fixture.Tasks.Items.Add(task);
+
+        var result = await fixture.Service.ReassignAsync(task.Id, new ReassignStaffTaskRequest(secondStaff.Id));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(firstStaff.Id, result.Value!.PreviousAssigneeId);
+        Assert.Equal(secondStaff.Id, result.Value.Task.AssigneeId);
+        Assert.Equal(secondStaff.Id, task.AssigneeId);
+    }
+
+    [Fact]
+    public async Task ReassignAsync_ForBlockedStaff_IsRejected()
+    {
+        var firstStaff = User.CreateStaff("First", "Staff", "staff-reassign-c@test.local", "+994501234506", "hash", "STAFFT7");
+        var blockedStaff = User.CreateStaff("Blocked", "Staff", "staff-reassign-d@test.local", "+994501234507", "hash", "STAFFT8");
+        blockedStaff.Block("Suspended", null, Guid.NewGuid(), DateTime.UtcNow);
+        var fixture = CreateFixture(UserRole.Admin, firstStaff, null, blockedStaff);
+        var task = StaffTask.Create("Charge vehicle", "Move EV to charging station", firstStaff.Id, null, StaffTaskPriority.High, null, DateTime.UtcNow);
+        fixture.Tasks.Items.Add(task);
+
+        var result = await fixture.Service.ReassignAsync(task.Id, new ReassignStaffTaskRequest(blockedStaff.Id));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("StaffTask.AssigneeMustBeStaff", result.Errors.Single().Code);
+        Assert.Equal(firstStaff.Id, task.AssigneeId);
+    }
+
+    private static Fixture CreateFixture(UserRole currentRole, User staff, Guid? currentUserId = null, params User[] additionalUsers)
     {
         var tasks = new TaskRepo();
-        var users = new UserRepo(staff);
+        var users = new UserRepo([staff, .. additionalUsers]);
         var service = new StaffTaskService(
             tasks,
+            new ChargingSessionRepo(),
             users,
             new CurrentUser(currentUserId ?? Guid.NewGuid(), currentRole),
             new UnitOfWork(),
@@ -118,16 +153,34 @@ public sealed class StaffTaskManagementTests
         }
     }
 
-    private sealed class UserRepo(User user) : IUserRepository
+    private sealed class ChargingSessionRepo : IChargingSessionRepository
+    {
+        public Task<IReadOnlyList<ChargingSession>> GetActiveAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ChargingSession>>([]);
+
+        public Task<ChargingSession?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ChargingSession?>(null);
+
+        public Task<ChargingSession?> GetActiveByVehicleIdAsync(Guid vehicleId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ChargingSession?>(null);
+
+        public Task<ChargingSession?> GetActiveByStaffTaskIdAsync(Guid staffTaskId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ChargingSession?>(null);
+
+        public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class UserRepo(IReadOnlyList<User> users) : IUserRepository
     {
         public Task<IReadOnlyList<User>> GetAllAsync(string? search = null, UserRole? role = null, bool? isActive = null, UserVerificationStatus? verificationStatus = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<User>>([user]);
+            Task.FromResult(users);
 
         public Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<User?>(id == user.Id ? user : null);
+            Task.FromResult(users.FirstOrDefault(user => user.Id == id));
 
         public Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default) =>
-            Task.FromResult<User?>(user.Email == email.Trim().ToLowerInvariant() ? user : null);
+            Task.FromResult(users.FirstOrDefault(user => user.Email == email.Trim().ToLowerInvariant()));
 
         public Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default) =>
             Task.FromResult<User?>(null);

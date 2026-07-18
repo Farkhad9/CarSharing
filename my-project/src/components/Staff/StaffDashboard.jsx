@@ -3,11 +3,15 @@ import { FiAlertTriangle, FiCamera, FiCheckCircle, FiClock, FiLogOut, FiRefreshC
 import { authApi } from "../../api/authApi";
 import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
+import { chargingApi } from "../../api/chargingApi";
 import { STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
 import { tripCompletionRequestsApi } from "../../api/tripCompletionRequestsApi";
 import { vehicleApi } from "../../api/vehicleApi";
+import { useConfirmDialog } from "../ui/useConfirmDialog";
 
 const SESSION_STORAGE_KEY = "electroStreetStaffSession";
+const MIN_CHARGING_COMPLETION_PERCENT = 80;
+const CHARGING_PERCENT_PER_MINUTE = 10;
 
 const statusLabels = {
   [STAFF_TASK_STATUSES.Done]: "Done",
@@ -109,6 +113,40 @@ const getRemainingMs = (task, now) => {
   return dueDate.getTime() - now;
 };
 
+const parseApiDateMs = (value) => {
+  if (!value) return Number.NaN;
+  const text = String(value);
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`;
+  return new Date(normalized).getTime();
+};
+
+const getChargingSessionProgress = (session, task, now) => {
+  if (!session) return null;
+  const startBattery = Number(session.startBatteryPercent || session.currentBatteryPercent || 0);
+  const targetBattery = Number(session.targetBatteryPercent || 100);
+  if (task?.status !== STAFF_TASK_STATUSES.InProgress) {
+    return {
+      currentBatteryPercent: startBattery,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - startBattery) / CHARGING_PERCENT_PER_MINUTE)),
+    };
+  }
+
+  const chargingStartedAtMs = parseApiDateMs(task.updatedAt);
+  const elapsedMinutes = Number.isFinite(chargingStartedAtMs)
+    ? Math.max(0, (now - chargingStartedAtMs) / 60000)
+    : 0;
+  const currentBatteryPercent = Math.min(
+    targetBattery,
+    Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE)
+  );
+  const minutesRemaining = Math.max(
+    0,
+    Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)
+  );
+
+  return { currentBatteryPercent, minutesRemaining };
+};
+
 const formatCountdown = (task, now) => {
   const remainingMs = getRemainingMs(task, now);
   if (!Number.isFinite(remainingMs)) return "No countdown";
@@ -123,6 +161,7 @@ const formatCountdown = (task, now) => {
 const StaffDashboard = () => {
   const [session, setSession] = useState(readSession);
   const [tasks, setTasks] = useState([]);
+  const [activeChargingSessions, setActiveChargingSessions] = useState([]);
   const [completionRequests, setCompletionRequests] = useState([]);
   const [completionReviewHistory, setCompletionReviewHistory] = useState([]);
   const [backendVehicles, setBackendVehicles] = useState([]);
@@ -135,6 +174,7 @@ const StaffDashboard = () => {
   const [rejectDraft, setRejectDraft] = useState({ requestId: null, reason: "Photos need to be retaken." });
   const [now, setNow] = useState(() => Date.now());
   const hasLoadedTasksRef = useRef(false);
+  const { confirm, dialog } = useConfirmDialog();
 
   const loadTasks = useCallback(async (options = {}) => {
     if (!session) return;
@@ -150,8 +190,13 @@ const StaffDashboard = () => {
         vehicleApi.getVehicles(),
         tripCompletionRequestsApi.getPending(),
       ]);
+      const nextChargingSessions = await chargingApi.getActiveSessions().catch(() => []);
       setTasks((current) => {
         const normalized = Array.isArray(nextTasks) ? nextTasks : [];
+        return areListsEqual(current, normalized) ? current : normalized;
+      });
+      setActiveChargingSessions((current) => {
+        const normalized = Array.isArray(nextChargingSessions) ? nextChargingSessions : [];
         return areListsEqual(current, normalized) ? current : normalized;
       });
       setBackendVehicles((current) => {
@@ -206,6 +251,11 @@ const StaffDashboard = () => {
 
     const connection = createOperationsConnection();
     const handleTaskChange = (task) => {
+      if (task.assigneeId && task.assigneeId !== session.id) {
+        setTasks((items) => items.filter((item) => item.id !== task.id));
+        return;
+      }
+
       setTasks((items) => upsertTask(items, task));
       hasLoadedTasksRef.current = true;
       setHasLoadedTasks(true);
@@ -298,6 +348,37 @@ const StaffDashboard = () => {
   const updateStatus = async (taskId, status) => {
     setActionError("");
     try {
+      const chargingSession = activeChargingSessions.find((session) => session.staffTaskId === taskId);
+      if (status === STAFF_TASK_STATUSES.Done && chargingSession) {
+        const task = tasks.find((item) => item.id === taskId);
+        const progress = getChargingSessionProgress(chargingSession, task, now);
+        if (!progress || progress.currentBatteryPercent < MIN_CHARGING_COMPLETION_PERCENT) {
+          setActionError(`Charging can be completed only from ${MIN_CHARGING_COMPLETION_PERCENT}%.`);
+          return;
+        }
+
+        if (progress.currentBatteryPercent < 100) {
+          const confirmed = await confirm({
+            title: `Finish charging at ${progress.currentBatteryPercent}%?`,
+            message: "The vehicle is not fully charged yet. You can finish now and keep the current battery level, or continue charging to 100%.",
+            confirmLabel: `Finish at ${progress.currentBatteryPercent}%`,
+            cancelLabel: "Keep charging",
+            tone: "warning",
+          });          if (!confirmed) return;
+        }
+
+        const details = await chargingApi.completeSession(chargingSession.id, {
+          finalBatteryPercent: progress.currentBatteryPercent,
+          notes: "Charging completed by staff.",
+        });
+        if (details?.staffTask) {
+          setTasks((items) => items.map((task) => (task.id === taskId ? details.staffTask : task)));
+        }
+        setActiveChargingSessions((items) => items.filter((session) => session.id !== chargingSession.id));
+        await loadTasks({ silent: true });
+        return;
+      }
+
       const updatedTask = await staffTasksApi.updateMyTaskStatus(taskId, status);
       setTasks((items) => items.map((task) => (task.id === taskId ? updatedTask : task)));
     } catch (error) {
@@ -573,6 +654,8 @@ const StaffDashboard = () => {
               visibleTasks.map((task) => {
                 const countdown = formatCountdown(task, now);
                 const overdue = countdown === "Overdue";
+                const chargingSession = activeChargingSessions.find((session) => session.staffTaskId === task.id);
+                const chargingProgress = getChargingSessionProgress(chargingSession, task, now);
 
                 return (
                   <article key={task.id} className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
@@ -596,24 +679,37 @@ const StaffDashboard = () => {
                           {task.vehicleId && (
                             <span className="rounded-lg bg-zinc-100 px-3 py-2">Vehicle: {getVehicleLabel(task.vehicleId)}</span>
                           )}
+                          {chargingProgress && (
+                            <span className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700">
+                              Charging: {chargingProgress.currentBatteryPercent}% - {chargingProgress.minutesRemaining > 0 ? `${chargingProgress.minutesRemaining} min to full` : "ready"}
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-3 lg:w-[360px]">
-                        {statusOptions.map((status) => (
-                          <button
-                            key={status}
-                            type="button"
-                            onClick={() => updateStatus(task.id, status)}
-                            className={`rounded-lg border px-3 py-3 text-xs font-black transition ${
-                              task.status === status
-                                ? statusStyles[status]
-                                : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50"
-                            }`}
-                          >
-                            {statusLabels[status]}
-                          </button>
-                        ))}
+                        {statusOptions.map((status) => {
+                          const doneBlocked = status === STAFF_TASK_STATUSES.Done &&
+                            chargingProgress &&
+                            chargingProgress.currentBatteryPercent < MIN_CHARGING_COMPLETION_PERCENT;
+
+                          return (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => updateStatus(task.id, status)}
+                              disabled={doneBlocked}
+                              title={doneBlocked ? `Charging can be completed from ${MIN_CHARGING_COMPLETION_PERCENT}%` : undefined}
+                              className={`rounded-lg border px-3 py-3 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                task.status === status
+                                  ? statusStyles[status]
+                                  : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50"
+                              }`}
+                            >
+                              {statusLabels[status]}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </article>
@@ -681,6 +777,7 @@ const StaffDashboard = () => {
           </div>
         </div>
       )}
+      {dialog}
     </main>
   );
 };

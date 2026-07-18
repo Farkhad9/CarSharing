@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { FiBatteryCharging, FiClock, FiMapPin, FiNavigation, FiRefreshCw, FiTool, FiZap } from "react-icons/fi";
 import { FaPlug } from "react-icons/fa";
-import { chargingStations } from "../../data/chargingStations";
+import { chargingApi } from "../../api/chargingApi";
 import { CHARGING_STATION_STATUSES } from "../../data/statuses";
 
 const BAKU_CENTER = [40.3777, 49.8499];
@@ -31,6 +31,13 @@ const statusMeta = {
     text: "text-slate-700",
     border: "border-slate-200",
   },
+  [CHARGING_STATION_STATUSES.OFFLINE]: {
+    label: "Offline",
+    color: "#71717a",
+    bg: "bg-zinc-100",
+    text: "text-zinc-700",
+    border: "border-zinc-200",
+  },
 };
 
 const filterOptions = [
@@ -38,6 +45,7 @@ const filterOptions = [
   { id: CHARGING_STATION_STATUSES.ONLINE, label: "Available" },
   { id: CHARGING_STATION_STATUSES.BUSY, label: "Busy" },
   { id: CHARGING_STATION_STATUSES.MAINTENANCE, label: "Service" },
+  { id: CHARGING_STATION_STATUSES.OFFLINE, label: "Offline" },
 ];
 
 const createStationIcon = (station) => {
@@ -60,40 +68,72 @@ const createStationIcon = (station) => {
 };
 
 const getWaitTime = (station) => {
-  if (station.status === CHARGING_STATION_STATUSES.MAINTENANCE) return "Closed";
+  if (
+    station.status === CHARGING_STATION_STATUSES.MAINTENANCE ||
+    station.status === CHARGING_STATION_STATUSES.OFFLINE
+  ) return "Closed";
   if (station.availablePorts > 0) return "0 min";
   return "12 min";
 };
 
 const ChargingPage = () => {
+  const [stations, setStations] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [connectorFilter, setConnectorFilter] = useState("all");
 
+  const loadStations = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoading(true);
+    setError("");
+
+    try {
+      const nextStations = await chargingApi.getStations();
+      setStations(nextStations);
+    } catch (nextError) {
+      setStations([]);
+      setError(nextError.message || "Charging stations are unavailable. Please check the backend.");
+    } finally {
+      if (!silent) setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(loadStations, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadStations]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => loadStations({ silent: true }), 10000);
+    return () => window.clearInterval(timer);
+  }, [loadStations]);
+
   const connectors = useMemo(
-    () => ["all", ...new Set(chargingStations.flatMap((station) => station.connectorTypes))],
-    []
+    () => ["all", ...new Set(stations.flatMap((station) => station.connectorTypes))],
+    [stations]
   );
 
   const filteredStations = useMemo(() => {
-    return chargingStations.filter((station) => {
+    return stations.filter((station) => {
       const matchesStatus = activeFilter === "all" || station.status === activeFilter;
       const matchesConnector = connectorFilter === "all" || station.connectorTypes.includes(connectorFilter);
       return matchesStatus && matchesConnector;
     });
-  }, [activeFilter, connectorFilter]);
+  }, [activeFilter, connectorFilter, stations]);
 
   const stats = useMemo(() => {
-    const onlineStations = chargingStations.filter((station) => station.status === CHARGING_STATION_STATUSES.ONLINE);
-    const totalPorts = chargingStations.reduce((sum, station) => sum + station.totalPorts, 0);
-    const availablePorts = chargingStations.reduce((sum, station) => sum + station.availablePorts, 0);
-    const maxPower = Math.max(...chargingStations.map((station) => station.powerKw));
+    const onlineStations = stations.filter((station) => station.status === CHARGING_STATION_STATUSES.ONLINE);
+    const totalPorts = stations.reduce((sum, station) => sum + station.totalPorts, 0);
+    const availablePorts = stations.reduce((sum, station) => sum + station.availablePorts, 0);
+    const maxPower = stations.length ? Math.max(...stations.map((station) => station.powerKw)) : 0;
 
     return [
       { label: "Online hubs", value: onlineStations.length, icon: FiBatteryCharging },
-      { label: "Free ports", value: `${availablePorts}/${totalPorts}`, icon: FaPlug },
+      { label: "Free ports", value: `${availablePorts} / ${totalPorts}`, icon: FaPlug },
       { label: "Peak power", value: `${maxPower} kW`, icon: FiZap },
     ];
-  }, []);
+  }, [stations]);
 
   return (
     <main className="min-h-screen bg-[#f6f7f9] text-zinc-950">
@@ -174,37 +214,58 @@ const ChargingPage = () => {
           </div>
 
           <div className="min-h-[420px] overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 shadow-xl shadow-zinc-950/5 lg:min-h-[520px]">
-            <MapContainer center={BAKU_CENTER} zoom={13} scrollWheelZoom={false} className="h-[420px] w-full lg:h-[520px]">
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-              />
+            {isLoading || error ? (
+              <div className="grid h-[420px] place-items-center p-6 text-center lg:h-[520px]">
+                <div>
+                  <p className="text-lg font-black text-zinc-950">
+                    {isLoading ? "Loading charging stations..." : "Charging stations are unavailable"}
+                  </p>
+                  {error && <p className="mt-3 max-w-md text-sm font-bold leading-6 text-red-600">{error}</p>}
+                  {error && (
+                    <button
+                      type="button"
+                      onClick={loadStations}
+                      className="mt-5 inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 py-3 text-sm font-black text-white transition hover:bg-red-500"
+                    >
+                      <FiRefreshCw />
+                      Retry
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <MapContainer center={BAKU_CENTER} zoom={13} scrollWheelZoom={false} className="h-[420px] w-full lg:h-[520px]">
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                  url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                />
 
-              {filteredStations.map((station) => {
-                const meta = statusMeta[station.status] || statusMeta[CHARGING_STATION_STATUSES.MAINTENANCE];
+                {filteredStations.map((station) => {
+                  const meta = statusMeta[station.status] || statusMeta[CHARGING_STATION_STATUSES.MAINTENANCE];
 
-                return (
-                  <Marker
-                    key={station.id}
-                    position={[station.location.lat, station.location.lng]}
-                    icon={createStationIcon(station)}
-                  >
-                    <Popup>
-                      <div className="min-w-[210px]">
-                        <p className="text-sm font-black text-zinc-950">{station.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-zinc-500">{station.location.label}</p>
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                          <span className="rounded-full px-2.5 py-1 text-xs font-black text-white" style={{ backgroundColor: meta.color }}>
-                            {meta.label}
-                          </span>
-                          <span className="text-xs font-bold text-zinc-700">{station.powerKw} kW</span>
+                  return (
+                    <Marker
+                      key={station.id}
+                      position={[station.location.lat, station.location.lng]}
+                      icon={createStationIcon(station)}
+                    >
+                      <Popup>
+                        <div className="min-w-[210px]">
+                          <p className="text-sm font-black text-zinc-950">{station.name}</p>
+                          <p className="mt-1 text-xs font-semibold text-zinc-500">{station.location.label}</p>
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <span className="rounded-full px-2.5 py-1 text-xs font-black text-white" style={{ backgroundColor: meta.color }}>
+                              {meta.label}
+                            </span>
+                            <span className="text-xs font-bold text-zinc-700">{station.powerKw} kW</span>
+                          </div>
                         </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                );
-              })}
-            </MapContainer>
+                      </Popup>
+                    </Marker>
+                  );
+                })}
+              </MapContainer>
+            )}
           </div>
         </div>
       </section>
@@ -243,6 +304,13 @@ const ChargingPage = () => {
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {!isLoading && !error && !filteredStations.length && (
+            <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center xl:col-span-3">
+              <p className="text-lg font-black text-zinc-950">No charging stations yet.</p>
+              <p className="mt-2 text-sm font-semibold text-zinc-500">Stations created in admin will appear here.</p>
+            </div>
+          )}
+
           {filteredStations.map((station) => {
             const meta = statusMeta[station.status] || statusMeta[CHARGING_STATION_STATUSES.MAINTENANCE];
 
@@ -264,8 +332,8 @@ const ChargingPage = () => {
                 <div className="mt-5 grid grid-cols-3 gap-3">
                   <div className="rounded-lg bg-zinc-50 p-3">
                     <FaPlug className="text-lg text-zinc-400" />
-                    <p className="mt-3 text-lg font-black">{station.availablePorts}/{station.totalPorts}</p>
-                    <p className="text-xs font-bold text-zinc-500">Ports</p>
+                    <p className="mt-3 text-lg font-black">{station.availablePorts} / {station.totalPorts}</p>
+                    <p className="text-xs font-bold text-zinc-500">Free ports</p>
                   </div>
                   <div className="rounded-lg bg-zinc-50 p-3">
                     <FiZap className="text-lg text-zinc-400" />
@@ -301,14 +369,6 @@ const ChargingPage = () => {
                     <FiNavigation />
                     Route
                   </a>
-                  <button
-                    type="button"
-                    className="inline-flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition hover:border-red-200 hover:text-red-500"
-                    aria-label={`Refresh ${station.name} status`}
-                    title="Refresh status"
-                  >
-                    <FiRefreshCw />
-                  </button>
                 </div>
               </article>
             );

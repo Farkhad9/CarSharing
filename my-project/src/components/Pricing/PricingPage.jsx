@@ -40,14 +40,19 @@ const serviceNotes = [
 ];
 
 const formatMoney = (value) => `${Number(value || 0).toFixed(2)} AZN`;
+const LOW_CHARGE_RESERVATION_LIMIT = 30;
 
 const PricingPage = ({ user, onVehicleSelect }) => {
   const { vehicles, isLoading, error } = useVehicles();
   const bookableVehicles = useMemo(
-    () => vehicles.filter((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE),
+    () =>
+      vehicles.filter((vehicle) =>
+        vehicle.status === VEHICLE_STATUSES.AVAILABLE &&
+        Number(vehicle.batteryPercent) > LOW_CHARGE_RESERVATION_LIMIT
+      ),
     [vehicles]
   );
-  const selectableVehicles = bookableVehicles.length ? bookableVehicles : vehicles;
+  const selectableVehicles = bookableVehicles;
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [minutes, setMinutes] = useState(25);
   const [comfortMode, setComfortMode] = useState(false);

@@ -3,16 +3,21 @@ using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Domain.Entities;
+using CarSharing.Domain.Enums;
 using FluentValidation;
 
 namespace CarSharing.Application.Vehicles.Services;
 
 public class VehicleService : IVehicleService
 {
+    private const int ChargingPercentPerMinute = 10;
     private static readonly Error NotFound = new("Vehicle.NotFound", "Vehicle was not found.");
     private static readonly Error PlateNumberNotUnique = new("Vehicle.PlateNumberNotUnique", "Vehicle with this plate number already exists.");
+    private static readonly Error CannotChargeInUseVehicle = new("Vehicle.CannotChargeInUse", "Vehicle cannot be sent to charging while it is in use or reserved.");
 
     private readonly IVehicleRepository _vehicleRepository;
+    private readonly IChargingSessionRepository _chargingSessionRepository;
+    private readonly IStaffTaskRepository _staffTaskRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IMapper _mapper;
     private readonly IValidator<CreateVehicleRequest> _createVehicleValidator;
@@ -21,6 +26,8 @@ public class VehicleService : IVehicleService
 
     public VehicleService(
         IVehicleRepository vehicleRepository,
+        IChargingSessionRepository chargingSessionRepository,
+        IStaffTaskRepository staffTaskRepository,
         IUnitOfWork unitOfWork,
         IMapper mapper,
         IValidator<CreateVehicleRequest> createVehicleValidator,
@@ -28,6 +35,8 @@ public class VehicleService : IVehicleService
         IValidator<UpdateVehicleStatusRequest> updateVehicleStatusValidator)
     {
         _vehicleRepository = vehicleRepository;
+        _chargingSessionRepository = chargingSessionRepository;
+        _staffTaskRepository = staffTaskRepository;
         _unitOfWork = unitOfWork;
         _mapper = mapper;
         _createVehicleValidator = createVehicleValidator;
@@ -38,7 +47,23 @@ public class VehicleService : IVehicleService
     public async Task<Result<IReadOnlyList<VehicleDto>>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         var vehicles = await _vehicleRepository.GetAllAsync(cancellationToken);
-        return Result<IReadOnlyList<VehicleDto>>.Success(_mapper.Map<IReadOnlyList<VehicleDto>>(vehicles));
+        var activeSessions = await _chargingSessionRepository.GetActiveAsync(cancellationToken);
+        var activeSessionsByVehicleId = new Dictionary<Guid, (ChargingSession Session, StaffTask? Task)>();
+        foreach (var session in activeSessions)
+        {
+            activeSessionsByVehicleId[session.VehicleId] = (
+                session,
+                await _staffTaskRepository.GetByIdAsync(session.StaffTaskId, cancellationToken));
+        }
+
+        var vehicleDtos = vehicles
+            .Select(vehicle => MapVehicleWithChargingProgress(
+                vehicle,
+                activeSessionsByVehicleId.GetValueOrDefault(vehicle.Id).Session,
+                activeSessionsByVehicleId.GetValueOrDefault(vehicle.Id).Task))
+            .ToList();
+
+        return Result<IReadOnlyList<VehicleDto>>.Success(vehicleDtos);
     }
 
     public async Task<Result<VehicleDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -49,7 +74,11 @@ public class VehicleService : IVehicleService
             return Result<VehicleDto>.Failure(NotFound);
         }
 
-        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+        var activeSession = await _chargingSessionRepository.GetActiveByVehicleIdAsync(id, cancellationToken);
+        var activeTask = activeSession is null
+            ? null
+            : await _staffTaskRepository.GetByIdAsync(activeSession.StaffTaskId, cancellationToken);
+        return Result<VehicleDto>.Success(MapVehicleWithChargingProgress(vehicle, activeSession, activeTask));
     }
 
     public async Task<Result<VehicleDto>> CreateAsync(CreateVehicleRequest request, CancellationToken cancellationToken = default)
@@ -171,6 +200,11 @@ public class VehicleService : IVehicleService
             return Result<VehicleDto>.Failure(NotFound);
         }
 
+        if (request.Status == VehicleStatus.Charging && vehicle.Status is VehicleStatus.InUse or VehicleStatus.Reserved)
+        {
+            return Result<VehicleDto>.Failure(CannotChargeInUseVehicle);
+        }
+
         vehicle.ChangeStatus(request.Status);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -181,6 +215,27 @@ public class VehicleService : IVehicleService
     private static string NormalizePlateNumber(string plateNumber)
     {
         return plateNumber.Trim().ToUpperInvariant();
+    }
+
+    private VehicleDto MapVehicleWithChargingProgress(Vehicle vehicle, ChargingSession? activeSession, StaffTask? activeTask)
+    {
+        var dto = _mapper.Map<VehicleDto>(vehicle);
+        if (activeSession is null)
+        {
+            return dto;
+        }
+
+        if (activeTask?.Status != StaffTaskStatus.InProgress)
+        {
+            dto.BatteryPercent = activeSession.StartBatteryPercent;
+            return dto;
+        }
+
+        var elapsedMinutes = Math.Max(0, (DateTime.UtcNow - activeTask.UpdatedAt).TotalMinutes);
+        dto.BatteryPercent = Math.Min(
+            activeSession.TargetBatteryPercent,
+            (int)Math.Round(activeSession.StartBatteryPercent + elapsedMinutes * ChargingPercentPerMinute));
+        return dto;
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)

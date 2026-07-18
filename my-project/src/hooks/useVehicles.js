@@ -9,8 +9,9 @@ export const useVehicles = () => {
   useEffect(() => {
     let isMounted = true;
 
-    const loadVehicles = async () => {
-      setIsLoading(true);
+    const loadVehicles = async (options = {}) => {
+      const silent = options.silent === true;
+      if (!silent) setIsLoading(true);
       setError("");
 
       try {
@@ -25,15 +26,17 @@ export const useVehicles = () => {
         }
       } finally {
         if (isMounted) {
-          setIsLoading(false);
+          if (!silent) setIsLoading(false);
         }
       }
     };
 
     loadVehicles();
+    const interval = window.setInterval(() => loadVehicles({ silent: true }), 5000);
 
     return () => {
       isMounted = false;
+      window.clearInterval(interval);
     };
   }, []);
 

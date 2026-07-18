@@ -47,4 +47,10 @@ public class StaffTask : BaseEntity
         Status = status;
         UpdatedAt = updatedAt;
     }
+
+    public void Reassign(Guid assigneeId, DateTime updatedAt)
+    {
+        AssigneeId = assigneeId;
+        UpdatedAt = updatedAt;
+    }
 }

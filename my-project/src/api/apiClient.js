@@ -2,6 +2,59 @@ export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5019";
 
 export const getAccessToken = () => localStorage.getItem("electroStreetAccessToken");
 
+let refreshTokenPromise = null;
+
+const normalizeRoleKey = (role) => {
+  if (role === 4 || role === "SuperAdmin" || role === "super-admin") return "super-admin";
+  if (role === 3 || role === "Admin" || role === "admin") return "admin";
+  if (role === 2 || role === "Staff" || role === "staff") return "staff";
+  return "rider";
+};
+
+const persistRefreshedSession = (response) => {
+  if (!response?.accessToken || !response?.user) return null;
+
+  const user = {
+    ...response.user,
+    roleKey: normalizeRoleKey(response.user.role),
+    name: `${response.user.firstName || ""} ${response.user.lastName || ""}`.trim(),
+    avatarInitial: response.user.firstName?.charAt(0)?.toUpperCase() || "U",
+  };
+
+  localStorage.setItem("electroStreetAccessToken", response.accessToken);
+  localStorage.setItem("electroStreetUser", JSON.stringify(user));
+  window.dispatchEvent(new CustomEvent("electrostreet:session-refreshed", { detail: user }));
+  return user;
+};
+
+const refreshAccessToken = async () => {
+  if (!refreshTokenPromise) {
+    refreshTokenPromise = fetch(`${API_URL}/api/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    })
+      .then(async (response) => {
+        const responseText = await response.text();
+        const data = parseJson(responseText);
+        if (!response.ok) {
+          const error = new Error(data?.errors?.[0]?.message || "Session refresh failed.");
+          error.code = data?.errors?.[0]?.code;
+          error.errors = data?.errors || [];
+          error.status = response.status;
+          throw error;
+        }
+
+        persistRefreshedSession(data);
+        return data;
+      })
+      .finally(() => {
+        refreshTokenPromise = null;
+      });
+  }
+
+  return refreshTokenPromise;
+};
+
 const getAuthHeaders = () => {
   const token = getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -53,6 +106,22 @@ export const apiRequest = async (path, options = {}) => {
   const responseText = await response.text();
   const data = parseJson(responseText);
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      options.skipAuthRefresh !== true &&
+      !path.startsWith("/api/auth/login") &&
+      !path.startsWith("/api/auth/logout") &&
+      !path.startsWith("/api/auth/refresh")
+    ) {
+      try {
+        await refreshAccessToken();
+        return apiRequest(path, { ...options, skipAuthRefresh: true });
+      } catch {
+        localStorage.removeItem("electroStreetAccessToken");
+        localStorage.removeItem("electroStreetUser");
+      }
+    }
+
     const messages = Array.isArray(data?.errors)
       ? data.errors.map((item) => item.message).filter(Boolean)
       : [];

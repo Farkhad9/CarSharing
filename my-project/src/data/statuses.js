@@ -51,4 +51,5 @@ export const CHARGING_STATION_STATUSES = Object.freeze({
   ONLINE: "online",
   BUSY: "busy",
   MAINTENANCE: "maintenance",
+  OFFLINE: "offline",
 });

@@ -9,6 +9,7 @@ import { vehicleApi } from "../../api/vehicleApi";
 
 const USER_LOCATION = [40.3772, 49.8475];
 const WALKING_SPEED_METERS_PER_MINUTE = 80;
+const LOW_CHARGE_RESERVATION_LIMIT = 30;
 
 const toRadians = (degrees) => degrees * (Math.PI / 180);
 
@@ -39,15 +40,6 @@ const FILTERS = [
   { label: "Available", value: VEHICLE_STATUSES.AVAILABLE },
   { label: "Charging", value: VEHICLE_STATUSES.CHARGING },
   { label: "Reserved", value: VEHICLE_STATUSES.RESERVED },
-];
-
-const BRAND_FILTERS = [
-  { label: "All Cars", value: "all" },
-  { label: "Tesla", value: "Tesla" },
-  { label: "Porsche", value: "Porsche" },
-  { label: "Hyundai", value: "Hyundai" },
-  { label: "BYD", value: "BYD" },
-  { label: "Mercedes-Benz", value: "Mercedes-Benz" },
 ];
 
 const STATUS_STYLES = {
@@ -85,6 +77,23 @@ const STATUS_STYLES = {
   },
 };
 
+const LOW_CHARGE_STATUS = {
+  label: "Needs Charging",
+  badge: "bg-amber-50 text-amber-700 border-amber-200",
+  bar: "bg-amber-500",
+  button: "bg-gray-200 text-gray-400 cursor-not-allowed",
+  buttonText: "Needs Charging",
+  disabled: true,
+};
+
+const getDisplayStatus = (vehicle) => {
+  if (vehicle.status === VEHICLE_STATUSES.AVAILABLE && Number(vehicle.batteryPercent) <= LOW_CHARGE_RESERVATION_LIMIT) {
+    return "needs_charging";
+  }
+
+  return vehicle.status;
+};
+
 const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const [activeFilter, setActiveFilter] = useState("all");
   const [activeBrandFilter, setActiveBrandFilter] = useState("all");
@@ -97,8 +106,9 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   useEffect(() => {
     let isMounted = true;
 
-    const loadVehicles = async () => {
-      setIsLoadingVehicles(true);
+    const loadVehicles = async (options = {}) => {
+      const silent = options.silent === true;
+      if (!silent) setIsLoadingVehicles(true);
       setVehicleError("");
       try {
         const items = await vehicleApi.getVehicles();
@@ -111,16 +121,28 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         }
       } finally {
         if (isMounted) {
-          setIsLoadingVehicles(false);
+          if (!silent) setIsLoadingVehicles(false);
         }
       }
     };
 
     loadVehicles();
+    const interval = window.setInterval(() => loadVehicles({ silent: true }), 5000);
     return () => {
       isMounted = false;
+      window.clearInterval(interval);
     };
   }, [reservationsRevision]);
+
+  const brandFilters = useMemo(
+    () => [
+      { label: "All Cars", value: "all" },
+      ...[...new Set(backendVehicles.map((vehicle) => vehicle.brand).filter(Boolean))]
+        .sort((first, second) => first.localeCompare(second))
+        .map((brand) => ({ label: brand, value: brand })),
+    ],
+    [backendVehicles]
+  );
 
   useEffect(() => {
     const refreshReservations = (event) => {
@@ -168,6 +190,9 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
 
   const filteredAndSortedVehicles = useMemo(() => {
     void reservationsRevision;
+    const effectiveBrandFilter = brandFilters.some((filter) => filter.value === activeBrandFilter)
+      ? activeBrandFilter
+      : "all";
 
     return backendVehicles
       .map((vehicle) => {
@@ -180,12 +205,13 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         };
       })
       .filter((vehicle) => {
-        const matchesStatus = activeFilter === "all" || vehicle.status === activeFilter;
-        const matchesBrand = activeBrandFilter === "all" || vehicle.brand === activeBrandFilter;
+        const displayStatus = getDisplayStatus(vehicle);
+        const matchesStatus = activeFilter === "all" || displayStatus === activeFilter;
+        const matchesBrand = effectiveBrandFilter === "all" || vehicle.brand === effectiveBrandFilter;
         return matchesStatus && matchesBrand;
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [activeFilter, activeBrandFilter, backendVehicles, reservationsRevision]);
+  }, [activeFilter, activeBrandFilter, backendVehicles, brandFilters, reservationsRevision]);
 
   return (
     <section id="fleet" className="scroll-mt-24 bg-white py-16 md:py-24 border-b border-gray-100">
@@ -226,7 +252,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
           <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-2 whitespace-nowrap flex items-center gap-1">
             <FiSliders /> Filter by Brand:
           </span>
-          {BRAND_FILTERS.map((brand) => (
+          {brandFilters.map((brand) => (
             <button
               key={brand.value}
               type="button"
@@ -255,7 +281,9 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
               Loading EVs...
             </div>
           ) : filteredAndSortedVehicles.length ? filteredAndSortedVehicles.map((vehicle) => {
-            const status = STATUS_STYLES[vehicle.status] || STATUS_STYLES[VEHICLE_STATUSES.AVAILABLE];
+            const status = getDisplayStatus(vehicle) === "needs_charging"
+              ? LOW_CHARGE_STATUS
+              : STATUS_STYLES[vehicle.status] || STATUS_STYLES[VEHICLE_STATUSES.AVAILABLE];
 
             return (
               <article
