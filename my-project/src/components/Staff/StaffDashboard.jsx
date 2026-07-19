@@ -12,6 +12,8 @@ import { useConfirmDialog } from "../ui/useConfirmDialog";
 const SESSION_STORAGE_KEY = "electroStreetStaffSession";
 const MIN_CHARGING_COMPLETION_PERCENT = 80;
 const CHARGING_PERCENT_PER_MINUTE = 10;
+const BAKU_TIME_ZONE = "Asia/Baku";
+const BAKU_UTC_OFFSET = "+04:00";
 
 const statusLabels = {
   [STAFF_TASK_STATUSES.Done]: "Done",
@@ -80,7 +82,7 @@ const resolveFileUrl = (fileUrl) => {
   return `${API_URL}${fileUrl.startsWith("/") ? "" : "/"}${fileUrl}`;
 };
 
-const parseLocalDate = (value) => {
+const parseApiDate = (value) => {
   if (!value) return null;
   const text = String(value);
   const hasTimeZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
@@ -88,11 +90,31 @@ const parseLocalDate = (value) => {
 };
 
 const formatDate = (value) => {
-  const date = parseLocalDate(value);
+  const date = parseApiDate(value);
   if (!date || Number.isNaN(date.getTime())) return "No deadline";
 
   return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Baku",
+    timeZone: BAKU_TIME_ZONE,
+    dateStyle: "medium",
+    timeStyle: "short",
+    hour12: false,
+  }).format(date);
+};
+
+const parseBakuDeadlineDate = (value) => {
+  if (!value) return null;
+  const text = String(value);
+  const hasTimeZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const normalized = hasTimeZone ? text : `${text}${text.includes("T") ? "" : "T00:00:00"}${BAKU_UTC_OFFSET}`;
+  return new Date(normalized);
+};
+
+const formatBakuDeadline = (value) => {
+  const date = parseBakuDeadlineDate(value);
+  if (!date || Number.isNaN(date.getTime())) return "No deadline";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: BAKU_TIME_ZONE,
     dateStyle: "medium",
     timeStyle: "short",
     hour12: false,
@@ -112,7 +134,7 @@ const toCompletionTask = (request, vehicleLabel) => ({
 });
 
 const getRemainingMs = (task, now) => {
-  const dueDate = parseLocalDate(task.dueAt);
+  const dueDate = parseBakuDeadlineDate(task.dueAt);
   if (!dueDate || Number.isNaN(dueDate.getTime())) return Number.POSITIVE_INFINITY;
   if (task.status === STAFF_TASK_STATUSES.Done) return Number.POSITIVE_INFINITY;
   return dueDate.getTime() - now;
@@ -662,7 +684,7 @@ const StaffDashboard = () => {
                           <span className={`rounded-lg px-3 py-2 ${overdue ? "bg-red-100 text-red-700" : "bg-zinc-100"}`}>
                             {countdown}
                           </span>
-                          <span className="rounded-lg bg-zinc-100 px-3 py-2">Due: {formatDate(task.dueAt)}</span>
+                          <span className="rounded-lg bg-zinc-100 px-3 py-2">Due: {formatBakuDeadline(task.dueAt)}</span>
                           {task.vehicleId && (
                             <span className="rounded-lg bg-zinc-100 px-3 py-2">Vehicle: {getVehicleLabel(task.vehicleId)}</span>
                           )}

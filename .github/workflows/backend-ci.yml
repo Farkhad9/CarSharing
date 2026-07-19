@@ -1,19 +1,16 @@
-name: Backend CI/CD
+name: Backend CI Checks
 
 on:
   workflow_dispatch:
 
   push:
     branches:
-      - main
-      - "feat/**"
+      - "**"
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
 
   pull_request:
-    branches:
-      - main
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
@@ -27,8 +24,9 @@ concurrency:
 
 jobs:
   build-backend:
-    name: Build backend
+    name: Build, test, and validate backend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -46,10 +44,13 @@ jobs:
       - name: Restore tests
         run: dotnet restore backend/CarSharing.Application.Tests/CarSharing.Application.Tests.csproj
 
-      - name: Build
+      - name: Build web API
         run: dotnet build backend/CarSharing.WebApi/CarSharing.WebApi.csproj --configuration Release --no-restore
 
-      - name: Test Trip Engine
+      - name: Build tests
+        run: dotnet build backend/CarSharing.Application.Tests/CarSharing.Application.Tests.csproj --configuration Release --no-restore
+
+      - name: Run application tests
         run: dotnet test backend/CarSharing.Application.Tests/CarSharing.Application.Tests.csproj --configuration Release --no-restore
 
       - name: Install EF Core tools

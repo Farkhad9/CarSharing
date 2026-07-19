@@ -133,12 +133,6 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
             <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-zinc-500">
               {verificationNotice || `We sent a verification email to ${email}. Booking and payments stay locked until email is confirmed.`}
             </p>
-            <h1 className="hidden">
-              Проверьте почту
-            </h1>
-            <p className="hidden">
-              Мы отправили письмо на {email}. До подтверждения email бронирование и платежные функции будут ограничены.
-            </p>
             <div className="hidden">
               <p className="text-xs font-black uppercase tracking-wide text-red-500">
                 Demo email link
@@ -156,14 +150,13 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 className="hidden"
               >
                 <span className="text-white">Confirm email</span>
-                Подтвердить email
               </a>
               <button
                 type="button"
                 onClick={goHome}
                 className="rounded-lg border border-zinc-200 px-6 py-3 text-sm font-black text-zinc-700 transition hover:border-red-200 hover:text-red-600"
               >
-                Вернуться на сайт
+                Back to site
               </button>
             </div>
           </div>

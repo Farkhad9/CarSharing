@@ -117,6 +117,28 @@ public sealed class ChargingSystemTests
     }
 
     [Fact]
+    public async Task DeleteStationAsync_RemovesStationWithCompletedSessionHistory()
+    {
+        var fixture = CreateFixture();
+        var session = ChargingSession.Start(
+            fixture.Vehicle,
+            fixture.Station,
+            fixture.StaffId,
+            fixture.AdminId,
+            Guid.NewGuid(),
+            100,
+            DateTime.UtcNow.AddHours(-1));
+        session.Complete(fixture.AdminId, 100, null, DateTime.UtcNow);
+        fixture.Sessions.Items.Add(session);
+
+        var result = await fixture.Service.DeleteStationAsync(fixture.Station.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(fixture.Stations.Removed);
+        Assert.Empty(fixture.Sessions.Items);
+    }
+
+    [Fact]
     public async Task CreateStationAsync_ReturnsExistingStationForDuplicateSubmit()
     {
         var fixture = CreateFixture();
@@ -270,6 +292,12 @@ public sealed class ChargingSystemTests
         public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default)
         {
             Items.Add(session);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default)
+        {
+            Items.RemoveAll(session => session.ChargingStationId == stationId);
             return Task.CompletedTask;
         }
     }

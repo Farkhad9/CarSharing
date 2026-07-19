@@ -72,10 +72,24 @@ public sealed class PaymentEngineTests
         Assert.Single(fixture.Invoices.Items);
     }
 
+    [Fact]
+    public async Task TopUp_WhenVerificationWasReset_IsRejected()
+    {
+        var fixture = CreateFixture(balance: 0, battery: 80);
+        fixture.User.ResetVerificationToPending();
+
+        var result = await fixture.Service.CreateTopUpCheckoutAsync(new TopUpBalanceRequest(25));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("Payment.VerificationRequired", result.Errors.Single().Code);
+        Assert.Empty(fixture.Payments.Items);
+    }
+
     private static Fixture CreateFixture(decimal balance, int battery)
     {
         var user = User.CreateRider("Test", "Rider", "rider@test.local", "+994501234567", "hash", "ABC12345");
         user.VerifyEmail();
+        user.ApproveVerification();
         if (balance > 0) user.CreditBalance(balance);
         var vehicle = Vehicle.Create("Tesla", "Model 3", 2025, "99AA999", 1000, battery, 300,
             1m, "AZN", 5, "White", "CCS", null, "Baku", "Center", 40.4, 49.8);

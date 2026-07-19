@@ -161,6 +161,7 @@ public sealed class AdminUserManagementTests
         var users = new UserRepo(seedUsers);
         var service = new AdminUserService(
             users,
+            new StaffKpiEventRepo(),
             new CurrentUser(currentRole, currentUserId),
             new UnitOfWork(),
             new PasswordHasher(),
@@ -182,6 +183,29 @@ public sealed class AdminUserManagementTests
             "+994501234567",
             "Staff123!",
             "STAFF123");
+    }
+
+    private sealed class StaffKpiEventRepo : IStaffKpiEventRepository
+    {
+        public List<StaffKpiEvent> Items { get; } = [];
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(Items);
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetByStaffIdsAsync(
+            IReadOnlyCollection<Guid> staffUserIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(
+                Items.Where(kpiEvent => staffUserIds.Contains(kpiEvent.StaffUserId)).ToList());
+
+        public Task<bool> ExistsAsync(Guid staffUserId, Guid sourceId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.Any(kpiEvent => kpiEvent.StaffUserId == staffUserId && kpiEvent.SourceId == sourceId));
+
+        public Task AddAsync(StaffKpiEvent kpiEvent, CancellationToken cancellationToken = default)
+        {
+            Items.Add(kpiEvent);
+            return Task.CompletedTask;
+        }
     }
 
     private static CreateAdminUserRequest CreateAdminRequest(UserRole role)

@@ -50,4 +50,13 @@ public sealed class ChargingSessionRepository : IChargingSessionRepository
     {
         await _dbContext.ChargingSessions.AddAsync(session, cancellationToken);
     }
+
+    public async Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default)
+    {
+        var sessions = await _dbContext.ChargingSessions
+            .Where(session => session.ChargingStationId == stationId)
+            .ToListAsync(cancellationToken);
+
+        _dbContext.ChargingSessions.RemoveRange(sessions);
+    }
 }

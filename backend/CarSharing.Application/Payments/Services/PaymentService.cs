@@ -18,6 +18,7 @@ public sealed class PaymentService : IPaymentService
     private static readonly Error TripNotAwaitingPayment = new("Payment.TripNotAwaitingPayment", "Trip must be awaiting payment.");
     private static readonly Error AlreadyPaid = new("Payment.AlreadyPaid", "Trip has already been paid.");
     private static readonly Error EmailNotVerified = new("Payment.EmailNotVerified", "Please confirm your email before topping up your balance.");
+    private static readonly Error VerificationRequired = new("Payment.VerificationRequired", "Please complete identity verification before topping up your balance.");
 
     private readonly IUserRepository _userRepository;
     private readonly ITripRepository _tripRepository;
@@ -66,6 +67,10 @@ public sealed class PaymentService : IPaymentService
         var userResult = await GetCurrentUserAsync(cancellationToken);
         if (userResult.Error is not null) return Result<TopUpCheckoutDto>.Failure(userResult.Error);
         if (!userResult.User!.EmailVerified) return Result<TopUpCheckoutDto>.Failure(EmailNotVerified);
+        if (userResult.User.VerificationStatus is not UserVerificationStatus.Verified and not UserVerificationStatus.Internal)
+        {
+            return Result<TopUpCheckoutDto>.Failure(VerificationRequired);
+        }
 
         var now = DateTime.UtcNow;
         var transaction = PaymentTransaction.CreateTopUp(userResult.User.Id, request.Amount, "Stripe", now);

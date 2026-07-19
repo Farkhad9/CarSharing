@@ -56,6 +56,53 @@ public sealed record AdminTopVehicleDto(
     int CompletedTrips,
     decimal Revenue);
 
+public sealed record AdminStaffKpiSummaryDto(
+    DateTime GeneratedAt,
+    string TimeZone,
+    int ActiveStaff,
+    int TotalStaff,
+    int OrdersCompleted,
+    int AverageCompletionMinutes,
+    decimal AverageRating,
+    int WeeklyChangePercent,
+    IReadOnlyList<AdminStaffKpiRowDto> Staff);
+
+public sealed record AdminStaffKpiRowDto(
+    Guid Id,
+    string Name,
+    string Email,
+    string Role,
+    bool Active,
+    int OrdersCompleted,
+    int AverageCompletionMinutes,
+    decimal Rating,
+    int Complaints,
+    int Praises,
+    decimal ActiveShiftHours,
+    int WeeklyChangePercent,
+    int KycRating,
+    int ApplicationsProcessed,
+    int SupportTicketsClosed,
+    IReadOnlyList<AdminStaffKpiItemDto> CompletedTasks);
+
+public sealed record AdminStaffKpiItemDto(
+    Guid Id,
+    string Title,
+    string Result,
+    DateTime CompletedAt);
+
+public sealed record RecordStaffKpiEventRequest(
+    Guid StaffUserId,
+    StaffKpiEventType Type,
+    StaffTaskType TaskType,
+    Guid? SourceId,
+    string Title,
+    string Result,
+    DateTime OccurredAt,
+    DateTime? StartedAt,
+    DateTime? CompletedAt,
+    decimal? Rating);
+
 public sealed record AdminStatisticsSnapshot(
     DateTime GeneratedAt,
     int ActiveRides,

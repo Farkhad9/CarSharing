@@ -37,6 +37,7 @@ public sealed record StaffTaskDto(
     string Description,
     Guid AssigneeId,
     Guid? VehicleId,
+    StaffTaskType Type,
     StaffTaskPriority Priority,
     DateTime? DueAt,
     StaffTaskStatus Status,

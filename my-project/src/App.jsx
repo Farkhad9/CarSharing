@@ -128,7 +128,7 @@ const App = () => {
 
   useEffect(() => {
     const handleEmailGate = (event) => {
-      setEmailGateMessage(event.detail || "Подтвердите email, чтобы продолжить.");
+      setEmailGateMessage(event.detail || "Confirm your email to continue.");
     };
 
     window.addEventListener("electrostreet:email-gate", handleEmailGate);
@@ -201,7 +201,7 @@ const App = () => {
     }
 
     if (user && user.emailVerified === false) {
-      setEmailGateMessage("Подтвердите email, чтобы открыть бронирование автомобиля.");
+      setEmailGateMessage("Confirm your email to open car booking.");
       return;
     }
 
@@ -317,12 +317,6 @@ const App = () => {
     <div className="overflow-x-hidden">
       {renderBlockedNotice()}
       <Navbar user={user} onLogout={handleLogout} onVehicleSelect={handleOpenVehicle} />
-      {user?.emailVerified === false && (
-        <div className="fixed left-1/2 top-24 z-[95] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-2xl border border-amber-200 bg-white px-5 py-4 text-sm font-bold text-zinc-800 shadow-2xl shadow-amber-950/10">
-          <span className="text-amber-600">Email не подтверждён.</span>{" "}
-          Проверьте письмо и перейдите по ссылке, чтобы разблокировать бронирование и оплату.
-        </div>
-      )}
       {emailGateMessage && (
         <div className="fixed bottom-6 left-1/2 z-[130] flex w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 items-center justify-between gap-4 rounded-2xl bg-zinc-950 px-5 py-4 text-sm font-bold text-white shadow-2xl">
           <span>{emailGateMessage}</span>

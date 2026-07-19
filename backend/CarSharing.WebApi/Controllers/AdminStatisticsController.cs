@@ -1,3 +1,4 @@
+using CarSharing.Application.Admin.Dtos;
 using CarSharing.Application.Admin.Services;
 using CarSharing.Application.Common.Models;
 using CarSharing.WebApi.Auth;
@@ -22,6 +23,22 @@ public sealed class AdminStatisticsController : ControllerBase
     public async Task<IActionResult> GetLive(CancellationToken cancellationToken)
     {
         var result = await _statisticsService.GetLiveStatisticsAsync(cancellationToken);
+        return result.IsSuccess ? Ok(result.Value) : ToErrorResponse(result.Errors);
+    }
+
+    [HttpGet("staff-kpi")]
+    public async Task<IActionResult> GetStaffKpi(CancellationToken cancellationToken)
+    {
+        var result = await _statisticsService.GetStaffKpiAsync(cancellationToken);
+        return result.IsSuccess ? Ok(result.Value) : ToErrorResponse(result.Errors);
+    }
+
+    [HttpPost("staff-kpi/events")]
+    public async Task<IActionResult> RecordStaffKpiEvent(
+        RecordStaffKpiEventRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _statisticsService.RecordStaffKpiEventAsync(request, cancellationToken);
         return result.IsSuccess ? Ok(result.Value) : ToErrorResponse(result.Errors);
     }
 
