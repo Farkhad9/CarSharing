@@ -26,5 +26,9 @@ public sealed class CreateStaffTaskRequestValidator : AbstractValidator<CreateSt
         RuleFor(x => x.Priority)
             .IsInEnum()
             .WithMessage("Task priority is not valid.");
+
+        RuleFor(x => x.Type)
+            .IsInEnum()
+            .WithMessage("Task type is not valid.");
     }
 }

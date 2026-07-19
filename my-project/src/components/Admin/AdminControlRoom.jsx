@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -31,7 +31,7 @@ import {
   FiZap,
 } from "react-icons/fi";
 import { FaCarSide } from "react-icons/fa";
-import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
+import { CHARGING_STATION_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
 import { chargingApi } from "../../api/chargingApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { authApi } from "../../api/authApi";
@@ -47,9 +47,6 @@ const STAFF_TASK_STATUS_LABELS = {
   [STAFF_TASK_STATUSES.InProgress]: "In progress",
   [STAFF_TASK_STATUSES.Done]: "Done",
 };
-
-const users = [];
-const trips = [];
 
 const STAFF_TASK_PRIORITY_LABELS = {
   [STAFF_TASK_PRIORITIES.Low]: "Low",
@@ -69,10 +66,52 @@ const STAFF_TASK_STATUS_STYLES = {
   [STAFF_TASK_STATUSES.Done]: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
 };
 
-const toDateTimeLocalValue = (date = new Date()) => {
-  const offsetMs = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+const KPI_COLUMN_LABELS = {
+  name: "Staff member",
+  ordersCompleted: "Completed",
+  avgCompletionMinutes: "Avg time",
+  rating: "Rating",
+  complaints: "Complaints",
+  praises: "Praises",
+  activeShiftHours: "Active time",
+  weeklyChange: "Vs last week",
 };
+
+const BAKU_TIME_ZONE = "Asia/Baku";
+const BAKU_UTC_OFFSET = "+04:00";
+const BAKU_CENTER = [40.3777, 49.8499];
+const BAKU_MAP_BOUNDS = [
+  [40.2, 49.55],
+  [40.6, 50.25],
+];
+
+const getBakuDateParts = (date = new Date()) =>
+  Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: BAKU_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+const toDateTimeLocalValue = (date = new Date()) => {
+  const parts = getBakuDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+};
+
+const parseBakuDateTimeLocalMs = (value) => {
+  if (!value) return Number.NaN;
+  return new Date(`${value}:00${BAKU_UTC_OFFSET}`).getTime();
+};
+
+const toBakuDeadlineApiValue = (value) => (value ? `${value}:00` : null);
 
 const upsertStaffTask = (items, nextTask) => {
   const exists = items.some((task) => task.id === nextTask.id);
@@ -106,42 +145,46 @@ const mapBackendStaffUser = (user) => ({
   supportTicketsClosed: [],
 });
 
-const BAKU_CENTER = [40.3777, 49.8499];
-const CRITICAL_BATTERY_PERCENT = 10;
+const mapBackendStaffKpiRow = (row) => ({
+  id: row.id,
+  name: row.name || row.email,
+  role: row.role || "Staff",
+  specialty: row.email,
+  active: Boolean(row.active),
+  rating: Number(row.rating || 0),
+  complaints: Number(row.complaints || 0),
+  praises: Number(row.praises || 0),
+  activeShiftHours: Number(row.activeShiftHours || 0),
+  weeklyChange: Number(row.weeklyChangePercent || 0),
+  kycRating: Number(row.kycRating || 0),
+  ordersCompleted: Number(row.ordersCompleted || 0),
+  avgCompletionMinutes: Number(row.averageCompletionMinutes || 0),
+  applicationsProcessed: Array.isArray(row.completedTasks)
+    ? row.completedTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      result: task.result,
+      time: formatBakuDateTime(task.completedAt, "Completed"),
+    }))
+    : [],
+  supportTicketsClosed: Array.from({ length: Number(row.supportTicketsClosed || 0) }, (_, index) => ({
+    id: `${row.id}-ticket-${index + 1}`,
+    title: "Closed support ticket",
+    result: "Calculated from backend support data.",
+    time: `#${index + 1}`,
+  })),
+});
+
 const LOW_CHARGE_RECOMMENDATION_PERCENT = 30;
 const MIN_CHARGING_COMPLETION_PERCENT = 80;
 const CHARGING_PERCENT_PER_MINUTE = 10;
-const CHARGING_TECHNICIAN_ID = "tech-003";
+const COMPLETED_TASK_VISIBLE_MS = 24 * 60 * 60 * 1000;
 const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
-const SERVICE_POINTS_STORAGE_KEY = "electroStreetServicePoints";
 const LEGACY_DEVELOPMENT_ADMIN_EMAIL = "admin@carsharing.local";
-
-const servicePointsSeed = [
-  {
-    id: "service-point-001",
-    name: "ElectroStreet Service Garage",
-    location: {
-      label: "Babek Avenue",
-      zone: "Service",
-      lat: 40.3942,
-      lng: 49.8914,
-    },
-  },
-  {
-    id: "service-point-002",
-    name: "Central Diagnostics Bay",
-    location: {
-      label: "28 May District",
-      zone: "Service",
-      lat: 40.3796,
-      lng: 49.8467,
-    },
-  },
-];
 
 const STATUS_META = {
   available: {
-    label: "Свободна",
+    label: "Free",
     short: "Free",
     color: "#22c55e",
     bg: "bg-emerald-500",
@@ -150,7 +193,7 @@ const STATUS_META = {
     border: "border-emerald-400/35",
   },
   in_use: {
-    label: "В пути",
+    label: "In use",
     short: "Ride",
     color: "#3b82f6",
     bg: "bg-blue-500",
@@ -159,7 +202,7 @@ const STATUS_META = {
     border: "border-blue-400/35",
   },
   low_charge: {
-    label: "Нужна зарядка",
+    label: "Need charge",
     short: "Low",
     color: "#f59e0b",
     bg: "bg-amber-500",
@@ -168,7 +211,7 @@ const STATUS_META = {
     border: "border-amber-400/35",
   },
   service: {
-    label: "Сервис",
+    label: "Service",
     short: "Stop",
     color: "#ef4444",
     bg: "bg-red-500",
@@ -176,6 +219,13 @@ const STATUS_META = {
     ring: "ring-red-400/30",
     border: "border-red-400/35",
   },
+};
+
+const STATUS_LABELS = {
+  available: "Available",
+  in_use: "In use",
+  low_charge: "Needs charge",
+  service: "Service",
 };
 
 const STATION_STATUS_META = {
@@ -241,47 +291,106 @@ const parkingZones = [
   },
 ];
 
+const PARKING_ZONES_STORAGE_KEY = "electroStreetParkingZones";
+
+const PARKING_ZONE_TYPES = [
+  {
+    id: "allowed",
+    label: "Green",
+    title: "Allowed parking",
+    description: "Riders can finish parking here.",
+    color: "#22c55e",
+    badgeClassName: "border-emerald-400/35 bg-emerald-500/12 text-emerald-100",
+    activeClassName: "border-emerald-300 bg-emerald-500 text-white",
+  },
+  {
+    id: "restricted",
+    label: "Red",
+    title: "No parking",
+    description: "Riders should not finish a ride in this zone.",
+    color: "#ef4444",
+    badgeClassName: "border-red-400/35 bg-red-500/15 text-red-100",
+    activeClassName: "border-red-300 bg-red-500 text-white",
+  },
+];
+
+const getParkingZoneMeta = (type) =>
+  PARKING_ZONE_TYPES.find((item) => item.id === type) || PARKING_ZONE_TYPES[0];
+
+const normalizeParkingZone = (zone, index) => {
+  const positions = Array.isArray(zone?.positions)
+    ? zone.positions
+        .map((point) => [Number(point?.[0]), Number(point?.[1])])
+        .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng))
+    : [];
+
+  if (positions.length < 3) return null;
+
+  return {
+    id: zone.id || `zone-${index}`,
+    name: zone.name || (zone.type === "restricted" ? "No parking zone" : "Allowed parking zone"),
+    type: zone.type === "restricted" ? "restricted" : "allowed",
+    positions,
+  };
+};
+
+const getInitialParkingZones = () => {
+  try {
+    const storedZones = localStorage.getItem(PARKING_ZONES_STORAGE_KEY);
+    if (storedZones === null) return parkingZones;
+
+    const parsedZones = JSON.parse(storedZones);
+    if (!Array.isArray(parsedZones)) return parkingZones;
+
+    return parsedZones
+      .map(normalizeParkingZone)
+      .filter(Boolean);
+  } catch {
+    return parkingZones;
+  }
+};
+
 const pricingRulesSeed = [
   {
     id: "rule-friday-center",
-    name: "Пятничный час пик в центре",
+    name: "Friday center rush hour",
     icon: FiClock,
     priceLabel: "x1.25",
     zone: "Central",
-    condition: "Пятница 18:00-21:00, меньше 3 свободных машин",
-    description: "Повышает цену в центре в самый загруженный вечер недели, когда спрос высокий, а свободных машин почти нет.",
+    condition: "Friday 18:00-21:00, fewer than 3 free cars",
+    description: "Raises the city center price during the busiest evening of the week when demand is high and available cars are limited.",
     multiplier: 1.25,
     enabled: true,
   },
   {
     id: "rule-low-supply",
-    name: "Мало машин у бульвара",
+    name: "Low supply near Boulevard",
     icon: FiTrendingUp,
     priceLabel: "x1.15",
     zone: "Seaside",
-    condition: "Свободный парк ниже 20%",
-    description: "Включается у бульвара, когда рядом мало доступных автомобилей и нужно сбалансировать спрос.",
+    condition: "Available fleet below 20%",
+    description: "Turns on near Boulevard when nearby vehicle supply is low and demand needs balancing.",
     multiplier: 1.15,
     enabled: true,
   },
   {
     id: "rule-night",
-    name: "Ночной комфорт",
+    name: "Night comfort",
     icon: FiNavigation,
     priceLabel: "x0.92",
     zone: "All zones",
     condition: "00:00-06:00",
-    description: "Снижает цену ночью для спокойных поездок, когда спрос ниже и машины простаивают.",
+    description: "Reduces the night price for quieter rides when demand is lower and cars are idle.",
     multiplier: 0.92,
     enabled: false,
   },
 ];
 
 const penaltyReasons = [
-  { id: "dirty", label: "Грязный салон", amount: 25 },
-  { id: "bad-parking", label: "Парковка в неположенном месте", amount: 40 },
-  { id: "third-party", label: "Передача руля третьему лицу", amount: 120 },
-  { id: "smoking", label: "Курение в салоне", amount: 60 },
+  { id: "dirty", label: "Dirty interior", amount: 25 },
+  { id: "bad-parking", label: "Improper parking", amount: 40 },
+  { id: "third-party", label: "Third-party driving", amount: 120 },
+  { id: "smoking", label: "Smoking inside the car", amount: 60 },
 ];
 
 const staffSeed = [
@@ -298,14 +407,14 @@ const staffSeed = [
     activeShiftHours: 7.4,
     weeklyChange: 12,
     applicationsProcessed: [
-      { id: "kyc-101", title: "Leyla Mammadova", result: "Паспорт и права подтверждены", time: "09:18" },
-      { id: "kyc-102", title: "Rashad Aliyev", result: "Запрошено повторное фото паспорта", time: "10:05" },
-      { id: "kyc-103", title: "Nigar Huseynli", result: "Анкета заблокирована из-за риска дубля", time: "11:42" },
-      { id: "kyc-104", title: "Farid Hasanov", result: "Права категории B подтверждены", time: "13:20" },
+      { id: "kyc-101", title: "Leyla Mammadova", result: "Passport and license approved", time: "09:18" },
+      { id: "kyc-102", title: "Rashad Aliyev", result: "New passport photo requested", time: "10:05" },
+      { id: "kyc-103", title: "Nigar Huseynli", result: "Profile blocked because of duplicate risk", time: "11:42" },
+      { id: "kyc-104", title: "Farid Hasanov", result: "Category B license approved", time: "13:20" },
     ],
     supportTicketsClosed: [
-      { id: "sup-101", title: "Не открывается багажник", result: "Проведена удаленная разблокировка", time: "10:28" },
-      { id: "sup-102", title: "Ошибка селфи при KYC", result: "Клиенту отправлена инструкция по повторной загрузке", time: "14:12" },
+      { id: "sup-101", title: "Trunk will not open", result: "Remote unlock completed", time: "10:28" },
+      { id: "sup-102", title: "KYC selfie error", result: "Retry upload instructions sent to the customer", time: "14:12" },
     ],
     active: true,
   },
@@ -322,14 +431,14 @@ const staffSeed = [
     activeShiftHours: 6.9,
     weeklyChange: 4,
     applicationsProcessed: [
-      { id: "kyc-201", title: "Gunel Rzayeva", result: "Анкета одобрена после проверки адреса", time: "09:35" },
-      { id: "kyc-202", title: "Emin Safarov", result: "Проверка перенесена на ручную модерацию", time: "12:10" },
-      { id: "kyc-203", title: "Aysel Hajiyeva", result: "Документы подтверждены", time: "15:04" },
+      { id: "kyc-201", title: "Gunel Rzayeva", result: "Profile approved after address review", time: "09:35" },
+      { id: "kyc-202", title: "Emin Safarov", result: "Review moved to manual moderation", time: "12:10" },
+      { id: "kyc-203", title: "Aysel Hajiyeva", result: "Documents approved", time: "15:04" },
     ],
     supportTicketsClosed: [
-      { id: "sup-201", title: "Клиент не завершил аренду", result: "Аренда закрыта удаленно без штрафа", time: "11:55" },
-      { id: "sup-202", title: "Авто стоит вне зоны", result: "Построен маршрут до разрешенной парковки", time: "13:44" },
-      { id: "sup-203", title: "Низкий заряд перед поездкой", result: "Бронь перенесена на ближайший доступный EV", time: "16:25" },
+      { id: "sup-201", title: "Customer could not finish rental", result: "Rental closed remotely without penalty", time: "11:55" },
+      { id: "sup-202", title: "Car parked outside the zone", result: "Route to allowed parking was prepared", time: "13:44" },
+      { id: "sup-203", title: "Low battery before trip", result: "Reservation moved to the nearest available EV", time: "16:25" },
     ],
     active: true,
   },
@@ -346,21 +455,21 @@ const staffSeed = [
     activeShiftHours: 7.1,
     weeklyChange: 8,
     applicationsProcessed: [
-      { id: "kyc-301", title: "Kamran Nabiyev", result: "Фото прав принято, профиль активирован", time: "10:16" },
-      { id: "kyc-302", title: "Laman Aliyeva", result: "Отклонено из-за просроченных прав", time: "12:58" },
+      { id: "kyc-301", title: "Kamran Nabiyev", result: "License photo accepted, profile activated", time: "10:16" },
+      { id: "kyc-302", title: "Laman Aliyeva", result: "Rejected because the license is expired", time: "12:58" },
     ],
     supportTicketsClosed: [
-      { id: "sup-301", title: "Не списался бонус", result: "Начислено 5 бесплатных минут", time: "09:50" },
-      { id: "sup-302", title: "Кабель зарядки заблокирован", result: "Создана сервисная задача для Нихата", time: "14:33" },
-      { id: "sup-303", title: "Шум в салоне после поездки", result: "Машина отправлена на осмотр", time: "17:08" },
+      { id: "sup-301", title: "Bonus was not applied", result: "5 free minutes credited", time: "09:50" },
+      { id: "sup-302", title: "Charging cable is locked", result: "Service task created for Nihad", time: "14:33" },
+      { id: "sup-303", title: "Noise in cabin after trip", result: "Vehicle sent for inspection", time: "17:08" },
     ],
     active: true,
   },
   {
     id: "field-001",
     name: "Tural",
-    role: "Полевой сотрудник",
-    specialty: "Мойка автомобилей",
+    role: "Field staff",
+    specialty: "Vehicle cleaning",
     kycRating: 7.6,
     ordersCompleted: 28,
     avgCompletionMinutes: 18.6,
@@ -370,19 +479,19 @@ const staffSeed = [
     activeShiftHours: 6.2,
     weeklyChange: -3,
     applicationsProcessed: [
-      { id: "kyc-401", title: "Осмотр Tesla Model 3", result: "Фото салона добавлены к карточке авто", time: "09:40" },
-      { id: "kyc-402", title: "Осмотр Chevrolet Cruze", result: "Отмечена готовность после мойки", time: "13:05" },
+      { id: "kyc-401", title: "Tesla Model 3 inspection", result: "Interior photos added to the vehicle record", time: "09:40" },
+      { id: "kyc-402", title: "Chevrolet Cruze inspection", result: "Vehicle marked ready after cleaning", time: "13:05" },
     ],
     supportTicketsClosed: [
-      { id: "sup-401", title: "Грязный салон после аренды", result: "Авто вымыто и возвращено в парк", time: "12:30" },
-      { id: "sup-402", title: "Запах в салоне", result: "Проведена уборка и проветривание", time: "15:45" },
+      { id: "sup-401", title: "Dirty interior after rental", result: "Vehicle cleaned and returned to the fleet", time: "12:30" },
+      { id: "sup-402", title: "Cabin odor", result: "Cleaning and ventilation completed", time: "15:45" },
     ],
     active: true,
   },
   {
     id: "field-002",
     name: "Elvin",
-    role: "Полевой сотрудник",
+    role: "Field staff",
     specialty: "Repair and towing to service",
     kycRating: 7.9,
     ordersCompleted: 24,
@@ -393,20 +502,20 @@ const staffSeed = [
     activeShiftHours: 6.8,
     weeklyChange: 6,
     applicationsProcessed: [
-      { id: "kyc-501", title: "Осмотр Kia EV6", result: "Зафиксирована техническая проблема замка", time: "10:22" },
-      { id: "kyc-502", title: "Осмотр RR", result: "Проверена телематика и сигнал GPS", time: "14:05" },
+      { id: "kyc-501", title: "Kia EV6 inspection", result: "Door lock technical issue recorded", time: "10:22" },
+      { id: "kyc-502", title: "RR inspection", result: "Telematics and GPS signal checked", time: "14:05" },
     ],
     supportTicketsClosed: [
-      { id: "sup-501", title: "Не реагирует багажник", result: "Авто отвезено в сервис на диагностику", time: "11:20" },
-      { id: "sup-502", title: "Потеря телематики", result: "Модуль связи перезапущен в сервисе", time: "16:10" },
+      { id: "sup-501", title: "Trunk is not responding", result: "Vehicle moved to service diagnostics", time: "11:20" },
+      { id: "sup-502", title: "Telematics loss", result: "Communication module restarted in service", time: "16:10" },
     ],
     active: true,
   },
   {
     id: "field-003",
     name: "Nihad",
-    role: "Полевой сотрудник",
-    specialty: "Отвоз автомобилей на зарядку",
+    role: "Field staff",
+    specialty: "Vehicle charging relocation",
     kycRating: 8.3,
     ordersCompleted: 31,
     avgCompletionMinutes: 22.1,
@@ -416,13 +525,13 @@ const staffSeed = [
     activeShiftHours: 7.6,
     weeklyChange: 10,
     applicationsProcessed: [
-      { id: "kyc-601", title: "Проверка Volkswagen ID.4", result: "Подтвержден низкий заряд перед перегоном", time: "09:55" },
-      { id: "kyc-602", title: "Проверка Tesla Model 3", result: "Запланирован перегон к станции CCS2", time: "15:18" },
+      { id: "kyc-601", title: "Volkswagen ID.4 check", result: "Low battery confirmed before relocation", time: "09:55" },
+      { id: "kyc-602", title: "Tesla Model 3 check", result: "Relocation to a CCS2 station planned", time: "15:18" },
     ],
     supportTicketsClosed: [
-      { id: "sup-601", title: "Авто с зарядом ниже 20%", result: "Машина доставлена на станцию Ganjlik Mall", time: "10:35" },
-      { id: "sup-602", title: "Клиент сообщил о низком запасе хода", result: "Авто заменено и отправлено на зарядку", time: "13:15" },
-      { id: "sup-603", title: "Зарядка завершена", result: "Машина возвращена в доступный парк", time: "17:30" },
+      { id: "sup-601", title: "Vehicle below 20% battery", result: "Vehicle delivered to Ganjlik Mall station", time: "10:35" },
+      { id: "sup-602", title: "Customer reported low range", result: "Vehicle replaced and sent to charging", time: "13:15" },
+      { id: "sup-603", title: "Charging completed", result: "Vehicle returned to the available fleet", time: "17:30" },
     ],
     active: true,
   },
@@ -432,11 +541,11 @@ const emptyBackendStaffList = staffSeed.slice(0, 0);
 
 const adminProfiles = {
   admin: {
-    roleLabel: "Администратор",
+    roleLabel: "Administrator",
     name: "Operations",
   },
   "super-admin": {
-    roleLabel: "Суперадмин",
+    roleLabel: "SuperAdmin",
     name: "Ayan Karimova",
   },
 };
@@ -472,15 +581,10 @@ const createAdminSession = (user) => ({
 const sidebarItems = [
   { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
   { id: "users", label: "Users & KYC", icon: FiUserCheck, filter: "all" },
-  { id: "pricing", label: "Geofencing & Pricing", icon: FiMap, filter: "all", superOnly: true },
-  { id: "billing", label: "Billing & Penalties", icon: FiDollarSign, filter: "all", superOnly: true },
-  { id: "kpi", label: "Manager KPI", icon: FiUsers, filter: "all", superOnly: true },
-  { id: "incidents", label: "Incident Feed", icon: FiShield, filter: "service" },
+  { id: "billing", label: "Receipts", icon: FiDollarSign, filter: "all" },
+  { id: "kpi", label: "Manager KPI", icon: FiUsers, filter: "all" },
   { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
   { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
-  { id: "service-points", label: "Service Points", icon: FiTool, filter: "all" },
-  { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "in_use" },
-  { id: "analytics", label: "Resource Analytics", icon: FiTrendingUp, filter: "all", superOnly: true },
 ];
 
 const formatSenderTitle = ({ senderRole, senderName }) => {
@@ -491,7 +595,7 @@ const formatSenderTitle = ({ senderRole, senderName }) => {
   }
 
   if (senderRole === "system") return senderName || "System";
-  if (senderRole === "rider") return `Клиент ${senderName || ""}`.trim();
+  if (senderRole === "rider") return `Rider ${senderName || ""}`.trim();
 
   return senderName || "Unknown";
 };
@@ -534,35 +638,35 @@ const incidentSeed = [
     id: "inc-telemetry",
     severity: "critical",
     vehicleId: "ev-006",
-    title: "Mercedes S-Class потеряла телематику",
-    detail: "Связь пропала 2 минуты назад. Требуется проверка.",
+    title: "Mercedes S-Class lost telematics",
+    detail: "Connection was lost 2 minutes ago. Inspection is required.",
   },
   {
     id: "inc-low-battery",
     severity: "warning",
     vehicleId: "ev-001",
-    title: "Tesla Model 3: заряд 7%",
-    detail: "Машина заблокирована для новых бронирований.",
+    title: "Tesla Model 3: battery 7%",
+    detail: "Vehicle is blocked for new reservations.",
   },
   {
     id: "inc-speed",
     severity: "critical",
     vehicleId: "ev-003",
     userId: "user-003",
-    title: "Превышение скорости 140 км/ч",
-    detail: "Проспект Гейдара Алиева. Доступен экстренный звонок.",
+    title: "Speeding: 140 km/h",
+    detail: "Heydar Aliyev Avenue. Emergency call is available.",
   },
 ];
 
 const techniciansSeed = [
-  { id: "tech-001", name: "Tural", specialty: "Мойка", status: "free", lat: 40.384, lng: 49.842 },
-  { id: "tech-002", name: "Elvin", specialty: "Технические проблемы", status: "free", lat: 40.372, lng: 49.858 },
-  { id: "tech-003", name: "Nihad", specialty: "Зарядка", status: "busy", lat: 40.392, lng: 49.851 },
+  { id: "tech-001", name: "Tural", specialty: "Cleaning", status: "free", lat: 40.384, lng: 49.842 },
+  { id: "tech-002", name: "Elvin", specialty: "Technical issues", status: "free", lat: 40.372, lng: 49.858 },
+  { id: "tech-003", name: "Nihad", specialty: "Charging", status: "busy", lat: 40.392, lng: 49.851 },
 ];
 
 const tasksSeed = [
-  { id: "task-001", vehicleId: "ev-004", technicianId: "tech-003", chargingStationId: "station-004", type: "Зарядка", status: "Техник в пути" },
-  { id: "task-002", vehicleId: "ev-005", technicianId: "tech-001", type: "Мойка", status: "Машина обслуживается" },
+  { id: "task-001", vehicleId: "ev-004", technicianId: "tech-003", chargingStationId: "station-004", type: "Charging", status: "Technician on the way" },
+  { id: "task-002", vehicleId: "ev-005", technicianId: "tech-001", type: "Cleaning", status: "Vehicle is being serviced" },
 ];
 
 const ticketsSeed = [
@@ -572,8 +676,8 @@ const ticketsSeed = [
     vehicleId: "ev-002",
     status: "open",
     updatedAt: "2026-06-16T10:28:00+04:00",
-    subject: "Не открывается багажник",
-    messages: ["Пробую открыть из приложения, но багажник не реагирует.", "Проверьте, пожалуйста, удаленно."],
+    subject: "Trunk will not open",
+    messages: ["I am trying to open it from the app, but the trunk is not responding.", "Please check it remotely."],
   },
   {
     id: "ticket-002",
@@ -581,17 +685,17 @@ const ticketsSeed = [
     vehicleId: "ev-003",
     status: "waiting",
     updatedAt: "2026-06-16T09:55:00+04:00",
-    subject: "Не вставляется зарядный кабель",
-    messages: ["Кабель заблокирован в станции, аренда активна."],
+    subject: "Charging cable will not connect",
+    messages: ["The cable is locked in the station and the rental is active."],
   },
 ];
 
 const maintenanceSeed = [
-  { vehicleId: "ev-001", serviceInKm: 480, batteryHealth: 91, profitability: 78, consumption: 16.8, lastService: "2026-05-28", nextService: "через 480 км", odometerKm: 18420, maintenanceStatus: "healthy" },
-  { vehicleId: "ev-002", serviceInKm: 820, batteryHealth: 88, profitability: 63, consumption: 18.2, lastService: "2026-05-19", nextService: "через 820 км", odometerKm: 22190, maintenanceStatus: "healthy" },
-  { vehicleId: "ev-003", serviceInKm: 310, batteryHealth: 84, profitability: 82, consumption: 20.6, lastService: "2026-06-02", nextService: "через 310 км", odometerKm: 26740, maintenanceStatus: "needs_service" },
-  { vehicleId: "ev-004", serviceInKm: 150, batteryHealth: 79, profitability: 41, consumption: 22.1, lastService: "2026-05-12", nextService: "через 150 км", odometerKm: 31980, maintenanceStatus: "needs_service" },
-  { vehicleId: "ev-005", serviceInKm: 610, batteryHealth: 93, profitability: 58, consumption: 7.9, lastService: "2026-06-08", nextService: "через 610 км", odometerKm: 14260, maintenanceStatus: "in_service" },
+  { vehicleId: "ev-001", serviceInKm: 480, batteryHealth: 91, profitability: 78, consumption: 16.8, lastService: "2026-05-28", nextService: "in 480 km", odometerKm: 18420, maintenanceStatus: "healthy" },
+  { vehicleId: "ev-002", serviceInKm: 820, batteryHealth: 88, profitability: 63, consumption: 18.2, lastService: "2026-05-19", nextService: "in 820 km", odometerKm: 22190, maintenanceStatus: "healthy" },
+  { vehicleId: "ev-003", serviceInKm: 310, batteryHealth: 84, profitability: 82, consumption: 20.6, lastService: "2026-06-02", nextService: "in 310 km", odometerKm: 26740, maintenanceStatus: "needs_service" },
+  { vehicleId: "ev-004", serviceInKm: 150, batteryHealth: 79, profitability: 41, consumption: 22.1, lastService: "2026-05-12", nextService: "in 150 km", odometerKm: 31980, maintenanceStatus: "needs_service" },
+  { vehicleId: "ev-005", serviceInKm: 610, batteryHealth: 93, profitability: 58, consumption: 7.9, lastService: "2026-06-08", nextService: "in 610 km", odometerKm: 14260, maintenanceStatus: "in_service" },
 ];
 
 const kycProfilesSeed = [
@@ -633,21 +737,6 @@ const formatDuration = (seconds) => {
   return `${minutes}:${String(rest).padStart(2, "0")}`;
 };
 
-const getDistanceKm = (from, to) => {
-  if (!from || !to) return Number.POSITIVE_INFINITY;
-
-  const earthRadiusKm = 6371;
-  const latDelta = ((to.lat - from.lat) * Math.PI) / 180;
-  const lngDelta = ((to.lng - from.lng) * Math.PI) / 180;
-  const fromLat = (from.lat * Math.PI) / 180;
-  const toLat = (to.lat * Math.PI) / 180;
-  const haversine =
-    Math.sin(latDelta / 2) ** 2 +
-    Math.cos(fromLat) * Math.cos(toLat) * Math.sin(lngDelta / 2) ** 2;
-
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-};
-
 const parseApiDateMs = (value) => {
   if (!value) return Number.NaN;
   const text = String(value);
@@ -655,22 +744,79 @@ const parseApiDateMs = (value) => {
   return new Date(normalized).getTime();
 };
 
-const getNearestChargingStation = (vehicle, stations) =>
-  stations
-    .filter(
-      (station) =>
-        station.status === CHARGING_STATION_STATUSES.ONLINE && station.availablePorts > 0
-    )
-    .map((station) => ({
-      ...station,
-      distanceKm: getDistanceKm(vehicle?.location, station.location),
-    }))
-    .sort((first, second) => first.distanceKm - second.distanceKm)[0] || null;
+const formatBakuDateTime = (value, fallback = "Pending date") => {
+  const timeMs = parseApiDateMs(value);
+  if (!Number.isFinite(timeMs)) return fallback;
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: BAKU_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(timeMs));
+};
+
+const formatBakuDate = (value, fallback = "") => {
+  const timeMs = parseApiDateMs(value);
+  if (!Number.isFinite(timeMs)) return fallback;
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: BAKU_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(timeMs));
+};
+
+const parseBakuDeadlineMs = (value) => {
+  if (!value) return Number.NaN;
+  const text = String(value);
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}${text.includes("T") ? "" : "T00:00:00"}${BAKU_UTC_OFFSET}`;
+  return new Date(normalized).getTime();
+};
+
+const formatBakuDeadline = (value, fallback = "No deadline") => {
+  const timeMs = parseBakuDeadlineMs(value);
+  if (!Number.isFinite(timeMs)) return fallback;
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: BAKU_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timeMs));
+};
+
+const formatUpdatedTime = (value) => {
+  const timeMs = parseApiDateMs(value);
+  if (!Number.isFinite(timeMs)) return "unknown";
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: BAKU_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(timeMs));
+};
+
+const isBakuMapPoint = (point) =>
+  point &&
+  Number.isFinite(Number(point.lat)) &&
+  Number.isFinite(Number(point.lng)) &&
+  Number(point.lat) >= BAKU_MAP_BOUNDS[0][0] &&
+  Number(point.lat) <= BAKU_MAP_BOUNDS[1][0] &&
+  Number(point.lng) >= BAKU_MAP_BOUNDS[0][1] &&
+  Number(point.lng) <= BAKU_MAP_BOUNDS[1][1];
 
 const getChargingSessionProgress = (session, task) => {
   const startBattery = Number(session.startBatteryPercent || session.currentBatteryPercent || 0);
   const targetBattery = Number(session.targetBatteryPercent || 100);
-  if (task?.status !== STAFF_TASK_STATUSES.InProgress) {
+  if (Number(task?.status) !== STAFF_TASK_STATUSES.InProgress) {
     return {
       currentBatteryPercent: startBattery,
       minutesRemaining: Math.max(0, Math.ceil((targetBattery - startBattery) / CHARGING_PERCENT_PER_MINUTE)),
@@ -698,12 +844,7 @@ const makeLiveVehicle = (vehicle, index) => ({
   liveStatus: statusFromVehicle(vehicle),
   speedKmh: vehicle.status === VEHICLE_STATUSES.IN_USE ? 38 : 0,
   activeSeconds: vehicle.status === VEHICLE_STATUSES.IN_USE ? 740 : index * 64,
-  signal: 94 - index * 3,
-  location: {
-    ...vehicle.location,
-    lat: vehicle.location.lat + index * 0.00035,
-    lng: vehicle.location.lng - index * 0.00018,
-  },
+  location: vehicle.location,
 });
 
 const createVehicleIcon = (vehicle, isSelected) => {
@@ -714,9 +855,9 @@ const createVehicleIcon = (vehicle, isSelected) => {
   return L.divIcon({
     className: "admin-car-marker",
     html: `
-      <div class="admin-car-marker__wrap ${isSelected ? "is-selected" : ""}" style="--status:${meta.color};">
+      <div class="admin-car-marker__wrap ${isSelected ? "is-selected" : ""}" data-admin-vehicle-id="${vehicle.id}" style="--status:${meta.color};">
         <span class="admin-car-marker__pulse"></span>
-        <span class="admin-car-marker__core">
+        <span class="admin-car-marker__core" data-admin-vehicle-id="${vehicle.id}">
           <img src="${image}" alt="" />
           <b>${timer}</b>
         </span>
@@ -733,7 +874,7 @@ const createTechnicianIcon = (technician) =>
     className: "admin-tech-marker",
     html: `
       <div class="admin-tech-marker__core">
-        <span>${technician.name.slice(0, 1)}</span>
+        <span>STAFF</span>
         <b>${technician.status}</b>
       </div>
     `,
@@ -747,7 +888,7 @@ const createChargingStationIcon = (station) => {
   return L.divIcon({
     className: "admin-station-marker",
     html: `
-      <div class="admin-station-marker__core" style="--station:${meta.color};">
+      <div class="admin-station-marker__core" data-admin-station-id="${station.id}" style="--station:${meta.color};">
         <span>⚡</span>
         <b>${station.availablePorts}/${station.totalPorts}</b>
       </div>
@@ -758,11 +899,11 @@ const createChargingStationIcon = (station) => {
   });
 };
 
-const createServicePointIcon = () =>
+const createServicePointIcon = (point) =>
   L.divIcon({
     className: "admin-service-point-marker",
     html: `
-      <div class="admin-service-point-marker__core">
+      <div class="admin-service-point-marker__core" data-admin-service-point-id="${point?.id || ""}">
         <span>+</span>
         <b>SVC</b>
       </div>
@@ -772,36 +913,114 @@ const createServicePointIcon = () =>
     popupAnchor: [0, -48],
   });
 
-const makeEvent = (vehicle, index) => {
-  const rider = users[index % users.length] || users[0];
+const makeEvent = (vehicle) => {
   const actions = {
-    available: "стал доступен для бронирования",
-    in_use: `едет по маршруту ${trips[index % trips.length]?.currentLocation || "Fountain Square"}`,
-    low_charge: "получил низкий заряд, назначена зарядка",
-    service: "переведён в сервисный режим",
+    available: "Available for booking",
+    in_use: "Active ride from backend",
+    low_charge: "Low battery vehicle from backend",
+    service: "Vehicle is in service mode",
   };
 
   return {
     id: `feed-${Date.now()}-${vehicle.id}`,
     vehicleId: vehicle.id,
     title: `${vehicle.brand} ${vehicle.model || ""}`.trim(),
-    detail: `${rider.fullName.split(" ")[0]}: ${actions[vehicle.liveStatus]}`,
+    detail: actions[vehicle.liveStatus] || "Vehicle status updated from backend",
     plate: vehicle.plateNumber,
-    time: "только что",
+    time: "just now",
     status: vehicle.liveStatus,
   };
 };
-
 const MapFocus = ({ focusTarget }) => {
   const map = useMap();
 
   useEffect(() => {
     if (!focusTarget) return;
-    map.flyTo([focusTarget.lat, focusTarget.lng], 14, {
+    const target = isBakuMapPoint(focusTarget)
+      ? [Number(focusTarget.lat), Number(focusTarget.lng)]
+      : BAKU_CENTER;
+
+    map.flyTo(target, 14, {
       animate: true,
       duration: 0.65,
     });
   }, [map, focusTarget]);
+
+  return null;
+};
+
+const MapSectionFocus = ({ activeSection }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (activeSection !== "tasks" && activeSection !== "chargers") return;
+
+    map.setView(BAKU_CENTER, 13, { animate: false });
+    map.invalidateSize({ animate: false });
+  }, [activeSection, map]);
+
+  return null;
+};
+
+const LeafletLayoutFix = ({ refreshKey }) => {
+  const map = useMap();
+  const frameRef = useRef(null);
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const invalidate = () => {
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+
+      frameRef.current = window.requestAnimationFrame(() => {
+        map.invalidateSize({ animate: false });
+        frameRef.current = null;
+      });
+    };
+
+    invalidate();
+    const timers = [120, 360, 900].map((delay) => window.setTimeout(invalidate, delay));
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(invalidate) : null;
+    observer?.observe(container);
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      observer?.disconnect();
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [map, refreshKey]);
+
+  return null;
+};
+
+const MarkerDomClickFallback = ({ onVehicleClick, onStationClick, onServicePointClick }) => {
+  useMapEvents({
+    click(event) {
+      const target = event.originalEvent?.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      const vehicleNode = target.closest("[data-admin-vehicle-id]");
+      if (vehicleNode?.dataset.adminVehicleId) {
+        onVehicleClick(vehicleNode.dataset.adminVehicleId);
+        return;
+      }
+
+      const stationNode = target.closest("[data-admin-station-id]");
+      if (stationNode?.dataset.adminStationId) {
+        onStationClick(stationNode.dataset.adminStationId);
+        return;
+      }
+
+      const servicePointNode = target.closest("[data-admin-service-point-id]");
+      if (servicePointNode?.dataset.adminServicePointId) {
+        onServicePointClick(servicePointNode.dataset.adminServicePointId);
+      }
+    },
+  });
 
   return null;
 };
@@ -945,18 +1164,14 @@ const AdminControlRoom = () => {
   });
   const [liveVehicles, setLiveVehicles] = useState([]);
   const [managedChargingStations, setManagedChargingStations] = useState([]);
-  const [managedServicePoints, setManagedServicePoints] = useState(() => {
-    try {
-      const storedPoints = localStorage.getItem(SERVICE_POINTS_STORAGE_KEY);
-      const parsedPoints = storedPoints ? JSON.parse(storedPoints) : null;
-      return Array.isArray(parsedPoints) ? parsedPoints : servicePointsSeed;
-    } catch {
-      return servicePointsSeed;
-    }
-  });
-  const [managedZones, setManagedZones] = useState(parkingZones);
+  const [managedServicePoints, setManagedServicePoints] = useState([]);
+  const [managedZones, setManagedZones] = useState(getInitialParkingZones);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [focusTarget, setFocusTarget] = useState(null);
+  const [selectedChargingStationId, setSelectedChargingStationId] = useState("");
+  const vehicleMarkerRefs = useRef(new Map());
+  const chargingStationMarkerRefs = useRef(new Map());
+  const servicePointMarkerRefs = useRef(new Map());
   const adminRole = adminSession?.role || "admin";
   const isSuperAdmin = adminRole === "super-admin";
   const [activeSection, setActiveSection] = useState(() => {
@@ -1011,10 +1226,13 @@ const AdminControlRoom = () => {
     duration: USER_BLOCK_DURATIONS.FifteenMinutes,
   });
   const [staff, setStaff] = useState(emptyBackendStaffList);
+  const [staffKpiSummary, setStaffKpiSummary] = useState(null);
+  const [isLoadingStaffKpi, setIsLoadingStaffKpi] = useState(false);
+  const [staffKpiError, setStaffKpiError] = useState("");
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
   const [incidents, setIncidents] = useState(incidentSeed);
-  const [technicians, setTechnicians] = useState(techniciansSeed);
+  const [technicians] = useState(techniciansSeed);
   const [serviceTasks, setServiceTasks] = useState(tasksSeed);
   const [staffTasks, setStaffTasks] = useState([]);
   const [isLoadingStaffTasks, setIsLoadingStaffTasks] = useState(false);
@@ -1043,7 +1261,7 @@ const AdminControlRoom = () => {
   const [chatDraft, setChatDraft] = useState("");
   const [adminNotice, setAdminNotice] = useState({ section: null, message: "", tone: "success" });
   const { confirm, dialog } = useConfirmDialog();
-  const [riderNotifications, setRiderNotifications] = useState([]);
+  const [riderNotifications] = useState([]);
   const [plannedMaintenance, setPlannedMaintenance] = useState([]);
   const [maintenanceFilter, setMaintenanceFilter] = useState("all");
   const [chargingDraft, setChargingDraft] = useState({
@@ -1085,11 +1303,21 @@ const AdminControlRoom = () => {
   const activeStaffTaskCounts = useMemo(() => {
     const counts = {};
     staffTasks
-      .filter((task) => task.status !== STAFF_TASK_STATUSES.Done)
+      .filter((task) => Number(task.status) !== STAFF_TASK_STATUSES.Done)
       .forEach((task) => {
         counts[task.assigneeId] = (counts[task.assigneeId] || 0) + 1;
       });
     return counts;
+  }, [staffTasks]);
+  const visibleStaffTasks = useMemo(() => {
+    const cutoffMs = Date.now() - COMPLETED_TASK_VISIBLE_MS;
+
+    return staffTasks.filter((task) => {
+      if (Number(task.status) !== STAFF_TASK_STATUSES.Done) return true;
+
+      const completedAtMs = parseApiDateMs(task.updatedAt || task.completedAt || task.createdAt);
+      return Number.isFinite(completedAtMs) && completedAtMs >= cutoffMs;
+    });
   }, [staffTasks]);
   const activeChargingVehicleIds = useMemo(
     () => new Set(activeChargingSessions.map((session) => session.vehicleId)),
@@ -1159,8 +1387,12 @@ const AdminControlRoom = () => {
   }, [activeSection, adminSession]);
 
   useEffect(() => {
-    localStorage.setItem(SERVICE_POINTS_STORAGE_KEY, JSON.stringify(managedServicePoints));
-  }, [managedServicePoints]);
+    try {
+      localStorage.setItem(PARKING_ZONES_STORAGE_KEY, JSON.stringify(managedZones));
+    } catch {
+      // Local storage can be unavailable in private or restricted browser modes.
+    }
+  }, [managedZones]);
 
   const loadAdminStatistics = useCallback(async () => {
     setIsLoadingAdminStatistics(true);
@@ -1192,7 +1424,6 @@ const AdminControlRoom = () => {
       const backendStaff = users
         .filter((user) => user.role === USER_ROLES.Staff)
         .map(mapBackendStaffUser);
-      setStaff(backendStaff);
       setStaffTaskDraft((draft) => ({
         ...draft,
         assigneeId: draft.assigneeId || backendStaff[0]?.id || "",
@@ -1218,6 +1449,22 @@ const AdminControlRoom = () => {
     }
   }, []);
 
+  const loadStaffKpi = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingStaffKpi(true);
+    setStaffKpiError("");
+
+    try {
+      const summary = await adminStatisticsApi.getStaffKpi();
+      setStaffKpiSummary(summary);
+      setStaff(Array.isArray(summary?.staff) ? summary.staff.map(mapBackendStaffKpiRow) : []);
+    } catch (error) {
+      setStaffKpiError(error.message || "Backend staff KPI is unavailable.");
+    } finally {
+      if (!silent) setIsLoadingStaffKpi(false);
+    }
+  }, []);
+
   const loadBackendVehicles = useCallback(async (options = {}) => {
     const silent = options.silent === true;
     if (!silent) setIsLoadingBackendVehicles(true);
@@ -1233,7 +1480,7 @@ const AdminControlRoom = () => {
       setSelectedVehicleId((currentId) =>
         nextLiveVehicles.some((vehicle) => vehicle.id === currentId)
           ? currentId
-          : nextLiveVehicles[0]?.id || ""
+          : ""
       );
       setEvents(nextLiveVehicles.slice(0, 5).map((vehicle, index) => makeEvent(vehicle, index)));
     } catch (error) {
@@ -1290,28 +1537,43 @@ const AdminControlRoom = () => {
     const initialStatisticsTimer = window.setTimeout(loadAdminStatistics, 0);
     const initialUsersTimer = window.setTimeout(loadBackendUsers, 0);
     const initialTasksTimer = window.setTimeout(loadStaffTasks, 0);
+    const initialStaffKpiTimer = window.setTimeout(loadStaffKpi, 0);
     const initialVehiclesTimer = window.setTimeout(loadBackendVehicles, 0);
     const initialChargingTimer = window.setTimeout(loadChargingStations, 0);
     const initialChargingSessionsTimer = window.setTimeout(loadChargingSessions, 0);
+    const initialBillingTimer = window.setTimeout(loadBillingInvoices, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
+    const billingTimer = window.setInterval(async () => {
+      try {
+        const invoices = await invoiceApi.getAdminInvoices();
+        setBillingInvoices(Array.isArray(invoices) ? invoices : []);
+        setBillingInvoiceError("");
+      } catch (error) {
+        setBillingInvoiceError(error.status === 404 ? "" : error.message || "Receipts could not be loaded.");
+      }
+    }, 10000);
     const vehiclesTimer = window.setInterval(() => loadBackendVehicles({ silent: true }), 5000);
     const chargingSessionsTimer = window.setInterval(() => {
       loadChargingSessions({ silent: true });
       loadChargingStations({ silent: true });
       loadStaffTasks({ silent: true });
+      loadStaffKpi({ silent: true });
     }, 10000);
     return () => {
       window.clearTimeout(initialStatisticsTimer);
       window.clearTimeout(initialUsersTimer);
       window.clearTimeout(initialTasksTimer);
+      window.clearTimeout(initialStaffKpiTimer);
       window.clearTimeout(initialVehiclesTimer);
       window.clearTimeout(initialChargingTimer);
       window.clearTimeout(initialChargingSessionsTimer);
+      window.clearTimeout(initialBillingTimer);
       window.clearInterval(statisticsTimer);
+      window.clearInterval(billingTimer);
       window.clearInterval(vehiclesTimer);
       window.clearInterval(chargingSessionsTimer);
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadBackendVehicles, loadChargingStations, loadChargingSessions]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadStaffKpi, loadBackendVehicles, loadChargingStations, loadChargingSessions]);
 
   useEffect(() => {
     if (!adminSession) return undefined;
@@ -1324,17 +1586,28 @@ const AdminControlRoom = () => {
     const handleAdminUserChange = (user) => {
       setBackendUsers((items) => upsertAdminUser(items, user));
       setBackendUsersError("");
-      if (user.role === USER_ROLES.Staff) {
-        setStaff((items) => upsertAdminUser(items, mapBackendStaffUser(user)));
-      } else {
-        setStaff((items) => items.filter((staffMember) => staffMember.id !== user.id));
-      }
     };
     const handleAdminDataChange = (message) => {
+      const refreshReceipts = async () => {
+        try {
+          const invoices = await invoiceApi.getAdminInvoices();
+          setBillingInvoices(Array.isArray(invoices) ? invoices : []);
+          setBillingInvoiceError("");
+        } catch (error) {
+          setBillingInvoiceError(error.status === 404 ? "" : error.message || "Receipts could not be loaded.");
+        }
+      };
+
       if (message?.scope === "staffTasks") {
         loadAdminStatistics();
+        loadStaffKpi({ silent: true });
       } else if (message?.scope === "users") {
         loadBackendUsers();
+        loadAdminStatistics();
+        loadStaffKpi({ silent: true });
+        refreshReceipts();
+      } else if (["payments", "payment", "billing", "invoices", "receipts"].includes(message?.scope)) {
+        refreshReceipts();
         loadAdminStatistics();
       } else if (message?.scope === "chargingStations") {
         loadChargingStations({ silent: true });
@@ -1344,6 +1617,10 @@ const AdminControlRoom = () => {
         loadChargingStations({ silent: true });
         loadBackendVehicles();
         loadStaffTasks();
+        loadStaffKpi({ silent: true });
+      } else {
+        refreshReceipts();
+        loadAdminStatistics();
       }
     };
 
@@ -1366,14 +1643,21 @@ const AdminControlRoom = () => {
       connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
       stopConnection(connection).catch(() => {});
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadStaffTasks]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadStaffTasks, loadStaffKpi]);
 
   useEffect(() => {
-    if (activeSection === "billing") {
+    if (activeSection === "billing" || activeSection === "control") {
       loadBillingInvoices();
     }
-    // Receipts are loaded when the billing panel opens.
+    // Receipts are also used by the Control Room snapshot.
   }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "kpi") return undefined;
+
+    const timer = window.setTimeout(loadStaffKpi, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeSection, loadStaffKpi]);
 
   const handleAdminLogout = async () => {
     try {
@@ -1387,16 +1671,6 @@ const AdminControlRoom = () => {
     setStatusFilter("all");
   };
 
-  const selectedVehicle = useMemo(
-    () => liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || liveVehicles[0] || null,
-    [liveVehicles, selectedVehicleId]
-  );
-
-  const selectedVehicleNotification = useMemo(
-    () => riderNotifications.find((notice) => notice.vehicleId === selectedVehicle?.id),
-    [riderNotifications, selectedVehicle?.id]
-  );
-
   const filteredVehicles = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
@@ -1408,7 +1682,7 @@ const AdminControlRoom = () => {
         vehicle.plateNumber,
         vehicle.location?.label,
         vehicle.location?.zone,
-        STATUS_META[vehicle.liveStatus]?.label,
+        STATUS_LABELS[vehicle.liveStatus],
         STATUS_META[vehicle.liveStatus]?.short,
       ]
         .filter(Boolean)
@@ -1420,6 +1694,47 @@ const AdminControlRoom = () => {
   }, [liveVehicles, searchQuery, statusFilter]);
 
   const searchResults = useMemo(() => filteredVehicles.slice(0, 6), [filteredVehicles]);
+
+  const taskVehicleIds = useMemo(
+    () => new Set(visibleStaffTasks.map((task) => task.vehicleId).filter(Boolean)),
+    [visibleStaffTasks]
+  );
+
+  const taskMapVehicles = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return liveVehicles.filter((vehicle) => {
+      if (!taskVehicleIds.has(vehicle.id)) return false;
+      if (!query) return true;
+
+      const searchable = [
+        vehicle.brand,
+        vehicle.model,
+        vehicle.plateNumber,
+        vehicle.location?.label,
+        vehicle.location?.zone,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(query);
+    });
+  }, [liveVehicles, searchQuery, taskVehicleIds]);
+
+  const mapVehicles = activeSection === "tasks" ? taskMapVehicles : filteredVehicles;
+
+  const selectedVehicle = useMemo(
+    () => mapVehicles.find((vehicle) => vehicle.id === selectedVehicleId)
+      || liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId)
+      || null,
+    [liveVehicles, mapVehicles, selectedVehicleId]
+  );
+
+  const selectedVehicleNotification = useMemo(
+    () => riderNotifications.find((notice) => notice.vehicleId === selectedVehicle?.id),
+    [riderNotifications, selectedVehicle?.id]
+  );
 
   const currentAdminProfile = adminProfiles[adminRole] || adminProfiles.admin;
 
@@ -1444,7 +1759,7 @@ const AdminControlRoom = () => {
           : user.driverLicenseNumber || "No driver license number",
         identity: user.phone || "No phone number",
         submittedAt: user.verificationSubmittedAt
-          ? new Date(user.verificationSubmittedAt).toLocaleString()
+          ? formatBakuDateTime(user.verificationSubmittedAt)
           : "Not submitted",
         notes: user.blockReason
           || (status === "verified"
@@ -1486,7 +1801,7 @@ const AdminControlRoom = () => {
       .filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL)
       .map((user, index) => {
       const registeredAt = user.createdAt
-        ? new Date(user.createdAt).toLocaleDateString()
+        ? formatBakuDate(user.createdAt)
         : registeredAtSeed[index % registeredAtSeed.length];
       const accountStatus = !user.isActive
         ? "blocked"
@@ -1539,44 +1854,63 @@ const AdminControlRoom = () => {
   }, [userTableRows, userTableSearchQuery, userTableSort]);
 
   const fleetStats = useMemo(() => {
-    if (adminStatistics?.vehicles) {
-      const vehiclesSummary = adminStatistics.vehicles;
-      const activeTrips = adminStatistics.rides?.active ?? vehiclesSummary.inUse ?? 0;
-      const averageBattery = Math.round(
-        liveVehicles.reduce((sum, vehicle) => sum + vehicle.batteryPercent, 0) / Math.max(liveVehicles.length, 1)
-      );
-
-      return {
-        available: vehiclesSummary.available ?? 0,
-        in_use: vehiclesSummary.inUse ?? 0,
-        low_charge: vehiclesSummary.charging ?? 0,
-        service: vehiclesSummary.maintenance ?? 0,
-        reserved: vehiclesSummary.reserved ?? 0,
-        charging: vehiclesSummary.charging ?? 0,
-        maintenance: vehiclesSummary.maintenance ?? 0,
-        activeTrips,
-        utilization: vehiclesSummary.utilizationPercent ?? 0,
-        averageBattery,
-        total: vehiclesSummary.total ?? 0,
-      };
-    }
-
     const statusCounts = liveVehicles.reduce(
       (acc, vehicle) => {
         acc[vehicle.liveStatus] = (acc[vehicle.liveStatus] || 0) + 1;
         return acc;
       },
-      { available: 0, in_use: 0, low_charge: 0, service: 0 }
+      { available: 0, in_use: 0, low_charge: 0, service: 0, reserved: 0 }
     );
-
-    const activeTrips = statusCounts.in_use;
-    const utilization = Math.round((activeTrips / Math.max(liveVehicles.length, 1)) * 100);
     const averageBattery = Math.round(
       liveVehicles.reduce((sum, vehicle) => sum + vehicle.batteryPercent, 0) / Math.max(liveVehicles.length, 1)
     );
 
+    if (adminStatistics?.vehicles) {
+      const vehiclesSummary = adminStatistics.vehicles;
+      const activeTrips = statusCounts.in_use || adminStatistics.rides?.active || vehiclesSummary.inUse || 0;
+      const total = vehiclesSummary.total || liveVehicles.length || 0;
+      const utilization = total === 0
+        ? 0
+        : Math.round(((activeTrips + (vehiclesSummary.reserved || 0)) / total) * 100);
+
+      return {
+        available: statusCounts.available,
+        in_use: statusCounts.in_use,
+        low_charge: statusCounts.low_charge,
+        service: statusCounts.service,
+        reserved: vehiclesSummary.reserved ?? 0,
+        charging: vehiclesSummary.charging ?? 0,
+        maintenance: vehiclesSummary.maintenance ?? 0,
+        activeTrips,
+        utilization,
+        averageBattery,
+        total,
+      };
+    }
+
+    const activeTrips = statusCounts.in_use;
+    const utilization = Math.round((activeTrips / Math.max(liveVehicles.length, 1)) * 100);
+
     return { ...statusCounts, activeTrips, utilization, averageBattery };
   }, [adminStatistics, liveVehicles]);
+
+  const receiptSummary = useMemo(() => {
+    const orderedReceipts = [...billingInvoices].sort(
+      (first, second) => parseApiDateMs(second.createdAt) - parseApiDateMs(first.createdAt)
+    );
+    const latestReceipt = orderedReceipts[0] || null;
+    const totalAmount = billingInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+    const currency = latestReceipt?.currency || adminStatistics?.revenue?.currency || "AZN";
+
+    return {
+      count: billingInvoices.length,
+      totalAmount,
+      currency,
+      latestLabel: latestReceipt ? formatBakuDateTime(latestReceipt.createdAt, "No receipts yet") : "No receipts yet",
+      latestAmount: latestReceipt ? Number(latestReceipt.amount || 0) : 0,
+      latestCustomer: latestReceipt?.userEmail || latestReceipt?.userName || "",
+    };
+  }, [adminStatistics?.revenue?.currency, billingInvoices]);
 
   const stationStats = useMemo(() => {
     const onlineStations = managedChargingStations.filter(
@@ -1594,177 +1928,95 @@ const AdminControlRoom = () => {
     return { onlineStations, availablePorts, totalPorts, maxPower };
   }, [managedChargingStations]);
 
-  useEffect(() => {
-    if (!alertsEnabled) return undefined;
-
-    const movementTimer = window.setInterval(() => {
-      setLiveVehicles((current) =>
-        current.map((vehicle, index) => {
-          if (vehicle.liveStatus !== "in_use") {
-            return vehicle;
-          }
-
-          const phase = Date.now() / 1000 + index;
-          return {
-            ...vehicle,
-            activeSeconds: vehicle.activeSeconds + 2,
-            batteryPercent: Math.max(8, vehicle.batteryPercent - 0.08),
-            speedKmh: Math.round(31 + Math.sin(phase) * 9),
-            location: {
-              ...vehicle.location,
-              lat: vehicle.location.lat + Math.sin(phase) * 0.00042,
-              lng: vehicle.location.lng + Math.cos(phase * 0.8) * 0.00052,
-            },
-          };
-        })
-      );
-    }, 1800);
-
-    return () => window.clearInterval(movementTimer);
-  }, [alertsEnabled]);
-
-  useEffect(() => {
-    if (!alertsEnabled) return undefined;
-
-    const feedTimer = window.setInterval(() => {
-      setLiveVehicles((current) => {
-        if (current.length === 0) return current;
-
-        const next = [...current];
-        const index = Math.floor(Math.random() * next.length);
-        const vehicle = next[index];
-        if (!vehicle) return current;
-
-        const lowCharge = vehicle.liveStatus !== "in_use" && vehicle.batteryPercent <= LOW_CHARGE_RECOMMENDATION_PERCENT;
-        const nextStatus = lowCharge ? "low_charge" : vehicle.liveStatus;
-        next[index] = { ...vehicle, liveStatus: nextStatus };
-
-        const event = makeEvent(next[index], index);
-        setEvents((items) => {
-          const exists = items.some(
-            (item) =>
-              item.vehicleId === event.vehicleId &&
-              item.status === event.status &&
-              item.detail === event.detail
-          );
-
-          return exists ? items : [event, ...items].slice(0, 9);
-        });
-        return next;
-      });
-    }, 4200);
-
-    return () => window.clearInterval(feedTimer);
-  }, [alertsEnabled]);
-
-  useEffect(() => {
-    const criticalVehicles = liveVehicles.filter(
-      (vehicle) =>
-        vehicle.liveStatus === "in_use" && vehicle.batteryPercent <= CRITICAL_BATTERY_PERCENT
+  const zoneStats = useMemo(() => {
+    const counts = managedZones.reduce(
+      (acc, zone) => {
+        acc[zone.type] = (acc[zone.type] || 0) + 1;
+        return acc;
+      },
+      { allowed: 0, restricted: 0 }
     );
 
-    if (!criticalVehicles.length) return;
+    return {
+      total: managedZones.length,
+      ...counts,
+    };
+  }, [managedZones]);
 
-    criticalVehicles.forEach((vehicle) => {
-      const activeTrip = trips.find(
-        (trip) => trip.vehicleId === vehicle.id && trip.status === TRIP_STATUSES.ACTIVE
-      );
-      const rider = users.find((user) => user.id === activeTrip?.userId);
-      const nearestStation = getNearestChargingStation(vehicle, managedChargingStations);
-      const noticeBody = `Заряд автомобиля ${Math.round(vehicle.batteryPercent)}%. Аренда приостановлена, полевой сотрудник отвезет машину на зарядку.`;
+  const selectedChargingStation = useMemo(
+    () =>
+      managedChargingStations.find((station) => station.id === selectedChargingStationId) ||
+      managedChargingStations[0] ||
+      null,
+    [managedChargingStations, selectedChargingStationId]
+  );
 
-      setServiceTasks((items) => {
-        const alreadyAssigned = items.some(
-          (task) =>
-            task.vehicleId === vehicle.id &&
-            task.type === "Зарядка" &&
-            task.status !== "Готово"
-        );
+  const selectedStationActiveSessions = useMemo(
+    () =>
+      selectedChargingStation
+        ? activeChargingSessions.filter((session) => session.chargingStationId === selectedChargingStation.id)
+        : [],
+    [activeChargingSessions, selectedChargingStation]
+  );
 
-        if (alreadyAssigned) return items;
 
-        return [
-          {
-            id: `task-critical-${vehicle.id}`,
-            vehicleId: vehicle.id,
-            technicianId: CHARGING_TECHNICIAN_ID,
-            chargingStationId: nearestStation?.id,
-            type: "Зарядка",
-            status: "Назначено",
-            autoCreated: true,
-            userNotice: noticeBody,
-          },
-          ...items,
-        ];
-      });
 
-      setTechnicians((items) =>
-        items.map((tech) =>
-          tech.id === CHARGING_TECHNICIAN_ID ? { ...tech, status: "busy" } : tech
-        )
-      );
-
-      setLiveVehicles((items) =>
-        items.map((item) =>
-          item.id === vehicle.id
-            ? { ...item, liveStatus: "low_charge", speedKmh: 0 }
-            : item
-        )
-      );
-
-      setRiderNotifications((items) => {
-        const notificationId = `notice-critical-${vehicle.id}`;
-
-        if (items.some((item) => item.id === notificationId)) return items;
-
-        return [
-          {
-            id: notificationId,
-            userId: rider?.id,
-            vehicleId: vehicle.id,
-            title: "Аренда приостановлена из-за низкого заряда",
-            body: noticeBody,
-            time: "только что",
-          },
-          ...items,
-        ];
-      });
-
-      setEvents((items) => {
-        const detail = `${rider?.fullName || "Клиент"}: аренда приостановлена, Нихату назначен отвоз на зарядку${nearestStation ? ` (${nearestStation.name})` : ""}.`;
-        const exists = items.some(
-          (item) => item.vehicleId === vehicle.id && item.detail === detail
-        );
-
-        if (exists) return items;
-
-        return [
-          {
-            id: `feed-critical-${vehicle.id}`,
-            vehicleId: vehicle.id,
-            title: `${vehicle.brand} ${vehicle.model || ""}`.trim(),
-            detail,
-            plate: vehicle.plateNumber,
-            time: "только что",
-            status: "low_charge",
-          },
-          ...items,
-        ].slice(0, 9);
-      });
-    });
-  }, [liveVehicles, managedChargingStations, serviceTasks]);
 
   const focusVehicle = (vehicleId) => {
-    const vehicle = liveVehicles.find((item) => item.id === vehicleId);
+    const vehicle = mapVehicles.find((item) => item.id === vehicleId)
+      || liveVehicles.find((item) => item.id === vehicleId);
 
     setSelectedVehicleId(vehicleId);
     if (vehicle?.location) {
+      const target = isBakuMapPoint(vehicle.location)
+        ? vehicle.location
+        : { lat: BAKU_CENTER[0], lng: BAKU_CENTER[1] };
       setFocusTarget({
         id: vehicle.id,
-        lat: vehicle.location.lat,
-        lng: vehicle.location.lng,
+        lat: target.lat,
+        lng: target.lng,
       });
     }
+  };
+
+  const openVehicleDetailsById = (vehicleId) => {
+    focusVehicle(vehicleId);
+    window.setTimeout(() => {
+      vehicleMarkerRefs.current.get(vehicleId)?.openPopup();
+    }, 0);
+  };
+
+  const openChargingStationDetails = (station) => {
+    if (!station) return;
+
+    setSelectedChargingStationId(station.id);
+    setFocusTarget({
+      id: station.id,
+      lat: station.location.lat,
+      lng: station.location.lng,
+    });
+  };
+
+  const openChargingStationDetailsById = (stationId) => {
+    const station = managedChargingStations.find((item) => item.id === stationId);
+    openChargingStationDetails(station);
+    window.setTimeout(() => {
+      chargingStationMarkerRefs.current.get(stationId)?.openPopup();
+    }, 0);
+  };
+
+  const focusServicePointById = (pointId) => {
+    const point = managedServicePoints.find((item) => item.id === pointId);
+    if (!point?.location) return;
+
+    setFocusTarget({
+      id: point.id,
+      lat: point.location.lat,
+      lng: point.location.lng,
+    });
+    window.setTimeout(() => {
+      servicePointMarkerRefs.current.get(pointId)?.openPopup();
+    }, 0);
   };
 
   const visibleSidebarItems = sidebarItems.filter((item) => isSuperAdmin || !item.superOnly);
@@ -1798,8 +2050,8 @@ const AdminControlRoom = () => {
 
     const nextZone = {
       id: `zone-${managedZones.length + 1}`,
-      name: `${draftZoneType === "allowed" ? "Green" : draftZoneType === "limited" ? "Yellow" : "Red"} custom zone`,
-      type: draftZoneType,
+      name: `${getParkingZoneMeta(draftZoneType).label} custom zone`,
+      type: getParkingZoneMeta(draftZoneType).id,
       positions: draftZonePoints,
     };
 
@@ -1807,6 +2059,31 @@ const AdminControlRoom = () => {
     setDraftZonePoints([]);
     setIsDrawingZone(false);
     showAdminNotice(`Зона сохранена: ${nextZone.name}`);
+  };
+
+  const saveParkingZoneDraft = () => {
+    if (draftZonePoints.length < 3) {
+      showAdminNotice("Add at least 3 points on the map to save a parking zone.", "control", "error");
+      return;
+    }
+
+    const zoneMeta = getParkingZoneMeta(draftZoneType);
+    const nextZone = {
+      id: `zone-${Date.now()}`,
+      name: `${zoneMeta.label} custom zone`,
+      type: zoneMeta.id,
+      positions: draftZonePoints,
+    };
+
+    setManagedZones((items) => [...items, nextZone]);
+    setDraftZonePoints([]);
+    setIsDrawingZone(false);
+    showAdminNotice(`Parking zone saved: ${nextZone.name}`, "control");
+  };
+
+  const deleteParkingZone = (zoneId) => {
+    setManagedZones((items) => items.filter((zone) => zone.id !== zoneId));
+    showAdminNotice("Parking zone removed.", "control");
   };
 
   const updateKycStatus = async (userId, status) => {
@@ -1901,7 +2178,7 @@ const AdminControlRoom = () => {
 
   const preparePenalty = () => {
     const reason = penaltyReasons.find((item) => item.id === penaltyReasonId) || penaltyReasons[0];
-    const rider = users.find((user) => user.id === penaltyTargetId);
+    const rider = backendUsers.find((user) => user.id === penaltyTargetId);
 
     if (!rider) {
       showAdminNotice("Сначала найдите пользователя по имени и фамилии");
@@ -1917,13 +2194,7 @@ const AdminControlRoom = () => {
         amount: reason.amount,
         status: "Списано с карты",
         createdAtIso: new Date().toISOString(),
-        createdAt: new Date().toLocaleString("ru-RU", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        createdAt: formatBakuDateTime(new Date().toISOString()),
       },
       ...items,
     ]);
@@ -1986,7 +2257,15 @@ const AdminControlRoom = () => {
       return;
     }
 
-    if (new Date(staffTaskDraft.dueAt).getTime() < Date.now() - 60000) {
+    const dueAtTimeMs = parseBakuDateTimeLocalMs(staffTaskDraft.dueAt);
+    const dueAtValue = toBakuDeadlineApiValue(staffTaskDraft.dueAt);
+
+    if (!dueAtValue || !Number.isFinite(dueAtTimeMs)) {
+      showAdminNotice("Task deadline is invalid.", "tasks", "error");
+      return;
+    }
+
+    if (dueAtTimeMs < Date.now() - 60000) {
       showAdminNotice("Deadline cannot be in the past.", "tasks", "error");
       return;
     }
@@ -1999,7 +2278,7 @@ const AdminControlRoom = () => {
         description: staffTaskDraft.description.trim(),
         assigneeId: staffTaskDraft.assigneeId,
         priority: Number(staffTaskDraft.priority),
-        dueAt: staffTaskDraft.dueAt,
+        dueAt: dueAtValue,
         vehicleId: staffTaskDraft.vehicleId,
       });
       setStaffTasks((items) => upsertStaffTask(items, createdTask));
@@ -2239,7 +2518,7 @@ const AdminControlRoom = () => {
   const deleteChargingPoint = async (station) => {
     const confirmed = await confirm({
       title: "Delete charging station?",
-      message: `Station "${station.name}" will be removed from the backend. Active sessions or assigned vehicles can block deletion.`,
+      message: `Station "${station.name}" will be removed from the backend. Active sessions or assigned vehicles can block deletion; completed charging history for this station will be removed with it.`,
       confirmLabel: "Delete",
       cancelLabel: "Keep",
       tone: "danger",
@@ -2248,11 +2527,18 @@ const AdminControlRoom = () => {
 
     try {
       await chargingApi.deleteStation(station.id);
+      setManagedChargingStations((items) => items.filter((item) => item.id !== station.id));
+      setActiveChargingSessions((items) => items.filter((item) => item.chargingStationId !== station.id));
+      setSelectedChargingStationId((id) => (id === station.id ? "" : id));
       loadChargingStations({ silent: true });
+      loadChargingSessions({ silent: true });
       setServiceTasks((items) => items.map((task) => (task.chargingStationId === station.id ? { ...task, chargingStationId: null } : task)));
       showAdminNotice(`Charging station deleted: ${station.name}`, "chargers");
     } catch (error) {
-      showAdminNotice(error.message || "Charging station could not be deleted.", "chargers", "error");
+      const message = error.message?.includes("DbUpdateException") || error.message?.includes("DELETE statement conflicted")
+        ? "Charging station could not be deleted because the database still has linked charging records. Refresh and try again after active sessions are completed."
+        : error.message || "Charging station could not be deleted.";
+      showAdminNotice(message, "chargers", "error");
     }
   };
 
@@ -2413,7 +2699,7 @@ const AdminControlRoom = () => {
               </p>
               <p className="mt-1 text-xs font-semibold text-slate-400">
                 {adminStatisticsLoadedAt
-                  ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
+                  ? `Last updated ${formatUpdatedTime(adminStatisticsLoadedAt)}`
                   : "Sign in with an administrator account to load real dashboard metrics."}
               </p>
             </div>
@@ -2520,10 +2806,210 @@ const AdminControlRoom = () => {
     </>
   );
 
+  const renderControlPanelV2 = () => {
+    const activeZoneMeta = getParkingZoneMeta(draftZoneType);
+
+    return (
+      <>
+        {renderPanelHeader(
+          "Control Room",
+          "Fleet and parking zones",
+          <button
+            type="button"
+            onClick={() => {
+              loadAdminStatistics();
+              loadBillingInvoices();
+              loadBackendVehicles({ silent: true });
+            }}
+            disabled={isLoadingAdminStatistics || isLoadingBillingInvoices}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+          >
+            <FiActivity />
+            {isLoadingAdminStatistics || isLoadingBillingInvoices ? "Refreshing..." : "Refresh"}
+          </button>
+        )}
+
+        <div className="border-b border-white/10 p-5">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">Dashboard data</p>
+                <p className="mt-1 text-xs font-semibold text-slate-400">
+                  {adminStatisticsLoadedAt
+                    ? `Updated ${formatUpdatedTime(adminStatisticsLoadedAt)} Baku time`
+                    : "Waiting for the latest dashboard data."}
+                </p>
+              </div>
+              <span className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
+                Connected
+              </span>
+            </div>
+
+            {adminStatisticsError && (
+              <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+                {adminStatisticsError}
+              </p>
+            )}
+
+            {billingInvoiceError && (
+              <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+                {billingInvoiceError}
+              </p>
+            )}
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Today revenue</p>
+                <p className="mt-1 text-lg font-black text-emerald-200">
+                  {Number(adminStatistics?.revenue?.today || 0).toFixed(2)} {adminStatistics?.revenue?.currency || receiptSummary.currency}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Receipts</p>
+                <p className="mt-1 text-lg font-black text-white">{receiptSummary.count}</p>
+                <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                  {receiptSummary.totalAmount.toFixed(2)} {receiptSummary.currency} total
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/[0.05] p-3">
+                <p className="text-[10px] font-black uppercase text-slate-500">Latest receipt</p>
+                <p className="mt-1 text-sm font-black text-white">
+                  {receiptSummary.latestAmount > 0
+                    ? `${receiptSummary.latestAmount.toFixed(2)} ${receiptSummary.currency}`
+                    : "No receipts"}
+                </p>
+                <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{receiptSummary.latestLabel}</p>
+                {receiptSummary.latestCustomer && (
+                  <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{receiptSummary.latestCustomer}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 border-b border-white/10 p-5">
+          {Object.entries(STATUS_META).map(([status, meta]) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => {
+                setStatusFilter((current) => (current === status ? "all" : status));
+                setActiveSection("control");
+              }}
+              className={`rounded-2xl border p-3 text-left ring-1 transition hover:bg-white/[0.07] ${
+                statusFilter === status ? "bg-white/[0.09]" : "bg-white/[0.035]"
+              } ${meta.border} ${meta.ring}`}
+            >
+              <span className="flex items-center gap-2 text-xs font-black uppercase text-slate-400">
+                <span className={`h-2.5 w-2.5 rounded-full ${meta.bg}`} />
+                {meta.short}
+              </span>
+              <span className="mt-2 block text-2xl font-black text-white">{fleetStats[status] || 0}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-white">Parking zones</p>
+                <p className="mt-1 text-xs font-semibold text-slate-400">
+                  Green zones allow parking. Red zones block parking.
+                </p>
+              </div>
+              <span className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-black text-slate-200">
+                {zoneStats.allowed} zones
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {PARKING_ZONE_TYPES.map((type) => (
+                <button
+                  key={type.id}
+                  type="button"
+                  onClick={() => setDraftZoneType(type.id)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+                    draftZoneType === type.id
+                      ? type.activeClassName
+                      : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.07]"
+                  }`}
+                >
+                  {type.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/10 bg-[#111a2b] p-3">
+              <p className="text-xs font-black text-white">{activeZoneMeta.title}</p>
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{activeZoneMeta.description}</p>
+              <p className="mt-2 text-[11px] font-bold text-slate-500">
+                Points: {draftZonePoints.length}. Minimum 3 points to save.
+              </p>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDrawingZone((value) => !value)}
+                className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+                  isDrawingZone ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
+                }`}
+              >
+                <FiEdit3 className="inline" /> {isDrawingZone ? "Stop drawing" : "Draw zone"}
+              </button>
+              <button
+                type="button"
+                onClick={saveParkingZoneDraft}
+                className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-600"
+              >
+                Save zone
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraftZonePoints([])}
+                className="rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-white/[0.1]"
+              >
+                Clear points
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2">
+            {managedZones.map((zone) => {
+              const zoneMeta = getParkingZoneMeta(zone.type);
+              return (
+                <div key={zone.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-white">{zone.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">{zone.positions.length} map points</p>
+                    </div>
+                    <span className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black ${zoneMeta.badgeClassName}`}>
+                      {zoneMeta.title}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteParkingZone(zone.id)}
+                    className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                  >
+                    <FiTrash2 />
+                    Delete zone
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </>
+    );
+  };
+
   const renderUsersKycPanel = () => {
     const statusMeta = {
       pending: {
-        label: "На модерации",
+        label: "Pending",
         dot: "bg-amber-400",
         badge: "border-amber-400/35 bg-amber-500/12 text-amber-100",
         active: "border-amber-400/60 bg-amber-500/15 text-amber-100",
@@ -2535,13 +3021,13 @@ const AdminControlRoom = () => {
         active: "border-orange-400/60 bg-orange-500/15 text-orange-100",
       },
       verified: {
-        label: "Активные",
+        label: "Verified",
         dot: "bg-emerald-400",
         badge: "border-emerald-400/35 bg-emerald-500/12 text-emerald-100",
         active: "border-emerald-400/60 bg-emerald-500/15 text-emerald-100",
       },
       blocked: {
-        label: "Заблокированные",
+        label: "Blocked",
         dot: "bg-red-400",
         badge: "border-red-400/35 bg-red-500/12 text-red-100",
         active: "border-red-400/60 bg-red-500/15 text-red-100",
@@ -2555,7 +3041,7 @@ const AdminControlRoom = () => {
       { all: kycRows.length, pending: 0, rejected: 0, verified: 0, blocked: 0 }
     );
     const tabItems = [
-      { id: "all", label: "Все", count: statusCounts.all },
+      { id: "all", label: "All", count: statusCounts.all },
       ...Object.entries(statusMeta).map(([id, meta]) => ({
         id,
         label: meta.label,
@@ -2597,13 +3083,13 @@ const AdminControlRoom = () => {
       <>
         {renderPanelHeader(
           "Users & KYC",
-          "Пользователи и документы",
+          "Users and identity documents",
           <span className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-black text-slate-300">
             {filteredKycRows.length}/{kycRows.length}
           </span>
         )}
 
-        <div className="grid min-h-0 flex-1 gap-4 p-5">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -2707,7 +3193,7 @@ const AdminControlRoom = () => {
                 />
               </label>
             </div>
-            <div className="max-h-[340px] overflow-auto">
+            <div className="max-h-[420px] min-h-[220px] overflow-auto">
               <table className="w-full min-w-[860px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-[#10192a] text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
@@ -2715,7 +3201,7 @@ const AdminControlRoom = () => {
                       <th key={key} className="px-4 py-3">
                         <button type="button" onClick={() => toggleUserTableSort(key)} className="flex items-center gap-1 hover:text-white">
                           {label}
-                          {userTableSort.key === key && <span>{userTableSort.direction === "asc" ? "↑" : "↓"}</span>}
+                          {userTableSort.key === key && <span>{userTableSort.direction === "asc" ? "^" : "v"}</span>}
                         </button>
                       </th>
                     ))}
@@ -2743,7 +3229,7 @@ const AdminControlRoom = () => {
                           {row.raw?.blockReason && (
                             <p className="mt-1 max-w-[220px] text-[10px] font-bold leading-4 text-red-200">
                               {row.raw.blockReason}
-                              {row.raw.blockedUntil ? ` · until ${new Date(row.raw.blockedUntil).toLocaleString()}` : " · forever"}
+                              {row.raw.blockedUntil ? ` - until ${formatBakuDateTime(row.raw.blockedUntil)}` : " - forever"}
                             </p>
                           )}
                         </td>
@@ -2811,8 +3297,8 @@ const AdminControlRoom = () => {
             })}
           </div>
 
-          <div className="grid min-h-0 gap-4 xl:grid-rows-[210px_minmax(0,1fr)]">
-            <div className="grid gap-3 overflow-y-auto">
+          <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="grid max-h-[520px] content-start gap-3 overflow-y-auto">
               {filteredKycRows.map((row) => (
                 (() => {
                   const meta = getStatusMeta(row.kyc.status);
@@ -2843,14 +3329,14 @@ const AdminControlRoom = () => {
             </div>
 
             {selectedKycUser && (
-              <div className="min-h-0 overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="max-h-[520px] overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.035] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-lg font-black text-white">{selectedKycUser.fullName}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-500">{selectedKycUser.phone} · {selectedKycUser.email}</p>
+                    <p className="mt-1 text-xs font-bold text-slate-500">{selectedKycUser.phone} - {selectedKycUser.email}</p>
                   </div>
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase ${getStatusMeta(selectedKycUser.kyc.status).badge}`}>
-                    {getStatusMeta(selectedKycUser.kyc.status).label} · {selectedKycUser.kyc.risk} risk
+                    {getStatusMeta(selectedKycUser.kyc.status).label} - {selectedKycUser.kyc.risk} risk
                   </span>
                 </div>
 
@@ -2861,12 +3347,12 @@ const AdminControlRoom = () => {
                     </p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded-xl bg-white/[0.05] p-3">
-                        <p className="text-[10px] font-black uppercase text-slate-500">Анкета + селфи</p>
+                        <p className="text-[10px] font-black uppercase text-slate-500">Account details</p>
                         <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.account || selectedKycUser.email}</p>
                         <p className="mt-1 text-xs font-semibold text-slate-400">{selectedKycUser.kyc.submittedAt}</p>
                       </div>
                       <div className="rounded-xl bg-white/[0.05] p-3">
-                        <p className="text-[10px] font-black uppercase text-slate-500">Паспорт + права</p>
+                        <p className="text-[10px] font-black uppercase text-slate-500">Passport and license</p>
                         <p className="mt-2 text-sm font-bold text-white">{selectedKycUser.kyc.documents || selectedKycUser.driverLicenseNumber || "No driver license number"}</p>
                         <p className="mt-1 text-xs font-semibold text-slate-400">{selectedKycUser.kyc.identity || selectedKycUser.phone || "No phone number"}</p>
                       </div>
@@ -2903,7 +3389,7 @@ const AdminControlRoom = () => {
                   </div>
 
                   {selectedKycUser.isActive ? (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid gap-2 sm:grid-cols-3">
                       <button
                         type="button"
                         onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
@@ -2937,19 +3423,6 @@ const AdminControlRoom = () => {
                       Unblock account
                     </button>
                   )}
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPenaltySearchQuery(selectedKycUser.fullName);
-                      setPenaltyTargetId(selectedKycUser.id);
-                      setActiveSection("billing");
-                    }}
-                    disabled={!isSuperAdmin}
-                    className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-sm font-black text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <FiFileText className="inline" /> Выписать штраф
-                  </button>
                 </div>
               </div>
             )}
@@ -2985,7 +3458,6 @@ const AdminControlRoom = () => {
           <div className="mt-3 grid grid-cols-3 gap-2">
             {[
               ["allowed", "Green"],
-              ["limited", "Yellow"],
               ["restricted", "Red"],
             ].map(([type, label]) => (
               <button
@@ -3133,7 +3605,7 @@ const AdminControlRoom = () => {
   };
 
   const renderBillingPanel = () => {
-    const riders = users.filter((user) => user.role === "rider");
+    const riders = backendUsers.filter((user) => user.role === USER_ROLES.Rider);
     const reason = penaltyReasons.find((item) => item.id === penaltyReasonId) || penaltyReasons[0];
     const penaltySearch = penaltySearchQuery.trim().toLowerCase();
     const foundPenaltyRiders = penaltySearch
@@ -3161,14 +3633,14 @@ const AdminControlRoom = () => {
       <>
         {renderPanelHeader(
           "Billing",
-          "Штрафы и списания",
+          "Receipts and invoice delivery",
           <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
-            <p className="text-[10px] font-black uppercase text-slate-500">Списано</p>
-            <p className="text-lg font-black text-white">{totalPenaltyAmount} AZN</p>
+            <p className="text-[10px] font-black uppercase text-slate-500">Receipts</p>
+            <p className="text-lg font-black text-white">{billingInvoices.length}</p>
           </div>
         )}
         <div className="grid gap-4 overflow-y-auto p-5">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="hidden gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
               <p className="text-[10px] font-black uppercase text-slate-500">Штрафов за 7 дней</p>
               <p className="mt-2 text-2xl font-black text-white">{recentPenalties.length}</p>
@@ -3232,7 +3704,7 @@ const AdminControlRoom = () => {
                           <td className="px-4 py-3">
                             <p className="font-black text-white">{invoice.invoiceNumber || invoice.id}</p>
                             <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {invoice.createdAt ? new Date(invoice.createdAt).toLocaleString() : "Pending date"}
+                              {formatBakuDateTime(invoice.createdAt)}
                             </p>
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-300">{invoice.userEmail || invoice.userName || invoice.userId}</td>
@@ -3260,7 +3732,7 @@ const AdminControlRoom = () => {
             </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
+          <div className="hidden gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <p className="text-sm font-black text-white">Выписать штраф</p>
             <p className="mt-4 text-[10px] font-black uppercase tracking-wide text-slate-500">Пользователь</p>
@@ -3414,10 +3886,12 @@ const AdminControlRoom = () => {
     const selectedItems = selectedManager && selectedDetail ? selectedManager[selectedDetail.itemKey] || [] : [];
     const activeStaff = staff.filter((manager) => manager.active);
     const kpiTotals = {
-      orders: staff.reduce((sum, manager) => sum + manager.ordersCompleted, 0),
-      avgTime: Math.round(staff.reduce((sum, manager) => sum + manager.avgCompletionMinutes, 0) / Math.max(staff.length, 1)),
-      rating: (staff.reduce((sum, manager) => sum + manager.rating, 0) / Math.max(staff.length, 1)).toFixed(1),
-      weekly: Math.round(staff.reduce((sum, manager) => sum + manager.weeklyChange, 0) / Math.max(staff.length, 1)),
+      orders: Number(staffKpiSummary?.ordersCompleted ?? staff.reduce((sum, manager) => sum + manager.ordersCompleted, 0)),
+      avgTime: Number(staffKpiSummary?.averageCompletionMinutes ?? Math.round(staff.reduce((sum, manager) => sum + manager.avgCompletionMinutes, 0) / Math.max(staff.length, 1))),
+      rating: Number(staffKpiSummary?.averageRating ?? (staff.reduce((sum, manager) => sum + manager.rating, 0) / Math.max(staff.length, 1))).toFixed(1),
+      weekly: Number(staffKpiSummary?.weeklyChangePercent ?? Math.round(staff.reduce((sum, manager) => sum + manager.weeklyChange, 0) / Math.max(staff.length, 1))),
+      activeStaff: Number(staffKpiSummary?.activeStaff ?? staff.filter((manager) => manager.active).length),
+      totalStaff: Number(staffKpiSummary?.totalStaff ?? staff.length),
     };
     const sortedStaff = [...staff].sort((first, second) => {
       const firstValue = first[kpiSort.key];
@@ -3629,6 +4103,202 @@ const AdminControlRoom = () => {
     );
   };
 
+  const renderKpiPanelV2 = () => {
+    const selectedManager = staff.find((manager) => manager.id === selectedKpiDetail?.staffId);
+    const selectedItems = selectedManager?.applicationsProcessed || [];
+    const kpiTotals = {
+      orders: Number(staffKpiSummary?.ordersCompleted || 0),
+      avgTime: Number(staffKpiSummary?.averageCompletionMinutes || 0),
+      rating: Number(staffKpiSummary?.averageRating || 0).toFixed(1),
+      weekly: Number(staffKpiSummary?.weeklyChangePercent || 0),
+      activeStaff: Number(staffKpiSummary?.activeStaff || 0),
+      totalStaff: Number(staffKpiSummary?.totalStaff || 0),
+    };
+    const sortedStaff = [...staff].sort((first, second) => {
+      const firstValue = first[kpiSort.key];
+      const secondValue = second[kpiSort.key];
+      const direction = kpiSort.direction === "asc" ? 1 : -1;
+
+      if (typeof firstValue === "string") {
+        return firstValue.localeCompare(secondValue) * direction;
+      }
+
+      return (Number(firstValue || 0) - Number(secondValue || 0)) * direction;
+    });
+    const sortColumns = [
+      "name",
+      "ordersCompleted",
+      "avgCompletionMinutes",
+      "rating",
+      "complaints",
+      "praises",
+      "activeShiftHours",
+      "weeklyChange",
+    ];
+    const toggleKpiSort = (key) => {
+      setKpiSort((current) => ({
+        key,
+        direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
+      }));
+    };
+
+    return (
+      <>
+        {renderPanelHeader(
+          "Manager KPI",
+          "Staff performance",
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+            <p className="text-[10px] font-black uppercase text-slate-500">Active</p>
+            <p className="text-lg font-black text-white">{kpiTotals.activeStaff}/{kpiTotals.totalStaff}</p>
+          </div>
+        )}
+        <div className="grid gap-4 overflow-y-auto p-5">
+          {(staffKpiError || isLoadingStaffKpi) && (
+            <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${staffKpiError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+              {staffKpiError || "Loading backend KPI..."}
+            </p>
+          )}
+
+          <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4 text-xs font-semibold leading-5 text-slate-300">
+            <b className="text-blue-200">Manager KPI</b> is calculated from staff accounts and completed service tasks stored in the database.
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-[10px] font-black uppercase text-slate-500">Completed tasks</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.orders}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <p className="text-[10px] font-black uppercase text-slate-500">Average time</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.avgTime} min</p>
+            </div>
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-emerald-200">Average rating</p>
+              <p className="mt-2 text-2xl font-black text-white">{kpiTotals.rating}/10</p>
+            </div>
+            <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
+              <p className="text-[10px] font-black uppercase text-blue-200">Vs last week</p>
+              <p className={`mt-2 text-2xl font-black ${kpiTotals.weekly >= 0 ? "text-emerald-200" : "text-red-200"}`}>
+                {kpiTotals.weekly >= 0 ? "+" : ""}{kpiTotals.weekly}%
+              </p>
+            </div>
+          </div>
+
+          {selectedManager && (
+            <div className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase text-blue-200">Completed service tasks</p>
+                  <p className="mt-1 text-sm font-black text-white">{selectedManager.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedKpiDetail(null)}
+                  className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {selectedItems.length ? selectedItems.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-white/10 bg-white/[0.05] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm font-black text-white">{item.title}</p>
+                      <span className="shrink-0 text-[10px] font-black text-slate-500">{item.time}</span>
+                    </div>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-300">{item.result}</p>
+                  </div>
+                )) : (
+                  <p className="rounded-xl border border-white/10 bg-white/[0.05] p-3 text-xs font-semibold text-slate-400">
+                    No completed service tasks for this staff member yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-white">KPI table</p>
+              <p className="text-xs font-semibold text-slate-500">Click a header to sort.</p>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-white/10">
+              <table className="w-full min-w-[980px] text-left text-sm">
+                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    {sortColumns.map((key) => (
+                      <th key={key} className="px-4 py-3">
+                        <button type="button" onClick={() => toggleKpiSort(key)} className="flex items-center gap-1 hover:text-white">
+                          {KPI_COLUMN_LABELS[key] || key}
+                          {kpiSort.key === key && <span>{kpiSort.direction === "desc" ? "v" : "^"}</span>}
+                        </button>
+                      </th>
+                    ))}
+                    <th className="px-4 py-3">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {sortedStaff.map((manager) => (
+                    <tr key={manager.id} className={manager.active ? "bg-white/[0.02]" : "bg-red-500/5 opacity-75"}>
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{manager.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{manager.specialty || manager.role}</p>
+                      </td>
+                      <td className="px-4 py-3 font-black text-white">{manager.ordersCompleted}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{manager.avgCompletionMinutes} min</td>
+                      <td className="px-4 py-3 font-black text-emerald-200">{manager.rating}/10</td>
+                      <td className="px-4 py-3 font-black text-red-200">{manager.complaints}</td>
+                      <td className="px-4 py-3 font-black text-blue-200">{manager.praises}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{manager.activeShiftHours} h</td>
+                      <td className={`px-4 py-3 font-black ${manager.weeklyChange >= 0 ? "text-emerald-200" : "text-red-200"}`}>
+                        {manager.weeklyChange >= 0 ? "+" : ""}{manager.weeklyChange}%
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
+                          className="rounded-lg bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200"
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            {staff.map((manager) => (
+              <div key={manager.id} className={`rounded-2xl border p-4 ${manager.active ? "border-white/10 bg-white/[0.035]" : "border-red-400/25 bg-red-500/10 opacity-70"}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-white">{manager.name}</p>
+                    <p className="text-xs font-bold text-slate-500">{manager.specialty || manager.role}</p>
+                  </div>
+                  <span className={`rounded-xl px-3 py-2 text-xs font-black ${manager.active ? "bg-emerald-500/15 text-emerald-200" : "bg-red-500/15 text-red-200"}`}>
+                    {manager.active ? "Active" : "Blocked"}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Completed</p><p className="font-black text-white">{manager.ordersCompleted}</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Average</p><p className="font-black text-white">{manager.avgCompletionMinutes} min</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Rating</p><p className="font-black text-emerald-200">{manager.rating}/10</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Shift</p><p className="font-black text-white">{manager.activeShiftHours} h</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Complaints</p><p className="font-black text-red-200">{manager.complaints}</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Praises</p><p className="font-black text-blue-200">{manager.praises}</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">Week</p><p className={`font-black ${manager.weeklyChange >= 0 ? "text-emerald-200" : "text-red-200"}`}>{manager.weeklyChange >= 0 ? "+" : ""}{manager.weeklyChange}%</p></div>
+                  <div className="rounded-xl bg-white/[0.05] p-3"><p className="text-[10px] font-black text-slate-500">KYC</p><p className="font-black text-white">{manager.kycRating}/10</p></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>
+    );
+  };
+
   const renderIncidentPanel = () => (
     <>
       {renderPanelHeader("Incidents", "Критические уведомления")}
@@ -3774,14 +4444,16 @@ const AdminControlRoom = () => {
               {staffTasksError || "Loading staff tasks..."}
             </p>
           )}
-          {staffTasks.map((task) => {
+          {visibleStaffTasks.map((task) => {
             const taskAssigneeIsActive = staffMembers.some((item) => item.id === task.assigneeId);
             const taskVehicle = backendVehicles.find((vehicle) => vehicle.id === task.vehicleId);
+            const taskStatus = Number(task.status);
+            const taskPriority = Number(task.priority);
             const priorityStyle =
-              STAFF_TASK_PRIORITY_STYLES[task.priority] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
+              STAFF_TASK_PRIORITY_STYLES[taskPriority] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
             const statusStyle =
-              STAFF_TASK_STATUS_STYLES[task.status] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
-            const deadlineLabel = task.dueAt ? new Date(task.dueAt).toLocaleString() : "No deadline";
+              STAFF_TASK_STATUS_STYLES[taskStatus] || "border-slate-400/25 bg-slate-500/10 text-slate-200";
+            const deadlineLabel = formatBakuDeadline(task.dueAt);
             const vehicleLabel = taskVehicle
               ? `${taskVehicle.plateNumber} - ${taskVehicle.brand} ${taskVehicle.model}`
               : "No vehicle";
@@ -3793,10 +4465,10 @@ const AdminControlRoom = () => {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="min-w-0 text-base font-black leading-6 text-white">{task.title}</h3>
                       <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${statusStyle}`}>
-                        {STAFF_TASK_STATUS_LABELS[task.status]}
+                        {STAFF_TASK_STATUS_LABELS[taskStatus]}
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${priorityStyle}`}>
-                        {STAFF_TASK_PRIORITY_LABELS[task.priority] || task.priority}
+                        {STAFF_TASK_PRIORITY_LABELS[taskPriority] || task.priority}
                       </span>
                     </div>
                     <p className="mt-2 max-w-3xl text-xs font-semibold leading-5 text-slate-400">{task.description}</p>
@@ -3844,7 +4516,7 @@ const AdminControlRoom = () => {
                       type="button"
                       onClick={() => updateStaffTaskStatus(task.id, status)}
                       className={`rounded-xl px-3 py-3 text-[11px] font-black transition ${
-                        task.status === status
+                        Number(task.status) === Number(status)
                           ? "bg-red-500 text-white shadow-lg shadow-red-950/20"
                           : "bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"
                       }`}
@@ -3861,6 +4533,116 @@ const AdminControlRoom = () => {
       </div>
     </>
   );
+
+  const renderStationStatusControls = () => managedChargingStations.length > 0 ? (
+    <div className="pointer-events-auto rounded-2xl border border-white/10 bg-[#0b1424]/88 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-black text-white">Station status</p>
+        <span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">
+          {managedChargingStations.length}
+        </span>
+      </div>
+      <div className="mt-3 grid max-h-[220px] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+        {managedChargingStations.map((station) => (
+          <div key={`${station.id}-status`} className="rounded-xl bg-white/[0.04] p-3">
+            <p className="truncate text-xs font-black text-white">{station.name}</p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {CHARGING_STATUS_OPTIONS.map((option) => (
+                <button
+                  key={option.status}
+                  type="button"
+                  onClick={() => updateChargingStationStatus(station.id, option.status)}
+                  className={`min-h-9 rounded-lg border px-3 py-2 text-[10px] font-black leading-none transition-colors ${
+                    station.status === option.status
+                      ? "border-red-500 bg-red-500 text-white"
+                      : "border-white/10 bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => deleteChargingPoint(station)}
+              className="mt-2 inline-flex min-h-9 w-full items-center justify-center gap-2 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+            >
+              <FiTrash2 />
+              Delete station
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
+  const renderSelectedChargingStationDetails = () => {
+    if (!selectedChargingStationId || !selectedChargingStation) return null;
+
+    const meta =
+      STATION_STATUS_META[selectedChargingStation.status] ||
+      STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
+
+    return (
+      <div className="pointer-events-auto absolute left-4 top-32 z-[505] w-[min(380px,calc(100%-2rem))] rounded-2xl border border-white/10 bg-[#0b1424]/92 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl md:left-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-300">Charging station</p>
+            <h3 className="mt-2 truncate text-lg font-black text-white">{selectedChargingStation.name}</h3>
+            <p className="mt-1 text-xs font-semibold text-slate-400">
+              {selectedChargingStation.location.label} - {selectedChargingStation.location.zone}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedChargingStationId("")}
+            className="rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300 transition hover:bg-white/[0.1] hover:text-white"
+          >
+            Close
+          </button>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <div className="rounded-xl bg-white/[0.05] p-3">
+            <p className="text-[10px] font-black uppercase text-slate-500">Status</p>
+            <p className="mt-1 text-sm font-black" style={{ color: meta.color }}>{meta.label}</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.05] p-3">
+            <p className="text-[10px] font-black uppercase text-slate-500">Ports</p>
+            <p className="mt-1 text-sm font-black text-white">
+              {selectedChargingStation.availablePorts} / {selectedChargingStation.totalPorts}
+            </p>
+          </div>
+          <div className="rounded-xl bg-white/[0.05] p-3">
+            <p className="text-[10px] font-black uppercase text-slate-500">Power</p>
+            <p className="mt-1 text-sm font-black text-white">{selectedChargingStation.powerKw} kW</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.05] p-3">
+            <p className="text-[10px] font-black uppercase text-slate-500">Active sessions</p>
+            <p className="mt-1 text-sm font-black text-white">{selectedStationActiveSessions.length}</p>
+          </div>
+        </div>
+        <div className="mt-2 rounded-xl bg-white/[0.05] p-3">
+          <p className="text-[10px] font-black uppercase text-slate-500">Connectors</p>
+          <p className="mt-1 text-xs font-black text-white">
+            {selectedChargingStation.connectorTypes.join(", ") || "Unknown"}
+          </p>
+          <p className="mt-2 text-[11px] font-semibold text-slate-500">
+            {Number(selectedChargingStation.location.lat).toFixed(5)}, {Number(selectedChargingStation.location.lng).toFixed(5)}
+          </p>
+        </div>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => deleteChargingPoint(selectedChargingStation)}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-3 text-[10px] font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+          >
+            <FiTrash2 />
+            Delete station
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const renderChargersPanel = () => (
     <>
@@ -4035,8 +4817,60 @@ const AdminControlRoom = () => {
           </div>
         )}
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-black text-white">New charging station</p><span className="rounded-lg bg-white/[0.06] px-2 py-1 text-[10px] font-black text-slate-300">{chargingDraft.pickOnMap ? "Click on the map" : "Form"}</span></div><div className="mt-3 grid gap-2"><input value={chargingDraft.name} onChange={(event) => updateChargingDraft("name", event.target.value)} placeholder="Station name" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><input value={chargingDraft.address} onChange={(event) => updateChargingDraft("address", event.target.value)} placeholder="Address" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><div className="grid grid-cols-2 gap-2"><input value={chargingDraft.lat} onChange={(event) => updateChargingDraft("lat", event.target.value)} placeholder="Lat or click map" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /><input value={chargingDraft.lng} onChange={(event) => updateChargingDraft("lng", event.target.value)} placeholder="Lng or click map" className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500" /></div><div className="grid grid-cols-2 gap-2"><select value={chargingDraft.chargerType} onChange={(event) => updateChargingDraft("chargerType", event.target.value)} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"><option value="CCS2">CCS2 fast</option><option value="Type2">Type2 city</option><option value="CHAdeMO">CHAdeMO</option></select><select value={chargingDraft.status} onChange={(event) => updateChargingDraft("status", event.target.value)} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"><option value={CHARGING_STATION_STATUSES.ONLINE}>Online</option><option value={CHARGING_STATION_STATUSES.BUSY}>Busy</option><option value={CHARGING_STATION_STATUSES.MAINTENANCE}>Maintenance</option><option value={CHARGING_STATION_STATUSES.OFFLINE}>Offline</option></select></div><label className="grid gap-1"><span className="text-[10px] font-black uppercase tracking-wide text-slate-500">Port count</span><select value={chargingDraft.ports} onChange={(event) => updateChargingDraft("ports", Number(event.target.value))} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none">{CHARGING_PORT_OPTIONS.map((ports) => (<option key={ports} value={ports}>{ports}</option>))}</select></label><button type="button" onClick={saveChargingPoint} className="rounded-xl bg-red-500 px-3 py-3 text-sm font-black text-white">Save charging station</button></div></div>
-        {managedChargingStations.map((station) => { const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE]; return (<button key={station.id} type="button" onClick={() => setFocusTarget({ id: station.id, lat: station.location.lat, lng: station.location.lng })} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left transition hover:bg-white/[0.07]"><span className="flex items-start justify-between gap-3"><span><span className="block text-sm font-black text-white">{station.name}</span><span className="mt-1 block text-xs font-semibold text-slate-400">{station.location.label} - {station.location.zone}</span></span><span className="rounded-xl px-2 py-1 text-[10px] font-black text-white" style={{ backgroundColor: meta.color }}>{meta.label}</span></span><span className="mt-4 grid grid-cols-3 gap-2"><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Free</span><span className="font-black text-white">{station.availablePorts} / {station.totalPorts}</span></span><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Power</span><span className="font-black text-white">{station.powerKw} kW</span></span><span className="rounded-xl bg-white/[0.05] p-2"><span className="block text-[10px] font-black text-slate-500">Types</span><span className="font-black text-white">{station.connectorTypes.join(", ")}</span></span></span></button>); })}
-        {managedChargingStations.length > 0 && (<div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4"><p className="text-sm font-black text-white">Station status</p><div className="mt-3 grid gap-3">{managedChargingStations.map((station) => (<div key={`${station.id}-status`} className="rounded-xl bg-white/[0.04] p-3"><p className="truncate text-xs font-black text-white">{station.name}</p><div className="mt-2 grid grid-cols-2 gap-2">{CHARGING_STATUS_OPTIONS.map((option) => (<button key={option.status} type="button" onClick={() => updateChargingStationStatus(station.id, option.status)} className={`min-h-9 rounded-lg border px-3 py-2 text-[10px] font-black leading-none transition-colors ${station.status === option.status ? "border-red-500 bg-red-500 text-white" : "border-white/10 bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"}`}>{option.label}</button>))}</div><button type="button" onClick={() => deleteChargingPoint(station)} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-500 hover:text-white"><FiTrash2 />Delete station</button></div>))}</div></div>)}
+        {managedChargingStations.map((station) => {
+          const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
+
+          return (
+            <div key={station.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <button
+                type="button"
+                onClick={() => openChargingStationDetails(station)}
+                className="flex w-full items-start justify-between gap-3 text-left"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black text-white">{station.name}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">
+                    {station.location.label} - {station.location.zone}
+                  </p>
+                </div>
+                <span className="rounded-xl px-2 py-1 text-[10px] font-black text-white" style={{ backgroundColor: meta.color }}>
+                  {meta.label}
+                </span>
+              </button>
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <div className="rounded-xl bg-white/[0.05] p-2">
+                  <p className="text-[10px] font-black text-slate-500">Free</p>
+                  <p className="font-black text-white">{station.availablePorts} / {station.totalPorts}</p>
+                </div>
+                <div className="rounded-xl bg-white/[0.05] p-2">
+                  <p className="text-[10px] font-black text-slate-500">Power</p>
+                  <p className="font-black text-white">{station.powerKw} kW</p>
+                </div>
+                <div className="rounded-xl bg-white/[0.05] p-2">
+                  <p className="text-[10px] font-black text-slate-500">Types</p>
+                  <p className="truncate font-black text-white">{station.connectorTypes.join(", ")}</p>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => openChargingStationDetails(station)}
+                  className="inline-flex min-h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-[10px] font-black text-slate-200 transition hover:bg-white/[0.1]"
+                >
+                  Details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteChargingPoint(station)}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                >
+                  <FiTrash2 />
+                  Delete station
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </>
   );
@@ -4135,7 +4969,7 @@ const AdminControlRoom = () => {
     };
     const sortedTickets = [...tickets]
       .filter((ticket) => {
-        const rider = users.find((user) => user.id === ticket.userId);
+        const rider = backendUsers.find((user) => user.id === ticket.userId);
         const vehicle = getVehicle(ticket.vehicleId);
         const searchable = [
           ticket.subject,
@@ -4191,7 +5025,7 @@ const AdminControlRoom = () => {
           </div>
           {sortedTickets.map((ticket) => {
             const vehicle = getVehicle(ticket.vehicleId);
-            const rider = users.find((user) => user.id === ticket.userId);
+            const rider = backendUsers.find((user) => user.id === ticket.userId);
             const active = activeTicketId === ticket.id;
             const lastMessage = normalizeTicketMessage(ticket.messages[ticket.messages.length - 1], ticket);
             const status = ticketStatusMeta[ticket.status] || ticketStatusMeta.open;
@@ -4453,11 +5287,13 @@ const AdminControlRoom = () => {
 
   const renderRightPanel = () => {
     const panels = {
-      control: renderControlPanel,
+      control: renderControlPanelV2,
+      __legacy_control: renderControlPanel,
       users: renderUsersKycPanel,
       pricing: renderPricingPanel,
       billing: renderBillingPanel,
-      kpi: renderKpiPanel,
+      kpi: renderKpiPanelV2,
+      __legacy_kpi: renderKpiPanel,
       incidents: renderIncidentPanel,
       tasks: renderTasksPanel,
       chargers: renderChargersPanel,
@@ -4472,12 +5308,13 @@ const AdminControlRoom = () => {
 
   const isChargingMap = activeSection === "chargers";
   const isServicePointsMap = activeSection === "service-points";
+  const isZoneMap = activeSection === "control" || activeSection === "__legacy_geofence";
   const isOperationsMap = isChargingMap || isServicePointsMap;
   const mapSummaryCards = isChargingMap
     ? [["Stations", managedChargingStations.length, FiZap, "text-cyan-200"], ["Online", stationStats.onlineStations, FiActivity, "text-emerald-200"], ["Ports", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"], ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"]]
     : isServicePointsMap
       ? [["Service points", managedServicePoints.length, FiTool, "text-cyan-200"], ["Active", managedServicePoints.length, FiActivity, "text-emerald-200"], ["Map", "Service", FiMap, "text-blue-200"], ["Tasks", serviceTasks.length, FiShield, "text-amber-200"]]
-      : [["Online", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"], ["Available", fleetStats.available, FiMap, "text-emerald-200"], ["In use", fleetStats.activeTrips, FiNavigation, "text-blue-200"], ["Battery", `${fleetStats.averageBattery}%`, FiActivity, "text-amber-200"]];
+      : [["Online", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"], ["Available", fleetStats.available, FiMap, "text-emerald-200"], ["In use", fleetStats.activeTrips, FiNavigation, "text-blue-200"], ["Need charge", fleetStats.low_charge, FiActivity, "text-amber-200"]];
   const isFullWidthPanel =
     activeSection === "users" ||
     activeSection === "billing" ||
@@ -4490,12 +5327,20 @@ const AdminControlRoom = () => {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#08111f] text-slate-100">
+    <main className="h-screen min-h-screen overflow-hidden bg-[#08111f] text-slate-100">
       <style>
         {`
           .admin-map .leaflet-container {
             background: #08111f;
             font-family: inherit;
+          }
+
+          .admin-map,
+          .admin-map .leaflet-container,
+          .admin-map .leaflet-pane,
+          .admin-map .leaflet-map-pane {
+            height: 100%;
+            width: 100%;
           }
 
           .admin-map .leaflet-control-attribution {
@@ -4508,9 +5353,27 @@ const AdminControlRoom = () => {
             color: rgba(125, 211, 252, 0.8);
           }
 
+          .admin-map .leaflet-marker-pane {
+            pointer-events: auto !important;
+            z-index: 820 !important;
+          }
+
+          .admin-map .leaflet-popup-pane {
+            pointer-events: auto !important;
+            z-index: 900 !important;
+          }
+
           .admin-car-marker {
             background: transparent;
             border: 0;
+            pointer-events: auto;
+          }
+
+          .leaflet-marker-icon.admin-car-marker,
+          .leaflet-marker-icon.admin-station-marker,
+          .leaflet-marker-icon.admin-service-point-marker {
+            cursor: pointer;
+            pointer-events: auto !important;
           }
 
           .admin-tech-marker {
@@ -4613,8 +5476,9 @@ const AdminControlRoom = () => {
           }
 
           .admin-tech-marker__core span {
-            font-size: 15px;
+            font-size: 9px;
             font-weight: 900;
+            letter-spacing: 0.02em;
             line-height: 1;
           }
 
@@ -4627,9 +5491,11 @@ const AdminControlRoom = () => {
 
           .admin-car-marker__wrap {
             align-items: center;
+            cursor: pointer;
             display: flex;
             height: 74px;
             justify-content: center;
+            pointer-events: auto;
             position: relative;
             width: 74px;
           }
@@ -4643,6 +5509,7 @@ const AdminControlRoom = () => {
             opacity: 0.34;
             position: absolute;
             width: 58px;
+            pointer-events: none;
           }
 
           .admin-car-marker__core {
@@ -4659,6 +5526,7 @@ const AdminControlRoom = () => {
             position: relative;
             width: 62px;
             z-index: 1;
+            pointer-events: auto;
           }
 
           .admin-car-marker__core img {
@@ -4708,8 +5576,8 @@ const AdminControlRoom = () => {
         `}
       </style>
 
-      <div className="grid min-h-screen lg:grid-cols-[84px_minmax(0,1fr)]">
-        <aside className="hidden border-r border-white/10 bg-[#0b1424]/95 px-3 py-5 lg:block">
+      <div className="grid h-screen min-h-0 lg:grid-cols-[84px_minmax(0,1fr)]">
+        <aside className="hidden h-screen border-r border-white/10 bg-[#0b1424]/95 px-3 py-5 lg:block">
           <a href="/" className="mb-8 flex h-12 w-12 items-center justify-center rounded-xl bg-white text-[#08111f]">
             <FaCarSide className="text-xl" />
           </a>
@@ -4726,6 +5594,13 @@ const AdminControlRoom = () => {
                     setActiveSection(item.id);
                     setStatusFilter(item.filter);
                     setSearchQuery("");
+                    if (item.id === "tasks" || item.id === "chargers") {
+                      setFocusTarget({
+                        id: `${item.id}-baku`,
+                        lat: BAKU_CENTER[0],
+                        lng: BAKU_CENTER[1],
+                      });
+                    }
                   }}
                   className={`group flex h-12 w-12 items-center justify-center rounded-xl border text-lg transition ${
                     isActive
@@ -4741,8 +5616,8 @@ const AdminControlRoom = () => {
           </nav>
         </aside>
 
-        <section className="flex min-h-screen min-w-0 flex-col">
-          <header className="z-[600] border-b border-white/10 bg-[#08111f]/92 px-4 py-4 backdrop-blur-xl lg:px-6">
+        <section className="flex h-screen min-h-0 min-w-0 flex-col">
+          <header className="z-[600] shrink-0 border-b border-white/10 bg-[#08111f]/92 px-4 py-4 backdrop-blur-xl lg:px-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">
                 <button
@@ -4807,7 +5682,7 @@ const AdminControlRoom = () => {
                         </button>
                       ))
                     ) : (
-                      <div className="px-4 py-3 text-sm font-bold text-slate-400">Ничего не найдено</div>
+                      <div className="px-4 py-3 text-sm font-bold text-slate-400">No results found</div>
                     )}
                   </div>
                 )}
@@ -4883,33 +5758,54 @@ const AdminControlRoom = () => {
             </div>
           </header>
 
-          <div className={`admin-control-grid grid flex-1 min-w-0 gap-0 ${isFullWidthPanel ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_390px]"}`}>
+          <div className={`admin-control-grid grid min-h-0 flex-1 min-w-0 overflow-hidden gap-0 ${isFullWidthPanel ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_390px]"}`}>
             {!isFullWidthPanel && (
-            <section className="relative min-h-[620px] min-w-0">
+            <section className="relative min-h-0 min-w-0">
               <div className="admin-map absolute inset-0">
-                <MapContainer center={BAKU_CENTER} zoom={13} scrollWheelZoom className="h-full w-full">
+                <MapContainer
+                  key={`admin-map-${activeSection}`}
+                  center={BAKU_CENTER}
+                  zoom={13}
+                  minZoom={10}
+                  maxBounds={BAKU_MAP_BOUNDS}
+                  maxBoundsViscosity={0.85}
+                  scrollWheelZoom
+                  className="h-full w-full"
+                >
+                  <LeafletLayoutFix refreshKey={`${activeSection}:${mapVehicles.length}:${managedChargingStations.length}:${managedZones.length}:${draftZonePoints.length}`} />
                   <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
                     url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                   />
+                  <MarkerDomClickFallback
+                    onVehicleClick={openVehicleDetailsById}
+                    onStationClick={openChargingStationDetailsById}
+                    onServicePointClick={focusServicePointById}
+                  />
 
-                  {!isOperationsMap && managedZones.map((zone) => {
+                  {isZoneMap && managedZones.map((zone) => {
+                    const zoneMeta = getParkingZoneMeta(zone.type);
                     const restricted = zone.type === "restricted";
-                    const limited = zone.type === "limited";
-                    const zoneColor = restricted ? "#ef4444" : limited ? "#f59e0b" : "#22c55e";
+                    const zoneColor = zoneMeta.color;
                     return (
                       <Polygon
                         key={zone.id}
+                        interactive={false}
                         positions={zone.positions}
                         pathOptions={{
                           color: zoneColor,
                           fillColor: zoneColor,
-                          fillOpacity: restricted ? 0.16 : limited ? 0.14 : 0.12,
+                          fillOpacity: restricted ? 0.16 : 0.12,
                           weight: restricted ? 2 : 1.5,
-                          dashArray: restricted || limited ? "8 8" : "0",
+                          dashArray: restricted ? "8 8" : "0",
                         }}
                       >
-                        <Popup>{zone.name}</Popup>
+                        <Popup>
+                          <div className="min-w-[180px]">
+                            <p className="text-sm font-black text-slate-950">{zone.name}</p>
+                            <p className="mt-1 text-xs font-bold text-slate-500">{zoneMeta.title}</p>
+                          </div>
+                        </Popup>
                       </Polygon>
                     );
                   })}
@@ -4922,12 +5818,13 @@ const AdminControlRoom = () => {
                     />
                   )}
 
-                  {!isOperationsMap && draftZonePoints.length > 1 && (
+                  {isZoneMap && draftZonePoints.length > 1 && (
                     <Polygon
+                      interactive={false}
                       positions={draftZonePoints}
                       pathOptions={{
-                        color: draftZoneType === "restricted" ? "#ef4444" : draftZoneType === "limited" ? "#f59e0b" : "#22c55e",
-                        fillColor: draftZoneType === "restricted" ? "#ef4444" : draftZoneType === "limited" ? "#f59e0b" : "#22c55e",
+                        color: getParkingZoneMeta(draftZoneType).color,
+                        fillColor: getParkingZoneMeta(draftZoneType).color,
                         fillOpacity: 0.18,
                         weight: 2,
                         dashArray: "4 6",
@@ -4941,11 +5838,21 @@ const AdminControlRoom = () => {
                     return (
                       <Marker
                         key={station.id}
+                        ref={(marker) => {
+                          if (marker) chargingStationMarkerRefs.current.set(station.id, marker);
+                          else chargingStationMarkerRefs.current.delete(station.id);
+                        }}
                         position={[station.location.lat, station.location.lng]}
                         icon={createChargingStationIcon(station)}
+                        eventHandlers={{
+                          click: (event) => {
+                            openChargingStationDetailsById(station.id);
+                            event.target.openPopup();
+                          },
+                        }}
                       >
                         <Popup>
-                          <div className="min-w-[230px]">
+                          <div className="min-w-[250px]">
                             <p className="text-sm font-black text-slate-950">{station.name}</p>
                             <p className="mt-1 text-xs font-bold text-slate-500">
                               {station.location.label} · {station.location.zone}
@@ -4958,11 +5865,19 @@ const AdminControlRoom = () => {
                                 {station.powerKw} kW
                               </span>
                               <span className="rounded-lg bg-emerald-50 px-2 py-1 font-black text-emerald-700">
-                                {station.availablePorts}/{station.totalPorts} портов
+                                {station.availablePorts}/{station.totalPorts} ports
                               </span>
                               <span className="rounded-lg bg-slate-100 px-2 py-1 font-black text-slate-700">
                                 {station.connectorTypes.join(", ")}
                               </span>
+                            </div>
+                            <div className="mt-3 rounded-lg bg-slate-100 px-2 py-2 text-xs font-bold text-slate-600">
+                              <p>
+                                Active sessions: {activeChargingSessions.filter((session) => session.chargingStationId === station.id).length}
+                              </p>
+                              <p className="mt-1">
+                                {Number(station.location.lat).toFixed(5)}, {Number(station.location.lng).toFixed(5)}
+                              </p>
                             </div>
                             <button
                               type="button"
@@ -4970,7 +5885,7 @@ const AdminControlRoom = () => {
                               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white transition hover:bg-red-600"
                             >
                               <FiTrash2 />
-                              Удалить
+                              Delete
                             </button>
                           </div>
                         </Popup>
@@ -4981,8 +5896,17 @@ const AdminControlRoom = () => {
                   {isServicePointsMap && managedServicePoints.map((point) => (
                     <Marker
                       key={point.id}
+                      ref={(marker) => {
+                        if (marker) servicePointMarkerRefs.current.set(point.id, marker);
+                        else servicePointMarkerRefs.current.delete(point.id);
+                      }}
                       position={[point.location.lat, point.location.lng]}
-                      icon={createServicePointIcon()}
+                      icon={createServicePointIcon(point)}
+                      eventHandlers={{
+                        click: (event) => {
+                          event.target.openPopup();
+                        },
+                      }}
                     >
                       <Popup>
                         <div className="min-w-[220px]">
@@ -4996,33 +5920,45 @@ const AdminControlRoom = () => {
                             className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white transition hover:bg-red-600"
                           >
                             <FiTrash2 />
-                            Удалить
+                            Delete
                           </button>
                         </div>
                       </Popup>
                     </Marker>
                   ))}
 
-                  {!isOperationsMap && filteredVehicles.map((vehicle) => {
+                  {!isOperationsMap && mapVehicles.map((vehicle) => {
                     const meta = STATUS_META[vehicle.liveStatus] || STATUS_META.available;
                     const active = selectedVehicleId === vehicle.id;
 
                     return (
                       <Marker
                         key={vehicle.id}
+                        ref={(marker) => {
+                          if (marker) vehicleMarkerRefs.current.set(vehicle.id, marker);
+                          else vehicleMarkerRefs.current.delete(vehicle.id);
+                        }}
                         position={[vehicle.location.lat, vehicle.location.lng]}
                         icon={createVehicleIcon(vehicle, active)}
-                        eventHandlers={{ click: () => focusVehicle(vehicle.id) }}
+                        eventHandlers={{
+                          click: (event) => {
+                            openVehicleDetailsById(vehicle.id);
+                            event.target.openPopup();
+                          },
+                        }}
+                        keyboard
+                        riseOnHover
+                        zIndexOffset={active ? 1000 : 500}
                       >
                         <Popup>
-                          <div className="min-w-[220px]">
+                          <div className="min-w-[220px]" onClick={() => focusVehicle(vehicle.id)}>
                             <p className="text-sm font-black text-slate-950">
                               {vehicle.brand} {vehicle.model}
                             </p>
                             <p className="mt-1 text-xs font-bold text-slate-500">{vehicle.plateNumber}</p>
                             <div className="mt-3 flex items-center justify-between gap-3">
                               <span className="rounded-full px-3 py-1 text-xs font-black text-white" style={{ backgroundColor: meta.color }}>
-                                {meta.label}
+                                {STATUS_LABELS[vehicle.liveStatus] || meta.short}
                               </span>
                               <span className="text-xs font-black text-slate-700">{Math.round(vehicle.batteryPercent)}%</span>
                             </div>
@@ -5049,11 +5985,12 @@ const AdminControlRoom = () => {
                     ))}
 
                   <MapFocus focusTarget={focusTarget} />
+                  <MapSectionFocus activeSection={activeSection} />
                   <ZoneDrawEvents
                     enabled={
-                      (!isOperationsMap && activeSection === "pricing" && isDrawingZone) ||
+                      (isZoneMap && isDrawingZone) ||
                       (isChargingMap && chargingDraft.pickOnMap) ||
-                      (isServicePointsMap && servicePointDraft.pickOnMap)
+                      activeSection === "__legacy_service_points"
                     }
                     onAddPoint={(point) =>
                       isChargingMap
@@ -5089,7 +6026,15 @@ const AdminControlRoom = () => {
                 ))}
               </div>
 
-              {!isOperationsMap && selectedVehicle && (
+              {isChargingMap && renderSelectedChargingStationDetails()}
+
+              {isChargingMap && (
+                <div className="absolute bottom-5 left-4 right-4 z-[500] md:left-6 md:right-6">
+                  {renderStationStatusControls()}
+                </div>
+              )}
+
+              {!isOperationsMap && activeSection !== "tasks" && selectedVehicle && (
               <div className="pointer-events-none absolute bottom-5 left-4 z-[500] w-[calc(100%-2rem)] rounded-2xl border border-white/10 bg-[#0b1424]/86 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl md:left-6 md:w-[410px]">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -5098,15 +6043,15 @@ const AdminControlRoom = () => {
                       {selectedVehicle.brand} {selectedVehicle.model}
                     </h2>
                     <p className="mt-1 text-sm font-bold text-slate-400">
-                      {selectedVehicle.plateNumber} · {selectedVehicle.location.label}
+                      {selectedVehicle.plateNumber} - {selectedVehicle.location.label}
                     </p>
                   </div>
                   <span className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-black ${STATUS_META[selectedVehicle.liveStatus].border} ${STATUS_META[selectedVehicle.liveStatus].text}`}>
-                    {STATUS_META[selectedVehicle.liveStatus].label}
+                    {STATUS_LABELS[selectedVehicle.liveStatus] || STATUS_META[selectedVehicle.liveStatus].short}
                   </span>
                 </div>
 
-                <div className="mt-4 grid grid-cols-3 gap-2">
+                <div className="mt-4 grid grid-cols-2 gap-2">
                   <div className="rounded-xl bg-white/[0.05] p-3">
                     <p className="text-[10px] font-black uppercase text-slate-500">Battery</p>
                     <p className="mt-1 text-lg font-black text-white">{Math.round(selectedVehicle.batteryPercent)}%</p>
@@ -5115,15 +6060,11 @@ const AdminControlRoom = () => {
                     <p className="text-[10px] font-black uppercase text-slate-500">Speed</p>
                     <p className="mt-1 text-lg font-black text-white">{selectedVehicle.speedKmh}</p>
                   </div>
-                  <div className="rounded-xl bg-white/[0.05] p-3">
-                    <p className="text-[10px] font-black uppercase text-slate-500">Signal</p>
-                    <p className="mt-1 text-lg font-black text-white">{selectedVehicle.signal}%</p>
-                  </div>
                 </div>
 
                 {selectedVehicleNotification && (
                   <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 p-3">
-                    <p className="text-[10px] font-black uppercase text-amber-200">Push пользователю</p>
+                    <p className="text-[10px] font-black uppercase text-amber-200">User notification</p>
                     <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{selectedVehicleNotification.body}</p>
                   </div>
                 )}
@@ -5132,16 +6073,15 @@ const AdminControlRoom = () => {
             </section>
             )}
 
-            <aside className={`z-[520] flex min-h-[560px] flex-col bg-[#0b1424]/96 shadow-2xl shadow-black/30 backdrop-blur-xl ${isFullWidthPanel ? "" : "border-l border-white/10"}`}>
-              {activeSection !== "control" ? (
-                renderRightPanel()
-              ) : (
+            <aside className={`z-[520] flex min-h-0 flex-col overflow-y-auto bg-[#0b1424]/96 shadow-2xl shadow-black/30 backdrop-blur-xl ${isFullWidthPanel ? "" : "border-l border-white/10"}`}>
+              {renderRightPanel()}
+              {activeSection === "__legacy_control" && (
                 <>
               <div className="border-b border-white/10 p-5">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-xs font-black uppercase tracking-[0.22em] text-red-300">Live Feed</p>
-                    <h2 className="mt-2 text-xl font-black text-white">Стрим событий</h2>
+                    <h2 className="mt-2 text-xl font-black text-white">Event stream</h2>
                   </div>
                   <div
                     className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right"
@@ -5162,7 +6102,7 @@ const AdminControlRoom = () => {
                       </p>
                       <p className="mt-1 text-xs font-semibold text-slate-400">
                         {adminStatisticsLoadedAt
-                          ? `Last updated ${new Date(adminStatisticsLoadedAt).toLocaleTimeString()}`
+                          ? `Last updated ${formatUpdatedTime(adminStatisticsLoadedAt)}`
                           : "Sign in with an administrator account to load real dashboard metrics."}
                       </p>
                     </div>
@@ -5232,7 +6172,7 @@ const AdminControlRoom = () => {
 
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
                 <div className="mb-4 flex items-center justify-between">
-                  <p className="text-sm font-black text-slate-300">Операции сейчас</p>
+                  <p className="text-sm font-black text-slate-300">Current operations</p>
                   <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-200">
                     {adminStatistics ? "Live API" : "Mock feed"}
                   </span>
@@ -5278,7 +6218,7 @@ const AdminControlRoom = () => {
                     <div>
                       <p className="text-sm font-black text-white">GeoFence Watch</p>
                       <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">
-                        Красные зоны мигают при попытке завершить аренду вне разрешённой парковки.
+                        Red zones warn riders when they try to finish a ride outside allowed parking.
                       </p>
                     </div>
                   </div>

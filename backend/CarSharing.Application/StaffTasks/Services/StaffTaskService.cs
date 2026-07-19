@@ -18,6 +18,7 @@ public sealed class StaffTaskService : IStaffTaskService
     private static readonly Error AssigneeMustBeStaff = new("StaffTask.AssigneeMustBeStaff", "Task assignee must be an active staff user.");
 
     private readonly IStaffTaskRepository _staffTaskRepository;
+    private readonly IStaffKpiEventRepository _staffKpiEventRepository;
     private readonly IChargingSessionRepository _chargingSessionRepository;
     private readonly IUserRepository _userRepository;
     private readonly ICurrentUserService _currentUser;
@@ -26,6 +27,7 @@ public sealed class StaffTaskService : IStaffTaskService
 
     public StaffTaskService(
         IStaffTaskRepository staffTaskRepository,
+        IStaffKpiEventRepository staffKpiEventRepository,
         IChargingSessionRepository chargingSessionRepository,
         IUserRepository userRepository,
         ICurrentUserService currentUser,
@@ -33,6 +35,7 @@ public sealed class StaffTaskService : IStaffTaskService
         IValidator<CreateStaffTaskRequest> createStaffTaskValidator)
     {
         _staffTaskRepository = staffTaskRepository;
+        _staffKpiEventRepository = staffKpiEventRepository;
         _chargingSessionRepository = chargingSessionRepository;
         _userRepository = userRepository;
         _currentUser = currentUser;
@@ -87,7 +90,8 @@ public sealed class StaffTaskService : IStaffTaskService
             request.VehicleId,
             request.Priority,
             request.DueAt,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            request.Type);
 
         await _staffTaskRepository.AddAsync(task, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -149,7 +153,28 @@ public sealed class StaffTaskService : IStaffTaskService
             return Result<StaffTaskDto>.Failure(Forbidden);
         }
 
-        task.ChangeStatus(request.Status, DateTime.UtcNow);
+        var previousStatus = task.Status;
+        var now = DateTime.UtcNow;
+        task.ChangeStatus(request.Status, now);
+        if (previousStatus != StaffTaskStatus.Done && request.Status == StaffTaskStatus.Done)
+        {
+            var kpiEventExists = await _staffKpiEventRepository.ExistsAsync(task.AssigneeId, task.Id, cancellationToken);
+            if (!kpiEventExists)
+            {
+                await _staffKpiEventRepository.AddAsync(
+                    StaffKpiEvent.Create(
+                        task.AssigneeId,
+                        StaffKpiEventType.ServiceTaskCompleted,
+                        task.Type,
+                        task.Id,
+                        task.Title,
+                        task.Description,
+                        now,
+                        task.CreatedAt,
+                        now),
+                    cancellationToken);
+            }
+        }
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<StaffTaskDto>.Success(Map(task));
@@ -180,6 +205,7 @@ public sealed class StaffTaskService : IStaffTaskService
         task.Description,
         task.AssigneeId,
         task.VehicleId,
+        task.Type,
         task.Priority,
         task.DueAt,
         task.Status,

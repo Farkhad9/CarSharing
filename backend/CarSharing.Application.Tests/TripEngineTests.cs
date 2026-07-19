@@ -173,6 +173,7 @@ public class TripEngineTests
         return new TripService(
             tripRepository,
             completionRepository,
+            new FakeStaffKpiEventRepository(),
             new FakeReservationRepository(reservation),
             new FakeVehicleRepository(vehicle),
             new FakePhotoStorage(),
@@ -298,6 +299,29 @@ public class TripEngineTests
         public Task AddAsync(TripCompletionRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeStaffKpiEventRepository : IStaffKpiEventRepository
+    {
+        public List<StaffKpiEvent> Events { get; } = [];
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(Events);
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetByStaffIdsAsync(
+            IReadOnlyCollection<Guid> staffUserIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(
+                Events.Where(kpiEvent => staffUserIds.Contains(kpiEvent.StaffUserId)).ToList());
+
+        public Task<bool> ExistsAsync(Guid staffUserId, Guid sourceId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Events.Any(kpiEvent => kpiEvent.StaffUserId == staffUserId && kpiEvent.SourceId == sourceId));
+
+        public Task AddAsync(StaffKpiEvent kpiEvent, CancellationToken cancellationToken = default)
+        {
+            Events.Add(kpiEvent);
             return Task.CompletedTask;
         }
     }

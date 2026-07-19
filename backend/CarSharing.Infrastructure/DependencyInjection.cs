@@ -34,6 +34,7 @@ public static class DependencyInjection
         services.AddScoped<IChargingStationRepository, ChargingStationRepository>();
         services.AddScoped<IChargingSessionRepository, ChargingSessionRepository>();
         services.AddScoped<IStaffTaskRepository, StaffTaskRepository>();
+        services.AddScoped<IStaffKpiEventRepository, StaffKpiEventRepository>();
         services.AddScoped<IInvoiceRepository, InvoiceRepository>();
         services.AddScoped<IAdminStatisticsRepository, AdminStatisticsRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();

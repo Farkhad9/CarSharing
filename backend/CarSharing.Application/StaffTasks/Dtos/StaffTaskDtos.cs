@@ -8,6 +8,7 @@ public sealed record StaffTaskDto(
     string Description,
     Guid AssigneeId,
     Guid? VehicleId,
+    StaffTaskType Type,
     StaffTaskPriority Priority,
     DateTime? DueAt,
     StaffTaskStatus Status,
@@ -20,7 +21,8 @@ public sealed record CreateStaffTaskRequest(
     Guid AssigneeId,
     Guid? VehicleId,
     StaffTaskPriority Priority,
-    DateTime? DueAt);
+    DateTime? DueAt,
+    StaffTaskType Type = StaffTaskType.General);
 
 public sealed record UpdateStaffTaskStatusRequest(StaffTaskStatus Status);
 

@@ -21,6 +21,7 @@ public class AppDbContext : DbContext
     public DbSet<ChargingStation> ChargingStations => Set<ChargingStation>();
     public DbSet<ChargingSession> ChargingSessions => Set<ChargingSession>();
     public DbSet<StaffTask> StaffTasks => Set<StaffTask>();
+    public DbSet<StaffKpiEvent> StaffKpiEvents => Set<StaffKpiEvent>();
     public DbSet<TripReview> TripReviews => Set<TripReview>();
     public DbSet<NewsletterSubscription> NewsletterSubscriptions => Set<NewsletterSubscription>();
 

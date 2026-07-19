@@ -122,6 +122,7 @@ public sealed class StaffTaskManagementTests
         var users = new UserRepo([staff, .. additionalUsers]);
         var service = new StaffTaskService(
             tasks,
+            new StaffKpiEventRepo(),
             new ChargingSessionRepo(),
             users,
             new CurrentUser(currentUserId ?? Guid.NewGuid(), currentRole),
@@ -169,6 +170,32 @@ public sealed class StaffTaskManagementTests
 
         public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+
+        public Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class StaffKpiEventRepo : IStaffKpiEventRepository
+    {
+        public List<StaffKpiEvent> Items { get; } = [];
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(Items);
+
+        public Task<IReadOnlyList<StaffKpiEvent>> GetByStaffIdsAsync(
+            IReadOnlyCollection<Guid> staffUserIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StaffKpiEvent>>(
+                Items.Where(kpiEvent => staffUserIds.Contains(kpiEvent.StaffUserId)).ToList());
+
+        public Task<bool> ExistsAsync(Guid staffUserId, Guid sourceId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.Any(kpiEvent => kpiEvent.StaffUserId == staffUserId && kpiEvent.SourceId == sourceId));
+
+        public Task AddAsync(StaffKpiEvent kpiEvent, CancellationToken cancellationToken = default)
+        {
+            Items.Add(kpiEvent);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class UserRepo(IReadOnlyList<User> users) : IUserRepository

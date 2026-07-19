@@ -1,4 +1,5 @@
 using CarSharing.Domain.Entities;
+using CarSharing.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -22,6 +23,10 @@ public sealed class StaffTaskConfiguration : IEntityTypeConfiguration<StaffTask>
 
         builder.Property(task => task.Priority)
             .IsRequired();
+
+        builder.Property(task => task.Type)
+            .IsRequired()
+            .HasDefaultValue(StaffTaskType.General);
 
         builder.Property(task => task.Status)
             .IsRequired();

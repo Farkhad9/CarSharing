@@ -42,6 +42,7 @@ public class TripService : ITripService
 
     private readonly ITripRepository _tripRepository;
     private readonly ITripCompletionRequestRepository _completionRequestRepository;
+    private readonly IStaffKpiEventRepository _staffKpiEventRepository;
     private readonly IReservationRepository _reservationRepository;
     private readonly IVehicleRepository _vehicleRepository;
     private readonly ITripPhotoStorage _tripPhotoStorage;
@@ -55,6 +56,7 @@ public class TripService : ITripService
     public TripService(
         ITripRepository tripRepository,
         ITripCompletionRequestRepository completionRequestRepository,
+        IStaffKpiEventRepository staffKpiEventRepository,
         IReservationRepository reservationRepository,
         IVehicleRepository vehicleRepository,
         ITripPhotoStorage tripPhotoStorage,
@@ -67,6 +69,7 @@ public class TripService : ITripService
     {
         _tripRepository = tripRepository;
         _completionRequestRepository = completionRequestRepository;
+        _staffKpiEventRepository = staffKpiEventRepository;
         _reservationRepository = reservationRepository;
         _vehicleRepository = vehicleRepository;
         _tripPhotoStorage = tripPhotoStorage;
@@ -415,6 +418,21 @@ public class TripService : ITripService
         request.AssignTo(reviewerId.Value);
         request.Approve(reviewerId.Value, now);
         trip.MarkAwaitingPayment();
+        if (_currentUserService.Role == UserRole.Staff)
+        {
+            await _staffKpiEventRepository.AddAsync(
+                StaffKpiEvent.Create(
+                    reviewerId.Value,
+                    StaffKpiEventType.TripPhotoApproved,
+                    StaffTaskType.PhotoVerification,
+                    request.Id,
+                    "Trip completion photo review",
+                    $"Approved completion photos for trip {trip.Id}.",
+                    now,
+                    request.RequestedAt,
+                    now),
+                cancellationToken);
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -454,8 +472,24 @@ public class TripService : ITripService
             return Result<TripCompletionRequestDto>.Failure(CompletionRequestNotPending);
         }
 
+        var now = DateTime.UtcNow;
         completionRequest.AssignTo(reviewerId.Value);
-        completionRequest.Reject(reviewerId.Value, DateTime.UtcNow, request.Reason);
+        completionRequest.Reject(reviewerId.Value, now, request.Reason);
+        if (_currentUserService.Role == UserRole.Staff)
+        {
+            await _staffKpiEventRepository.AddAsync(
+                StaffKpiEvent.Create(
+                    reviewerId.Value,
+                    StaffKpiEventType.TripPhotoRejected,
+                    StaffTaskType.PhotoVerification,
+                    completionRequest.Id,
+                    "Trip completion photo review",
+                    request.Reason,
+                    now,
+                    completionRequest.RequestedAt,
+                    now),
+                cancellationToken);
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

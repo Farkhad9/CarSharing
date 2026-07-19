@@ -12,6 +12,7 @@ public class StaffTask : BaseEntity
     public string Description { get; private set; } = null!;
     public Guid AssigneeId { get; private set; }
     public Guid? VehicleId { get; private set; }
+    public StaffTaskType Type { get; private set; } = StaffTaskType.General;
     public StaffTaskPriority Priority { get; private set; } = StaffTaskPriority.Medium;
     public DateTime? DueAt { get; private set; }
     public StaffTaskStatus Status { get; private set; } = StaffTaskStatus.Waiting;
@@ -25,7 +26,8 @@ public class StaffTask : BaseEntity
         Guid? vehicleId,
         StaffTaskPriority priority,
         DateTime? dueAt,
-        DateTime createdAt)
+        DateTime createdAt,
+        StaffTaskType type = StaffTaskType.General)
     {
         return new StaffTask
         {
@@ -34,6 +36,7 @@ public class StaffTask : BaseEntity
             Description = description.Trim(),
             AssigneeId = assigneeId,
             VehicleId = vehicleId,
+            Type = type,
             Priority = priority,
             DueAt = dueAt,
             Status = StaffTaskStatus.Waiting,

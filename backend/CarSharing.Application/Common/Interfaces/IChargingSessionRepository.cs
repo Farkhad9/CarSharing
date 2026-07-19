@@ -9,4 +9,5 @@ public interface IChargingSessionRepository
     Task<ChargingSession?> GetActiveByVehicleIdAsync(Guid vehicleId, CancellationToken cancellationToken = default);
     Task<ChargingSession?> GetActiveByStaffTaskIdAsync(Guid staffTaskId, CancellationToken cancellationToken = default);
     Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default);
+    Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default);
 }

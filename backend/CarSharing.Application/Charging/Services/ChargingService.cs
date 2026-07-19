@@ -124,6 +124,7 @@ public sealed class ChargingService : IChargingService
             var duplicateHasAssignedVehicles = await _stationRepository.HasAssignedVehiclesAsync(duplicateStation.Id, cancellationToken);
             if (!duplicateHasActiveSessions && !duplicateHasAssignedVehicles)
             {
+                await _sessionRepository.RemoveByStationIdAsync(duplicateStation.Id, cancellationToken);
                 _stationRepository.Remove(duplicateStation);
             }
         }
@@ -190,7 +191,8 @@ public sealed class ChargingService : IChargingService
             vehicle.Id,
             StaffTaskPriority.High,
             now.AddHours(4),
-            now);
+            now,
+            StaffTaskType.Charging);
 
         var session = ChargingSession.Start(
             vehicle,
@@ -379,6 +381,7 @@ public sealed class ChargingService : IChargingService
         task.Description,
         task.AssigneeId,
         task.VehicleId,
+        task.Type,
         task.Priority,
         task.DueAt,
         task.Status,

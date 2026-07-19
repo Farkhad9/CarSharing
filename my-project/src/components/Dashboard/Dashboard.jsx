@@ -12,7 +12,6 @@ import {
   FiFileText,
   FiHeadphones,
   FiLock,
-  FiMail,
   FiMapPin,
   FiMessageSquare,
   FiNavigation,
@@ -577,8 +576,6 @@ const Dashboard = ({ onLogout }) => {
 
   const recentTrips = useMemo(() => [], []);
 
-  const pendingVerification = getStoredJson("electroStreetPendingEmailVerification");
-
   const persistUser = (nextUser) => {
     setUser(nextUser);
     localStorage.setItem("electroStreetUser", JSON.stringify(nextUser));
@@ -618,6 +615,7 @@ const Dashboard = ({ onLogout }) => {
     }
 
     if (isRejected) {
+      if (hasPendingLocalSelection) return;
       setIdentityDocumentFiles({ license: null, passport: null });
       clearIdentityFileInputs();
       persistDocuments({
@@ -1461,17 +1459,6 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const verifyEmailNow = () => {
-    const verifiedUser = {
-      ...user,
-      emailVerified: true,
-      emailVerifiedAt: new Date().toISOString(),
-    };
-
-    localStorage.removeItem("electroStreetPendingEmailVerification");
-    persistUser(verifiedUser);
-  };
-
   const handleQuickSupportAction = (action) => {
     setActiveTab("support");
     setSupportDraft(action.draft);
@@ -1932,27 +1919,6 @@ const Dashboard = ({ onLogout }) => {
           </div>
         )}
 
-        {user.emailVerified === false && (
-          <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6">
-            <FiMail className="text-2xl text-amber-600" />
-            <h3 className="mt-4 text-xl font-black text-zinc-950">Verify email</h3>
-            <p className="mt-2 text-sm font-semibold leading-6 text-zinc-600">
-              Email verification is still required for the full booking and payment flow.
-            </p>
-            <button
-              type="button"
-              onClick={verifyEmailNow}
-              className="mt-5 rounded-2xl bg-zinc-950 px-5 py-3 text-sm font-black text-white transition hover:bg-zinc-800"
-            >
-              Verify email
-            </button>
-            {pendingVerification?.link && (
-              <a href={pendingVerification.link} className="mt-3 block break-all text-xs font-bold text-amber-700 underline">
-                Open email link
-              </a>
-            )}
-          </div>
-        )}
       </aside>
     </motion.div>
   );

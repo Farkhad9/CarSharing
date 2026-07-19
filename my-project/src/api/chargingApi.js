@@ -26,6 +26,33 @@ const sessionStatusByValue = {
   Completed: "completed",
 };
 
+const BAKU_STATION_LOCATIONS = [
+  { lat: 40.3777, lng: 49.8499 },
+  { lat: 40.3926, lng: 49.8742 },
+  { lat: 40.3612, lng: 49.8324 },
+  { lat: 40.4078, lng: 49.8617 },
+  { lat: 40.3719, lng: 49.9449 },
+];
+
+const isBakuCoordinate = (lat, lng) =>
+  Number.isFinite(lat) && Number.isFinite(lng) && lat >= 40.2 && lat <= 40.6 && lng >= 49.55 && lng <= 50.25;
+
+const hashKey = (value) =>
+  String(value || "")
+    .split("")
+    .reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0);
+
+const resolveStationLocation = (station) => {
+  const lat = Number(station.latitude ?? station.location?.lat);
+  const lng = Number(station.longitude ?? station.location?.lng);
+
+  if (isBakuCoordinate(lat, lng)) {
+    return { lat, lng };
+  }
+
+  return BAKU_STATION_LOCATIONS[hashKey(station.id || station.name) % BAKU_STATION_LOCATIONS.length];
+};
+
 export const normalizeChargingSession = (session) => {
   if (!session) return null;
 
@@ -58,6 +85,7 @@ export const normalizeChargingSessions = (sessions) =>
 
 export const normalizeChargingStation = (station) => {
   if (!station) return null;
+  const location = resolveStationLocation(station);
 
   return {
     ...station,
@@ -66,8 +94,8 @@ export const normalizeChargingStation = (station) => {
     location: {
       label: station.locationLabel || station.location?.label || "Baku",
       zone: station.zone || station.location?.zone || "City",
-      lat: Number(station.latitude ?? station.location?.lat ?? 40.3777),
-      lng: Number(station.longitude ?? station.location?.lng ?? 49.8499),
+      lat: location.lat,
+      lng: location.lng,
     },
     powerKw: Number(station.powerKw || 0),
     totalPorts: Number(station.totalPorts || 0),

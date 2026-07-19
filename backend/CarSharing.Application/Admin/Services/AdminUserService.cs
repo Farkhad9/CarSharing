@@ -21,6 +21,7 @@ public sealed class AdminUserService : IAdminUserService
     private static readonly Error CannotVerifyInternalUser = new("AdminUsers.CannotVerifyInternalUser", "Internal users do not use rider verification.");
 
     private readonly IUserRepository _userRepository;
+    private readonly IStaffKpiEventRepository _staffKpiEventRepository;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IPasswordHasher _passwordHasher;
@@ -32,6 +33,7 @@ public sealed class AdminUserService : IAdminUserService
 
     public AdminUserService(
         IUserRepository userRepository,
+        IStaffKpiEventRepository staffKpiEventRepository,
         ICurrentUserService currentUser,
         IUnitOfWork unitOfWork,
         IPasswordHasher passwordHasher,
@@ -42,6 +44,7 @@ public sealed class AdminUserService : IAdminUserService
         IValidator<BlockUserRequest> blockUserValidator)
     {
         _userRepository = userRepository;
+        _staffKpiEventRepository = staffKpiEventRepository;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
         _passwordHasher = passwordHasher;
@@ -333,6 +336,7 @@ public sealed class AdminUserService : IAdminUserService
             return Result<AdminUserDto>.Failure(CannotVerifyInternalUser);
         }
 
+        var now = DateTime.UtcNow;
         if (request.Status == UserVerificationStatus.Verified)
         {
             user.ApproveVerification();
@@ -344,6 +348,28 @@ public sealed class AdminUserService : IAdminUserService
         else
         {
             user.ResetVerificationToPending();
+        }
+
+        if (_currentUser.UserId.HasValue)
+        {
+            var eventType = request.Status switch
+            {
+                UserVerificationStatus.Verified => StaffKpiEventType.KycVerificationApproved,
+                UserVerificationStatus.Rejected => StaffKpiEventType.KycVerificationRejected,
+                _ => StaffKpiEventType.KycVerificationReset
+            };
+            await _staffKpiEventRepository.AddAsync(
+                StaffKpiEvent.Create(
+                    _currentUser.UserId.Value,
+                    eventType,
+                    StaffTaskType.Kyc,
+                    user.Id,
+                    $"KYC review for {user.FirstName} {user.LastName}".Trim(),
+                    $"Verification status changed to {request.Status}.",
+                    now,
+                    user.VerificationSubmittedAt,
+                    now),
+                cancellationToken);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);

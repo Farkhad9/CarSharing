@@ -1,19 +1,16 @@
-name: Frontend CI/CD
+name: Frontend CI Checks
 
 on:
   workflow_dispatch:
 
   push:
     branches:
-      - main
-      - "feat/**"
+      - "**"
     paths:
       - "my-project/**"
       - ".github/workflows/frontend-ci.yml"
 
   pull_request:
-    branches:
-      - main
     paths:
       - "my-project/**"
       - ".github/workflows/frontend-ci.yml"
@@ -29,6 +26,7 @@ jobs:
   build-frontend:
     name: Lint and build frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     defaults:
       run:
