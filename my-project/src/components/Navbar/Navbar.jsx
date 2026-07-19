@@ -103,6 +103,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                     from { transform: translateX(-100%); }
                     to { transform: translateX(100%); }
                 }
+
             `}</style>
 
             <nav className="border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-40">

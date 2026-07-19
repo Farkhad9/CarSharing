@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import Navbar from "./components/Navbar/Navbar";
 import Hero from "./components/Hero/Hero";
-import BrandsBanner from "./components/BrandsBanner/BrandsBanner"; 
+import BrandsBanner from "./components/BrandsBanner/BrandsBanner";
 import Location from "./components/Location/Location";
 import Footer from "./components/Footer/Footer";
 import FleetSection from "./components/FleetSection/FleetSection";
@@ -32,6 +32,14 @@ const App = () => {
   const isAdminPage = window.location.pathname === "/admin";
   const isStaffLoginPage = window.location.pathname === "/staff-login";
   const isStaffPage = window.location.pathname === "/staff";
+  const hasStaffWorkspaceSession = () => {
+    try {
+      const session = JSON.parse(localStorage.getItem("electroStreetStaffSession") || "null");
+      return Boolean(localStorage.getItem("electroStreetAccessToken") && session?.id && session?.role === "staff");
+    } catch {
+      return false;
+    }
+  };
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [emailGateMessage, setEmailGateMessage] = useState("");
   const [showScrollToTop, setShowScrollToTop] = useState(false);
@@ -292,7 +300,7 @@ const App = () => {
   }
 
   if (isStaffPage) {
-    return <StaffDashboard />;
+    return hasStaffWorkspaceSession() ? <StaffDashboard /> : <StaffLogin />;
   }
 
   return isAuthPage ? (
@@ -329,7 +337,7 @@ const App = () => {
       )}
       <Hero onReserveClick={handleFleetScroll} onFeaturedReserve={handleOpenVehicle} />
       <BrandsBanner />
-      <Location />
+      <Location onVehicleSelect={handleOpenVehicle} />
       <FleetSection onVehicleSelect={handleOpenVehicle} onUserChange={setUser} />
       <WhyElectroStreet />
       <UserComments />

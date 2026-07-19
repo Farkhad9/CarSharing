@@ -1,5 +1,10 @@
 import { FiMapPin, FiClock, FiActivity, FiNavigation } from 'react-icons/fi';
 import { useEffect, useRef, useState } from "react";
+import { homeApi } from "../../api/homeApi";
+import { useUserLocation } from "../../hooks/useUserLocation";
+import { useVehicles } from "../../hooks/useVehicles";
+import { VEHICLE_STATUSES } from "../../data/statuses";
+import { getDistanceMeters, getWalkMinutes } from "../../utils/pickupMetrics";
 import EVMap from "../EVMap/EVMap";
 
 const CountUpValue = ({ prefix = "", suffix = "", target }) => {
@@ -35,11 +40,54 @@ const CountUpValue = ({ prefix = "", suffix = "", target }) => {
   );
 };
 
-const Location = () => {
+const Location = ({ onVehicleSelect }) => {
+  const { vehicles, error: vehiclesError } = useVehicles();
+  const { userLocation, hasResolvedUserLocation } = useUserLocation();
+  const [summary, setSummary] = useState(null);
+  const [summaryError, setSummaryError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    homeApi.getSummary()
+      .then((data) => {
+        if (isMounted) {
+          setSummary(data);
+          setSummaryError("");
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setSummaryError(error.message || "Fleet statistics could not be loaded.");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const availableVehicles = vehicles.filter((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE);
+  const nearestAvailableVehicle = hasResolvedUserLocation
+    ? availableVehicles
+        .map((vehicle) => {
+          const distanceMeters = getDistanceMeters(userLocation, [vehicle.location?.lat, vehicle.location?.lng]);
+          return {
+            ...vehicle,
+            distanceMeters,
+            walkTimeMinutes: getWalkMinutes(distanceMeters),
+          };
+        })
+        .filter((vehicle) => Number.isFinite(vehicle.distanceMeters))
+        .sort((first, second) => first.distanceMeters - second.distanceMeters)[0]
+    : null;
+  const nearestWalkMinutes = nearestAvailableVehicle?.walkTimeMinutes ?? 0;
+  const activeCarsNow = summary?.availableVehicles ?? availableVehicles.length;
+  const coveragePercent = summary?.cityCenterCoveragePercent ?? 0;
   const stats = [
     {
       icon: FiActivity,
-      target: 6,
+      target: activeCarsNow,
       label: "Active Cars Now",
       desc: "Available around you"
     },
@@ -47,16 +95,16 @@ const Location = () => {
       icon: FiClock,
       prefix: "~",
       suffix: " min",
-      target: 3,
-      label: "Average Wait",
-      desc: "Short walk to unlock"
+      target: nearestWalkMinutes,
+      label: "Nearest Car",
+      desc: hasResolvedUserLocation ? "Closest available car" : "Detecting your location"
     },
     {
       icon: FiMapPin,
       suffix: "%",
-      target: 98,
+      target: coveragePercent,
       label: "City Center Cover",
-      desc: "All Baku hotspots"
+      desc: `${summary?.coveredZones ?? 0} Baku zones online`
     }
   ];
 
@@ -93,6 +141,11 @@ const Location = () => {
 
             {/* Блок со статистикой премиум-уровня */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
+              {(summaryError || vehiclesError) && (
+                <div className="sm:col-span-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  {summaryError || vehiclesError}
+                </div>
+              )}
               {stats.map((stat, idx) => {
                 const Icon = stat.icon;
                 return (
@@ -130,12 +183,17 @@ const Location = () => {
 
             {/* Главная кнопка действия (CTA) */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-              <button className="group inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-300 bg-red-600 rounded-full hover:bg-red-500 hover:shadow-[0_10px_25px_-5px_rgba(220,38,38,0.4)]">
+              <button
+                type="button"
+                onClick={() => nearestAvailableVehicle && onVehicleSelect?.(nearestAvailableVehicle)}
+                disabled={!nearestAvailableVehicle}
+                className="group inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-300 bg-red-600 rounded-full hover:bg-red-500 hover:shadow-[0_10px_25px_-5px_rgba(220,38,38,0.4)] disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
+              >
                 <FiNavigation className="mr-2 w-5 h-5 transition-transform duration-300 group-hover:rotate-45" />
                 <span>Find Nearby Car</span>
               </button>
               <span className="text-xs font-semibold text-gray-400 sm:pl-2">
-                Currently active in Baku - 6 cars online
+                Currently active in Baku - {activeCarsNow} cars online
               </span>
             </div>
 

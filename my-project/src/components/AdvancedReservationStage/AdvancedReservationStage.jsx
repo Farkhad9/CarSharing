@@ -11,7 +11,6 @@ import {
     FiMap,
     FiNavigation,
     FiPower,
-    FiTag,
     FiUserCheck,
     FiUsers,
     FiX,
@@ -21,6 +20,13 @@ import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
+import {
+    DEFAULT_PICKUP_USER_LOCATION,
+    formatPickupDistance,
+    getDistanceMeters,
+    getWalkingRouteUrl,
+    getWalkMinutes,
+} from "../../utils/pickupMetrics";
 import { reservationApi } from "../../api/reservationApi";
 
 import markerIcon from "leaflet/dist/images/marker-icon.png";
@@ -42,30 +48,6 @@ const userIcon = L.divIcon({
 
 L.Marker.prototype.options.icon = defaultIcon;
 
-const WALKING_SPEED_METERS_PER_MINUTE = 80;
-const toRadians = (degrees) => degrees * (Math.PI / 180);
-
-const getDistanceMeters = ([fromLat, fromLng], [toLat, toLng]) => {
-    const earthRadiusMeters = 6371000;
-    const deltaLat = toRadians(toLat - fromLat);
-    const deltaLng = toRadians(toLng - fromLng);
-
-    const a =
-        Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-        Math.cos(toRadians(fromLat)) *
-        Math.cos(toRadians(toLat)) *
-        Math.sin(deltaLng / 2) *
-        Math.sin(deltaLng / 2);
-
-    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const formatDistance = (meters) =>
-    meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
-
-const getWalkMinutes = (meters) =>
-    Math.max(1, Math.round(meters / WALKING_SPEED_METERS_PER_MINUTE));
-
 const RouteBounds = ({ userLocation, carLocation, routePositions, isRouteVisible }) => {
     const map = useMap();
 
@@ -76,16 +58,12 @@ const RouteBounds = ({ userLocation, carLocation, routePositions, isRouteVisible
             }, delay)
         );
 
-        if (!isRouteVisible) {
-            return () => resizeTimers.forEach((timer) => window.clearTimeout(timer));
-        }
-
         const fitTimer = window.setTimeout(() => {
             const boundsSource = routePositions.length > 1 ? routePositions : [userLocation, carLocation];
             map.fitBounds(boundsSource, {
                 paddingTopLeft: [56, 86],
                 paddingBottomRight: [56, 56],
-                maxZoom: 17,
+                maxZoom: isRouteVisible ? 17 : 14,
             });
         }, 320);
 
@@ -98,9 +76,9 @@ const RouteBounds = ({ userLocation, carLocation, routePositions, isRouteVisible
     return null;
 };
 
-const LocationWatcher = ({ isRouteVisible, onLocationChange, onLocationError }) => {
+const LocationWatcher = ({ isEnabled = true, onLocationChange, onLocationError }) => {
     useEffect(() => {
-        if (!isRouteVisible || !("geolocation" in navigator)) {
+        if (!isEnabled || !("geolocation" in navigator)) {
             return;
         }
 
@@ -119,14 +97,14 @@ const LocationWatcher = ({ isRouteVisible, onLocationChange, onLocationError }) 
         );
 
         return () => navigator.geolocation.clearWatch(watchId);
-    }, [isRouteVisible, onLocationChange, onLocationError]);
+    }, [isEnabled, onLocationChange, onLocationError]);
 
     return null;
 };
 
 const getVehiclePosition = (vehicle) => [
-    vehicle.location?.lat || 40.3772,
-    vehicle.location?.lng || 49.8475,
+    vehicle.location?.lat || DEFAULT_PICKUP_USER_LOCATION[0],
+    vehicle.location?.lng || DEFAULT_PICKUP_USER_LOCATION[1],
 ];
 
 const getStoredUser = () => {
@@ -141,9 +119,6 @@ const areRideDocumentsApproved = () => {
     const verificationStatus = getStoredUser()?.verificationStatus;
     return verificationStatus === 2 || String(verificationStatus).toLowerCase() === "verified";
 };
-
-const getWalkingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
-    `https://router.project-osrm.org/route/v1/foot/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=false`;
 
 const VehicleGalleryViewer = ({ vehicle }) => {
     const galleryImages = Array.isArray(vehicle.galleryImages) && vehicle.galleryImages.length
@@ -212,7 +187,7 @@ const cardReveal = {
     visible: { opacity: 1, y: 0, scale: 1 },
 };
 
-const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 49.8475] }) => {
+const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PICKUP_USER_LOCATION }) => {
     const currentUser = useMemo(() => {
         try {
             return JSON.parse(localStorage.getItem("electroStreetUser") || "null");
@@ -229,17 +204,15 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         }
     }, []);
     const [passengerCount, setPassengerCount] = useState(1);
-    const [promoCode, setPromoCode] = useState("");
-    const [promoMessage, setPromoMessage] = useState("");
-    const [isPromoApplied, setIsPromoApplied] = useState(false);
-    const [isFirstRide, setIsFirstRide] = useState(true);
     const [displayedRate, setDisplayedRate] = useState(0);
     const [isReservationConfirmed, setIsReservationConfirmed] = useState(false);
     const [reservationError, setReservationError] = useState("");
     const [isCreatingReservation, setIsCreatingReservation] = useState(false);
     const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("card");
     const [isRouteVisible, setIsRouteVisible] = useState(false);
+    const [routeMapReadyVehicleId, setRouteMapReadyVehicleId] = useState(null);
     const [currentUserLocation, setCurrentUserLocation] = useState(userLocation);
+    const [hasResolvedUserLocation, setHasResolvedUserLocation] = useState(false);
     const [locationMessage, setLocationMessage] = useState("");
     const [routeState, setRouteState] = useState({
         positions: [],
@@ -262,18 +235,26 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         typeof routeState.distanceMeters === "number" && typeof routeState.initialDistanceMeters === "number"
             ? Math.max(0, Math.min(100, (routeState.distanceMeters / routeState.initialDistanceMeters) * 100))
             : 100;
-    const walkMinutes = routeState.durationSeconds
-        ? Math.max(1, Math.round(routeState.durationSeconds / 60))
-        : getWalkMinutes(routeDistanceMeters);
+    const walkMinutes = getWalkMinutes(routeDistanceMeters);
     const routePositions = useMemo(
         () => (routeState.positions.length > 1 ? routeState.positions : [currentUserLocation, carLocation]),
         [carLocation, currentUserLocation, routeState.positions]
     );
+    const pickupRouteLabel = !hasResolvedUserLocation
+        ? "Detecting your location..."
+        : routeState.status === "loading" || routeState.status === "idle"
+            ? "Loading route..."
+            : `${formatPickupDistance(routeDistanceMeters)}, about ${walkMinutes} min walk`;
+    const pickupRouteBadge = !hasResolvedUserLocation
+        ? "Detecting location"
+        : routeState.status === "loading" || routeState.status === "idle"
+            ? "Loading route"
+            : `${walkMinutes} min walk`;
     const specs = vehicle.specs || {};
     const isOverCapacity = passengerCount > vehicle.seats;
     const baseRate = Number(vehicle.pricePerMinute || 0);
-    const promoRate = Number((baseRate * 0.9).toFixed(2));
-    const finalRate = isPromoApplied ? promoRate : baseRate;
+    const finalRate = baseRate;
+    const isRouteMapReady = routeMapReadyVehicleId === vehicle.id;
     useEffect(() => {
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = "hidden";
@@ -282,6 +263,14 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             document.body.style.overflow = previousOverflow;
         };
     }, []);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            setRouteMapReadyVehicleId(vehicle.id);
+        }, 240);
+
+        return () => window.clearTimeout(timer);
+    }, [vehicle.id]);
 
     useEffect(() => {
         let animationFrame;
@@ -306,24 +295,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
 
         return () => cancelAnimationFrame(animationFrame);
     }, [finalRate]);
-
-    const handleApplyPromo = () => {
-        const normalizedCode = promoCode.trim().toLowerCase();
-
-        if (!isFirstRide) {
-            setPromoMessage("Promo is available only for the first ride.");
-            return;
-        }
-
-        if (normalizedCode !== "farhad") {
-            setPromoMessage("Promo code was not found.");
-            return;
-        }
-
-        setIsPromoApplied(true);
-        setIsFirstRide(false);
-        setPromoMessage('Promo "Farhad" applied. Your first ride gets 10% off.');
-    };
 
     const handleConfirmReservation = async () => {
         if (currentUser?.emailVerified === false) {
@@ -371,10 +342,12 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
 
     const handleLocationChange = useCallback((nextLocation) => {
         setCurrentUserLocation(nextLocation);
+        setHasResolvedUserLocation(true);
         setLocationMessage("");
     }, []);
 
     const handleLocationError = useCallback((message) => {
+        setHasResolvedUserLocation(true);
         setLocationMessage(message);
     }, []);
 
@@ -385,13 +358,14 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                 ...currentRoute,
                 initialDistanceMeters: null,
             }));
+            setHasResolvedUserLocation(false);
         });
 
         return () => cancelAnimationFrame(resetFrame);
     }, [userLocation, vehicle.id]);
 
     useEffect(() => {
-        if (!isRouteVisible) {
+        if (!hasResolvedUserLocation) {
             return undefined;
         }
 
@@ -429,7 +403,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                         typeof currentRoute.initialDistanceMeters === "number"
                             ? Math.max(currentRoute.initialDistanceMeters, route.distance)
                             : route.distance,
-                    durationSeconds: route.duration,
+                    durationSeconds: null,
                     status: "ready",
                     error: "",
                 }));
@@ -452,7 +426,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
         loadRoute();
 
         return () => controller.abort();
-    }, [carLocation, currentUserLocation, isRouteVisible]);
+    }, [carLocation, currentUserLocation, hasResolvedUserLocation]);
 
     const specCards = [
         { icon: FiZap, label: "0-100 km/h", value: specs.acceleration || "3.8 sec" },
@@ -484,7 +458,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
 
     return (
         <motion.div
-            className="fixed inset-0 z-[100] overflow-y-auto bg-zinc-950/90 backdrop-blur-xl"
+            className="fixed inset-0 z-[2400] overflow-y-auto bg-zinc-950/90 backdrop-blur-xl"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -607,39 +581,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             width: 46px;
           }
 
-          .promo-control {
-            align-items: center;
-            background: #f8fafc;
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            display: flex;
-            gap: 12px;
-            padding: 8px;
-            transition: border-color 0.22s ease, box-shadow 0.22s ease, background-color 0.22s ease;
-          }
-
-          .promo-control:focus-within {
-            background: #ffffff;
-            border-color: #e53e3e;
-            box-shadow: 0 0 0 5px rgba(229, 62, 62, 0.1);
-          }
-
-          .promo-control input {
-            background: transparent;
-            color: #111827;
-            flex: 1;
-            font-size: 14px;
-            font-weight: 800;
-            min-width: 0;
-            outline: none;
-            padding: 12px 0;
-          }
-
-          .promo-control input::placeholder {
-            color: #9ca3af;
-          }
-
-          .promo-apply-button,
           .route-pill-button {
             background: #050505;
             border-radius: 12px;
@@ -653,18 +594,10 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
             transition: background-color 0.22s ease, transform 0.22s ease, box-shadow 0.22s ease;
           }
 
-          .promo-apply-button:hover,
           .route-pill-button:hover {
             background: #e53e3e;
             box-shadow: 0 14px 26px rgba(229, 62, 62, 0.2);
             transform: translateY(-1px);
-          }
-
-          .promo-apply-button:disabled {
-            background: #d1d5db;
-            box-shadow: none;
-            cursor: default;
-            transform: none;
           }
 
           .btn-12,
@@ -947,7 +880,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                 <button
                     type="button"
                     onClick={onClose}
-                    className="reservation-close-button fixed right-5 top-5 z-[120]"
+                    className="reservation-close-button fixed right-5 top-5 z-[2410]"
                     aria-label="Close reservation"
                 >
                     <FiX className="text-xl" />
@@ -1073,7 +1006,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                         visible: { transition: { staggerChildren: 0.08, delayChildren: 0.22 } },
                     }}
                 >
-                    <div className="mx-auto flex min-h-full max-w-xl flex-col justify-between">
+                    <div className="mx-auto flex min-h-full max-w-xl flex-col gap-6">
                         <div className="space-y-6">
                             <motion.div
                                 className="reservation-panel-card"
@@ -1128,38 +1061,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                             </motion.div>
 
                             <motion.div
-                                className="reservation-panel-card"
-                                variants={cardReveal}
-                                transition={{ duration: 0.38, ease: "easeOut" }}
-                            >
-                                <label className="mb-3 block text-xs font-black uppercase tracking-[0.18em] text-gray-400">
-                                    First ride promo
-                                </label>
-                                <div className="promo-control">
-                                    <FiTag className="text-xl text-gray-400" />
-                                    <input
-                                        type="text"
-                                        value={promoCode}
-                                        onChange={(event) => setPromoCode(event.target.value)}
-                                        placeholder="Enter promo code"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={handleApplyPromo}
-                                        disabled={isPromoApplied}
-                                        className="promo-apply-button"
-                                    >
-                                        Apply
-                                    </button>
-                                </div>
-                                {promoMessage && (
-                                    <p className={`mt-3 text-xs font-bold ${isPromoApplied ? "text-emerald-600" : "text-red-600"}`}>
-                                        {promoMessage}
-                                    </p>
-                                )}
-                            </motion.div>
-
-                            <motion.div
                                 className="overflow-hidden rounded-[18px] border border-gray-200 bg-white shadow-[0_16px_42px_rgba(15,23,42,0.04)]"
                                 variants={cardReveal}
                                 transition={{ duration: 0.38, ease: "easeOut" }}
@@ -1174,7 +1075,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                             <FiMap className="text-[#E53E3E]" /> Pickup route
                                         </span>
                                         <span className="mt-1 block text-xs font-bold text-gray-400">
-                                            {formatDistance(routeDistanceMeters)}, about {walkMinutes} min walk
+                                            {pickupRouteLabel}
                                         </span>
                                         {isRouteVisible && (
                                             <span className="mt-3 block h-1.5 w-36 overflow-hidden rounded-full bg-gray-100">
@@ -1191,44 +1092,54 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                 </button>
 
                                 <div className={`relative transition-all duration-500 ${isRouteVisible ? "h-80" : "h-44"}`}>
-                                    <MapContainer
-                                        center={userLocation}
-                                        zoom={14}
-                                        scrollWheelZoom
-                                        zoomControl
-                                        dragging
-                                        doubleClickZoom
-                                        touchZoom
-                                        className="h-full w-full"
-                                    >
-                                        <LocationWatcher
-                                            isRouteVisible={isRouteVisible}
-                                            onLocationChange={handleLocationChange}
-                                            onLocationError={handleLocationError}
-                                        />
-                                        <RouteBounds
-                                            userLocation={currentUserLocation}
-                                            carLocation={carLocation}
-                                            routePositions={routePositions}
-                                            isRouteVisible={isRouteVisible}
-                                        />
-                                        <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
-                                        <Marker position={currentUserLocation} icon={userIcon}>
-                                            <Popup>Your location</Popup>
-                                        </Marker>
-                                        <Marker position={carLocation}>
-                                            <Popup>
-                                                {vehicle.brand} {vehicle.model}
-                                            </Popup>
-                                        </Marker>
-                                        {isRouteVisible && (
-                                            <Polyline positions={routePositions} color="#E53E3E" weight={5} opacity={0.9} />
-                                        )}
-                                    </MapContainer>
+                                    {isRouteMapReady ? (
+                                        <MapContainer
+                                            center={userLocation}
+                                            zoom={14}
+                                            scrollWheelZoom
+                                            zoomControl
+                                            dragging
+                                            doubleClickZoom
+                                            touchZoom
+                                            className="h-full w-full"
+                                        >
+                                            <LocationWatcher
+                                                isEnabled
+                                                onLocationChange={handleLocationChange}
+                                                onLocationError={handleLocationError}
+                                            />
+                                            <RouteBounds
+                                                userLocation={currentUserLocation}
+                                                carLocation={carLocation}
+                                                routePositions={routePositions}
+                                                isRouteVisible={isRouteVisible}
+                                            />
+                                            <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
+                                            {hasResolvedUserLocation && (
+                                                <Marker position={currentUserLocation} icon={userIcon}>
+                                                    <Popup>Your location</Popup>
+                                                </Marker>
+                                            )}
+                                            <Marker position={carLocation}>
+                                                <Popup>
+                                                    {vehicle.brand} {vehicle.model}
+                                                </Popup>
+                                            </Marker>
+                                            {isRouteVisible && (
+                                                <Polyline positions={routePositions} color="#E53E3E" weight={5} opacity={0.9} />
+                                            )}
+                                        </MapContainer>
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#f8fafc,#eef2f7)]">
+                                            <div className="rounded-2xl bg-white/85 px-4 py-3 text-xs font-black uppercase tracking-[0.16em] text-gray-400 shadow-sm">
+                                                Preparing map
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div className="pointer-events-none absolute left-4 top-4 z-[500] rounded-lg bg-zinc-950/90 px-3 py-2 text-white">
                                         <p className="flex items-center gap-2 text-[10px] font-black uppercase">
-                                            <FiClock /> {routeState.status === "loading" ? "Loading route" : `${walkMinutes} min walk`}
+                                            <FiClock /> {pickupRouteBadge}
                                         </p>
                                         {routeState.error && (
                                             <p className="mt-1 max-w-40 text-[10px] font-bold normal-case text-white/75">
@@ -1321,11 +1232,6 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = [40.3772, 4
                                     </p>
                                 </div>
                                 <div className="text-right">
-                                    {isPromoApplied && (
-                                        <span className="mr-2 text-sm font-bold text-gray-300 line-through">
-                                            {baseRate.toFixed(2)} AZN
-                                        </span>
-                                    )}
                                     <span className="text-3xl font-black text-gray-950">
                                         {displayedRate.toFixed(2)}
                                     </span>

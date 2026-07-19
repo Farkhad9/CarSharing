@@ -36,11 +36,19 @@ import { paymentApi } from "../../api/paymentApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { reservationApi } from "../../api/reservationApi";
 import { tripApi } from "../../api/tripApi";
+import { tripReviewsApi } from "../../api/tripReviewsApi";
 import { userApi } from "../../api/userApi";
 import { vehicleApi } from "../../api/vehicleApi";
+import {
+  DEFAULT_PICKUP_USER_LOCATION,
+  formatPickupDistance,
+  getDistanceMeters,
+  getWalkingRouteUrl,
+  getWalkMinutes,
+} from "../../utils/pickupMetrics";
 import { RESERVATION_SECONDS } from "../../utils/reservations";
 
-const DEFAULT_USER_LOCATION = [40.3772, 49.8475];
+const DEFAULT_USER_LOCATION = DEFAULT_PICKUP_USER_LOCATION;
 const TRIP_PHOTO_ANGLES = [
   { id: "front", label: "Front", hint: "Full front side of the car" },
   { id: "rear", label: "Rear", hint: "Full rear side of the car" },
@@ -65,6 +73,7 @@ const USER_VERIFICATION_STATUS = {
 
 const DASHBOARD_TAB_STORAGE_KEY = "electroStreetDashboardActiveTab";
 const AUTO_PAY_TRIP_STORAGE_KEY = "electroStreetAutoPayTripId";
+const PENDING_TRIP_REVIEW_STORAGE_KEY = "electroStreetPendingTripReview";
 const LEGACY_DOCUMENTS_STORAGE_KEY = "electroStreetDocuments";
 const getDocumentsStorageKey = (userId) => `${LEGACY_DOCUMENTS_STORAGE_KEY}:${userId || "anonymous"}`;
 const EMPTY_DOCUMENTS = {
@@ -103,7 +112,10 @@ const tabs = [
 ];
 
 const getInitialDashboardTab = () => {
-  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("stripe") === "success") return "trip";
+
+  const requestedTab = params.get("tab");
   if (tabs.some((tab) => tab.id === requestedTab)) return requestedTab;
 
   const navigationType = window.performance?.getEntriesByType?.("navigation")?.[0]?.type;
@@ -113,6 +125,15 @@ const getInitialDashboardTab = () => {
   }
 
   return "trip";
+};
+
+const readPendingTripReview = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PENDING_TRIP_REVIEW_STORAGE_KEY) || "null");
+    return parsed?.tripId ? parsed : null;
+  } catch {
+    return null;
+  }
 };
 
 const panelMotion = {
@@ -277,20 +298,6 @@ const getReservationVehicle = (reservation, backendVehicles = []) => {
   };
 };
 
-const getStoredReservations = () => [];
-
-const migrateLegacyReservations = (reservations) =>
-  reservations.map((reservation) =>
-    reservation?.unlockedAt && !reservation?.tripStartedAt
-      ? {
-          ...reservation,
-          tripStartedAt: reservation.unlockedAt,
-          billingStartedAt: reservation.billingStartedAt || reservation.unlockedAt,
-          tripStatus: reservation.tripStatus || "active",
-        }
-      : reservation
-  );
-
 const mapBackendRideState = ({ reservations, activeTrips, vehicles }) => {
   const mappedReservations = (Array.isArray(reservations) ? reservations : []).map((reservation) => {
     const vehicle = vehicles.find((item) => item.id === reservation.vehicleId);
@@ -363,9 +370,6 @@ const getVehiclePosition = (vehicle) => [
   vehicle?.location?.lng || DEFAULT_USER_LOCATION[1],
 ];
 
-const getWalkingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
-  `https://router.project-osrm.org/route/v1/foot/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=false`;
-
 const ReservationMapBounds = ({ points }) => {
   const map = useMap();
 
@@ -403,7 +407,7 @@ const Dashboard = ({ onLogout }) => {
       emailVerified: true,
     })
   );
-  const [reservations, setReservations] = useState(() => migrateLegacyReservations(getStoredReservations()));
+  const [reservations, setReservations] = useState([]);
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [activeTrip, setActiveTrip] = useState(null);
   const [activeTrips, setActiveTrips] = useState([]);
@@ -458,6 +462,7 @@ const Dashboard = ({ onLogout }) => {
   const [tripNotice, setTripNotice] = useState("");
   const [timerNow, setTimerNow] = useState(() => Date.now());
   const [userLocation, setUserLocation] = useState(DEFAULT_USER_LOCATION);
+  const [hasResolvedUserLocation, setHasResolvedUserLocation] = useState(() => !("geolocation" in navigator));
   const [routeStates, setRouteStates] = useState({});
   const [selectedMapReservationId, setSelectedMapReservationId] = useState(null);
   const [cancelReservationTarget, setCancelReservationTarget] = useState(null);
@@ -481,6 +486,8 @@ const Dashboard = ({ onLogout }) => {
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState("");
   const [reviewError, setReviewError] = useState("");
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [paymentSuccessDialog, setPaymentSuccessDialog] = useState(null);
   const { confirm, dialog } = useConfirmDialog();
 
   const licenseInputRef = useRef(null);
@@ -728,8 +735,6 @@ const Dashboard = ({ onLogout }) => {
         activeTrips: nextActiveTrips,
         vehicles: Array.isArray(vehicles) ? vehicles : [],
       }));
-      localStorage.removeItem("reservedVehicle");
-      localStorage.removeItem("reservedVehicles");
 
       const errors = [vehiclesResult, reservationsResult, tripResult]
         .filter((result) => result.status === "rejected")
@@ -790,8 +795,31 @@ const Dashboard = ({ onLogout }) => {
       loadRideState({ silent: true });
       loadPayments();
       const stripeResult = new URLSearchParams(window.location.search).get("stripe");
-      if (stripeResult === "success") setTripNotice("Card payment was accepted. Balance will update after confirmation.");
+      if (stripeResult === "success") {
+        const pendingReview = readPendingTripReview();
+        setTripNotice("Card payment was accepted. Balance will update after confirmation.");
+        if (pendingReview) {
+          setReviewTrip({
+            tripId: pendingReview.tripId,
+            vehicleName: pendingReview.vehicleName || "your EV",
+            paymentMethod: "card",
+          });
+          setReviewRating(5);
+          setReviewComment("");
+          setReviewError("");
+        } else {
+          setPaymentSuccessDialog({ source: "card" });
+        }
+      }
       if (stripeResult === "cancelled") setPaymentError("Card checkout was cancelled. Your balance was not changed.");
+      if (stripeResult) {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("stripe");
+        if (cleanUrl.searchParams.get("tab") === "payments") {
+          cleanUrl.searchParams.delete("tab");
+        }
+        window.history.replaceState({}, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+      }
     }, 0);
     return () => window.clearTimeout(timer);
     // Payment state is loaded once when the dashboard opens or returns from card checkout.
@@ -811,23 +839,6 @@ const Dashboard = ({ onLogout }) => {
   }, []);
 
   useEffect(() => {
-    const syncReservations = (event) => {
-      if (
-        !event ||
-        event.key === "reservedVehicles"
-      ) {
-        loadRideState();
-      }
-    };
-
-    window.addEventListener("storage", syncReservations);
-
-    return () => {
-      window.removeEventListener("storage", syncReservations);
-    };
-  }, []);
-
-  useEffect(() => {
     if (!reservations.length) return undefined;
 
     const interval = window.setInterval(() => {
@@ -838,14 +849,18 @@ const Dashboard = ({ onLogout }) => {
   }, [reservations.length]);
 
   useEffect(() => {
-    if (!("geolocation" in navigator)) return undefined;
+    if (!("geolocation" in navigator)) {
+      return undefined;
+    }
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         setUserLocation([position.coords.latitude, position.coords.longitude]);
+        setHasResolvedUserLocation(true);
       },
       () => {
         setUserLocation(DEFAULT_USER_LOCATION);
+        setHasResolvedUserLocation(true);
       },
       {
         enableHighAccuracy: true,
@@ -877,11 +892,16 @@ const Dashboard = ({ onLogout }) => {
       return () => window.clearTimeout(clearRouteTimer);
     }
 
+    if (!hasResolvedUserLocation) {
+      return undefined;
+    }
+
     const controllers = [];
 
     activeReservations
       .filter((vehicle) =>
         vehicle?.reservationId &&
+        !vehicle.isRideActive &&
         Number.isFinite(Number(vehicle?.latitude)) &&
         Number.isFinite(Number(vehicle?.longitude))
       )
@@ -923,7 +943,7 @@ const Dashboard = ({ onLogout }) => {
             [vehicle.reservationId]: {
               positions: coordinates.map(([lng, lat]) => [lat, lng]),
               distanceMeters: route.distance,
-              durationSeconds: route.duration,
+              durationSeconds: null,
               status: "ready",
               error: "",
             },
@@ -948,7 +968,7 @@ const Dashboard = ({ onLogout }) => {
     return () => {
       controllers.forEach((controller) => controller.abort());
     };
-  }, [activeReservations, userLocation]);
+  }, [activeReservations, hasResolvedUserLocation, userLocation]);
 
   useEffect(() => {
     if (!supportTickets.some((ticket) => ticket.id === activeSupportTicketId) && supportTickets[0]) {
@@ -1134,7 +1154,7 @@ const Dashboard = ({ onLogout }) => {
       const trip = await tripApi.start(reservationId);
       setActiveTrip(trip);
       await loadRideState();
-      setTripNotice("");
+      setTripNotice("Ride started. You can finish the ride when you arrive.");
     } catch (error) {
       setRideStateError(error.message || "The trip could not be started.");
     }
@@ -1191,7 +1211,7 @@ const Dashboard = ({ onLogout }) => {
         next.delete(tripId);
         return next;
       });
-      setReviewTrip({ vehicleName: `${targetVehicle.brand} ${targetVehicle.model}` });
+      setReviewTrip({ tripId, vehicleName: `${targetVehicle.brand} ${targetVehicle.model}` });
       setReviewRating(5);
       setReviewComment("");
       setReviewError("");
@@ -1245,9 +1265,15 @@ const Dashboard = ({ onLogout }) => {
     setPaymentError("");
 
     try {
+      localStorage.setItem(PENDING_TRIP_REVIEW_STORAGE_KEY, JSON.stringify({
+        tripId,
+        vehicleName: `${targetVehicle.brand} ${targetVehicle.model}`,
+        createdAt: new Date().toISOString(),
+      }));
       const checkout = await paymentApi.createTripCheckout(tripId);
       window.location.assign(checkout.checkoutUrl);
     } catch (error) {
+      localStorage.removeItem(PENDING_TRIP_REVIEW_STORAGE_KEY);
       setPaymentError(error.message || "Card checkout could not be opened.");
       await loadPayments();
     } finally {
@@ -1282,7 +1308,16 @@ const Dashboard = ({ onLogout }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeReservations, profileBalance, isPayingTrip]);
 
-  const submitTripReview = () => {
+  const showPaymentSuccessDialog = () => {
+    localStorage.removeItem(PENDING_TRIP_REVIEW_STORAGE_KEY);
+    setPaymentSuccessDialog({ source: reviewTrip?.paymentMethod || "balance" });
+    setReviewTrip(null);
+    setReviewComment("");
+    setReviewError("");
+    setIsSubmittingReview(false);
+  };
+
+  const submitTripReview = async () => {
     if (!reviewTrip) return;
 
     if (!reviewComment.trim()) {
@@ -1290,10 +1325,32 @@ const Dashboard = ({ onLogout }) => {
       return;
     }
 
-    setTripNotice("Thank you! Your trip review was received.");
-    setReviewTrip(null);
-    setReviewComment("");
+    if (!reviewTrip.tripId) {
+      setReviewError("Trip id is missing. Refresh the dashboard and try again.");
+      return;
+    }
+
+    setIsSubmittingReview(true);
     setReviewError("");
+
+    try {
+      await tripReviewsApi.create({
+        tripId: reviewTrip.tripId,
+        rating: reviewRating,
+        comment: reviewComment.trim(),
+      });
+      setTripNotice("Thank you! Your trip review was received.");
+      showPaymentSuccessDialog();
+    } catch (error) {
+      setReviewError(error.message || "Your comment could not be saved.");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  const openPaymentHistory = () => {
+    setPaymentSuccessDialog(null);
+    setActiveTab("payments");
   };
 
   const handleTopUp = (event) => {
@@ -1468,9 +1525,15 @@ const Dashboard = ({ onLogout }) => {
       {(() => {
         const vehiclePosition = getVehiclePosition(vehicle);
         const routeState = routeStates[vehicle.reservationId] || {};
-        const routePositions = routeState.positions?.length > 1 ? routeState.positions : [userLocation, vehiclePosition];
-        const routeMinutes = routeState.durationSeconds ? Math.max(1, Math.round(routeState.durationSeconds / 60)) : null;
-        const routeDistanceKm = routeState.distanceMeters ? (routeState.distanceMeters / 1000).toFixed(1) : null;
+        const fallbackDistanceMeters = getDistanceMeters(userLocation, vehiclePosition);
+        const displayDistanceMeters = Number.isFinite(routeState.distanceMeters)
+          ? routeState.distanceMeters
+          : fallbackDistanceMeters;
+        const routePositions = vehicle.isRideActive
+          ? [vehiclePosition]
+          : routeState.positions?.length > 1 || hasResolvedUserLocation ? routeState.positions?.length > 1 ? routeState.positions : [userLocation, vehiclePosition] : [vehiclePosition];
+        const routeMinutes = getWalkMinutes(displayDistanceMeters);
+        const routeDistanceLabel = vehicle.isRideActive || !hasResolvedUserLocation ? "" : formatPickupDistance(displayDistanceMeters);
         const mapKey = `${vehicle.reservationId}-${vehicle.tripId || "reserved"}-${vehicle.vehicleId || vehicle.id || "vehicle"}`;
 
         return (
@@ -1493,13 +1556,17 @@ const Dashboard = ({ onLogout }) => {
             url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
           />
-          <Polyline
-            positions={routePositions}
-            pathOptions={{ color: "#ef4444", weight: 4, opacity: 0.85 }}
-          />
-          <Marker position={userLocation} icon={userIcon}>
-            <Popup>You are here</Popup>
-          </Marker>
+          {!vehicle.isRideActive && hasResolvedUserLocation && (
+            <>
+              <Polyline
+                positions={routePositions}
+                pathOptions={{ color: "#ef4444", weight: 4, opacity: 0.85 }}
+              />
+              <Marker position={userLocation} icon={userIcon}>
+                <Popup>You are here</Popup>
+              </Marker>
+            </>
+          )}
           <Marker position={vehiclePosition}>
             <Popup>
               {vehicle.brand} {vehicle.model}
@@ -1509,11 +1576,15 @@ const Dashboard = ({ onLogout }) => {
       </div>
       <div className="flex items-center justify-between border-t border-zinc-100 px-5 py-3 text-xs font-bold text-zinc-500">
         <span>
-          {routeState.status === "loading"
+          {vehicle.isRideActive
+            ? "Ride in progress"
+            : !hasResolvedUserLocation
+            ? "Detecting your location..."
+            : routeState.status === "loading"
             ? "Loading road route..."
-            : routeState.error || `${routeMinutes || 1} min walk`}
+            : `${routeMinutes} min walk`}
         </span>
-        <span>{routeDistanceKm ? `${routeDistanceKm} km` : ""}</span>
+        <span>{routeDistanceLabel}</span>
       </div>
           </>
         );
@@ -2733,11 +2804,8 @@ const Dashboard = ({ onLogout }) => {
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => {
-                  setReviewTrip(null);
-                  setReviewComment("");
-                  setReviewError("");
-                }}
+                onClick={showPaymentSuccessDialog}
+                disabled={isSubmittingReview}
                 className="rounded-2xl border border-zinc-200 px-5 py-4 text-sm font-black text-zinc-600 transition hover:border-zinc-300"
               >
                 Skip
@@ -2745,11 +2813,48 @@ const Dashboard = ({ onLogout }) => {
               <button
                 type="button"
                 onClick={submitTripReview}
-                className="rounded-2xl bg-red-500 px-5 py-4 text-sm font-black text-white transition hover:bg-red-600"
+                disabled={isSubmittingReview}
+                className="rounded-2xl bg-red-500 px-5 py-4 text-sm font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Send comment
+                {isSubmittingReview ? "Sending..." : "Send comment"}
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {paymentSuccessDialog && !reviewTrip && (
+        <div className="fixed inset-0 z-[2290] flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur">
+          <motion.div
+            className="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl"
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+          >
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+              <FiCheckCircle className="text-3xl" />
+            </div>
+            <p className="mt-5 text-xs font-black uppercase tracking-[0.18em] text-emerald-600">
+              Payment completed
+            </p>
+            <h2 className="mt-2 text-3xl font-black text-zinc-950">Thank you for your payment</h2>
+            <p className="mx-auto mt-3 max-w-sm text-sm font-semibold leading-6 text-zinc-500">
+              You can view the transaction{" "}
+              <button
+                type="button"
+                onClick={openPaymentHistory}
+                className="font-black text-red-500 underline decoration-red-200 underline-offset-4 transition hover:text-red-600"
+              >
+                here
+              </button>
+              .
+            </p>
+            <button
+              type="button"
+              onClick={() => setPaymentSuccessDialog(null)}
+              className="mt-6 rounded-2xl bg-zinc-950 px-6 py-3 text-sm font-black text-white transition hover:bg-zinc-800"
+            >
+              Stay on trip
+            </button>
           </motion.div>
         </div>
       )}

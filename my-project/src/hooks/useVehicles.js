@@ -1,44 +1,91 @@
 import { useEffect, useState } from "react";
 import { vehicleApi } from "../api/vehicleApi";
 
+const POLL_INTERVAL_MS = 5000;
+
+let vehicleState = {
+  vehicles: [],
+  isLoading: true,
+  error: "",
+};
+let subscribers = new Set();
+let pollIntervalId = null;
+let inFlightRequest = null;
+
+const emit = () => {
+  subscribers.forEach((subscriber) => subscriber(vehicleState));
+};
+
+const setVehicleState = (patch) => {
+  vehicleState = { ...vehicleState, ...patch };
+  emit();
+};
+
+const loadVehicles = async ({ silent = false } = {}) => {
+  if (inFlightRequest) return inFlightRequest;
+
+  if (!silent) {
+    setVehicleState({ isLoading: true, error: "" });
+  } else if (vehicleState.error) {
+    setVehicleState({ error: "" });
+  }
+
+  inFlightRequest = vehicleApi.getVehicles()
+    .then((items) => {
+      setVehicleState({
+        vehicles: Array.isArray(items) ? items : [],
+        isLoading: false,
+        error: "",
+      });
+      return items;
+    })
+    .catch((error) => {
+      setVehicleState({
+        vehicles: [],
+        isLoading: false,
+        error: error.message || "Vehicles could not be loaded.",
+      });
+      throw error;
+    })
+    .finally(() => {
+      inFlightRequest = null;
+    });
+
+  return inFlightRequest;
+};
+
+const startPolling = () => {
+  if (pollIntervalId) return;
+
+  loadVehicles().catch(() => {});
+  pollIntervalId = window.setInterval(() => {
+    loadVehicles({ silent: true }).catch(() => {});
+  }, POLL_INTERVAL_MS);
+};
+
+const stopPolling = () => {
+  if (!pollIntervalId) return;
+
+  window.clearInterval(pollIntervalId);
+  pollIntervalId = null;
+};
+
+export const refreshVehicles = () => loadVehicles({ silent: true }).catch(() => {});
+
 export const useVehicles = () => {
-  const [vehicles, setVehicles] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [state, setState] = useState(vehicleState);
 
   useEffect(() => {
-    let isMounted = true;
-
-    const loadVehicles = async (options = {}) => {
-      const silent = options.silent === true;
-      if (!silent) setIsLoading(true);
-      setError("");
-
-      try {
-        const items = await vehicleApi.getVehicles();
-        if (isMounted) {
-          setVehicles(Array.isArray(items) ? items : []);
-        }
-      } catch (loadError) {
-        if (isMounted) {
-          setVehicles([]);
-          setError(loadError.message || "Vehicles could not be loaded.");
-        }
-      } finally {
-        if (isMounted) {
-          if (!silent) setIsLoading(false);
-        }
-      }
-    };
-
-    loadVehicles();
-    const interval = window.setInterval(() => loadVehicles({ silent: true }), 5000);
+    subscribers.add(setState);
+    startPolling();
 
     return () => {
-      isMounted = false;
-      window.clearInterval(interval);
+      subscribers.delete(setState);
+      if (subscribers.size === 0) {
+        stopPolling();
+      }
     };
   }, []);
 
-  return { vehicles, isLoading, error };
+  return state;
 };

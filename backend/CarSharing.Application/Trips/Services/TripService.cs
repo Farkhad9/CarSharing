@@ -332,6 +332,35 @@ public class TripService : ITripService
         return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(items);
     }
 
+    public async Task<Result<IReadOnlyList<TripCompletionRequestDto>>> GetMyReviewedCompletionRequestsAsync(
+        int take = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var reviewerId = _currentUserService.UserId;
+        if (reviewerId is null)
+        {
+            return Result<IReadOnlyList<TripCompletionRequestDto>>.Failure(Unauthenticated);
+        }
+
+        if (!CanReviewCompletionRequests())
+        {
+            return Result<IReadOnlyList<TripCompletionRequestDto>>.Failure(StaffRequired);
+        }
+
+        var requests = await _completionRequestRepository.GetReviewedByUserIdAsync(
+            reviewerId.Value,
+            Math.Clamp(take, 1, 100),
+            cancellationToken);
+
+        var items = new List<TripCompletionRequestDto>();
+        foreach (var request in requests)
+        {
+            items.Add(await MapCompletionRequestAsync(request, cancellationToken));
+        }
+
+        return Result<IReadOnlyList<TripCompletionRequestDto>>.Success(items);
+    }
+
     public async Task<Result<TripCompletionRequestDto>> GetCompletionRequestByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)

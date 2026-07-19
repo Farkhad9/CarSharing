@@ -5,35 +5,10 @@ import { FiNavigation, FiSliders } from "react-icons/fi";
 import { VEHICLE_STATUSES } from "../../data/statuses";
 import AuthModal from "../AuthModal/AuthModal";
 import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
-import { vehicleApi } from "../../api/vehicleApi";
+import { DEFAULT_PICKUP_USER_LOCATION, getDistanceMeters, getWalkMinutes } from "../../utils/pickupMetrics";
+import { refreshVehicles, useVehicles } from "../../hooks/useVehicles";
 
-const USER_LOCATION = [40.3772, 49.8475];
-const WALKING_SPEED_METERS_PER_MINUTE = 80;
 const LOW_CHARGE_RESERVATION_LIMIT = 30;
-
-const toRadians = (degrees) => degrees * (Math.PI / 180);
-
-const getDistanceMeters = ([userLat, userLng], vehicle) => {
-  if (!vehicle.location?.lat || !vehicle.location?.lng) return Number.POSITIVE_INFINITY;
-
-  const earthRadiusMeters = 6371000;
-  const carLat = vehicle.location.lat;
-  const carLng = vehicle.location.lng;
-  const deltaLat = toRadians(carLat - userLat);
-  const deltaLng = toRadians(carLng - userLng);
-
-  const a =
-    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-    Math.cos(toRadians(userLat)) *
-      Math.cos(toRadians(carLat)) *
-      Math.sin(deltaLng / 2) *
-      Math.sin(deltaLng / 2);
-
-  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const getWalkingMinutes = (distanceMeters) =>
-  Math.max(1, Math.round(distanceMeters / WALKING_SPEED_METERS_PER_MINUTE));
 
 const FILTERS = [
   { label: "All", value: "all" },
@@ -99,40 +74,33 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const [activeBrandFilter, setActiveBrandFilter] = useState("all");
   const [authVehicle, setAuthVehicle] = useState(null);
   const [reservationsRevision, setReservationsRevision] = useState(0);
-  const [backendVehicles, setBackendVehicles] = useState([]);
-  const [isLoadingVehicles, setIsLoadingVehicles] = useState(true);
-  const [vehicleError, setVehicleError] = useState("");
+  const { vehicles: backendVehicles, isLoading: isLoadingVehicles, error: vehicleError } = useVehicles();
+  const [userLocation, setUserLocation] = useState(DEFAULT_PICKUP_USER_LOCATION);
+  const [hasResolvedUserLocation, setHasResolvedUserLocation] = useState(() => !("geolocation" in navigator));
 
   useEffect(() => {
-    let isMounted = true;
+    if (!("geolocation" in navigator)) {
+      return undefined;
+    }
 
-    const loadVehicles = async (options = {}) => {
-      const silent = options.silent === true;
-      if (!silent) setIsLoadingVehicles(true);
-      setVehicleError("");
-      try {
-        const items = await vehicleApi.getVehicles();
-        if (isMounted) {
-          setBackendVehicles(items);
-        }
-      } catch (error) {
-        if (isMounted) {
-          setVehicleError(error.message || "Vehicles could not be loaded.");
-        }
-      } finally {
-        if (isMounted) {
-          if (!silent) setIsLoadingVehicles(false);
-        }
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setUserLocation([position.coords.latitude, position.coords.longitude]);
+        setHasResolvedUserLocation(true);
+      },
+      () => {
+        setUserLocation(DEFAULT_PICKUP_USER_LOCATION);
+        setHasResolvedUserLocation(true);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 12000,
       }
-    };
+    );
 
-    loadVehicles();
-    const interval = window.setInterval(() => loadVehicles({ silent: true }), 5000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(interval);
-    };
-  }, [reservationsRevision]);
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
 
   const brandFilters = useMemo(
     () => [
@@ -148,6 +116,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
     const refreshReservations = (event) => {
       if (!event || event.type === RESERVATIONS_UPDATED_EVENT || event.key === "reservedVehicles") {
         setReservationsRevision((revision) => revision + 1);
+        refreshVehicles();
       }
     };
 
@@ -196,12 +165,15 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
 
     return backendVehicles
       .map((vehicle) => {
-        const distanceMeters = getDistanceMeters(USER_LOCATION, vehicle);
+        const vehicleLocation = [vehicle.location?.lat, vehicle.location?.lng];
+        const distanceMeters = hasResolvedUserLocation
+          ? getDistanceMeters(userLocation, vehicleLocation)
+          : Number.POSITIVE_INFINITY;
 
         return {
           ...vehicle,
           distanceMeters,
-          walkTimeMinutes: getWalkingMinutes(distanceMeters),
+          walkTimeMinutes: hasResolvedUserLocation ? getWalkMinutes(distanceMeters) : null,
         };
       })
       .filter((vehicle) => {
@@ -211,7 +183,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         return matchesStatus && matchesBrand;
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [activeFilter, activeBrandFilter, backendVehicles, brandFilters, reservationsRevision]);
+  }, [activeFilter, activeBrandFilter, backendVehicles, brandFilters, hasResolvedUserLocation, reservationsRevision, userLocation]);
 
   return (
     <section id="fleet" className="scroll-mt-24 bg-white py-16 md:py-24 border-b border-gray-100">
@@ -349,7 +321,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
                       <p className="text-[10px] font-bold text-gray-400 uppercase">Location</p>
                       <p className="mt-0.5 text-[11px] font-black text-gray-900 truncate flex items-center gap-0.5">
                         <FiNavigation className="text-[9px] text-red-500 flex-shrink-0" />
-                        {vehicle.walkTimeMinutes ? `${vehicle.walkTimeMinutes} min walk` : "3 min walk"}
+                        {vehicle.walkTimeMinutes ? `${vehicle.walkTimeMinutes} min walk` : "Detecting..."}
                       </p>
                     </div>
                   </div>

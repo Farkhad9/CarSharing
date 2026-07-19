@@ -3,6 +3,8 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { VEHICLE_STATUSES } from "../../data/statuses";
 import { useVehicles } from "../../hooks/useVehicles";
+import { useUserLocation } from "../../hooks/useUserLocation";
+import { getDistanceMeters, getWalkMinutes } from "../../utils/pickupMetrics";
 
 const BAKU_CENTER = [40.3777, 49.892];
 
@@ -45,9 +47,24 @@ const createVehicleIcon = (vehicle, status) =>
 
 const EVMap = () => {
   const { vehicles, isLoading, error } = useVehicles();
+  const { userLocation, hasResolvedUserLocation } = useUserLocation();
+  const vehiclesWithPickupMetrics = vehicles.map((vehicle) => {
+    const distanceMeters = getDistanceMeters(
+      userLocation,
+      [vehicle.location?.lat, vehicle.location?.lng]
+    );
+
+    return {
+      ...vehicle,
+      distanceMeters,
+      walkTimeMinutes: hasResolvedUserLocation ? getWalkMinutes(distanceMeters) : null,
+    };
+  });
   const nearestVehicle =
-    vehicles.find((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE) ||
-    vehicles[0];
+    [...vehiclesWithPickupMetrics]
+      .filter((vehicle) => vehicle.status === VEHICLE_STATUSES.AVAILABLE)
+      .sort((first, second) => first.distanceMeters - second.distanceMeters)[0] ||
+    vehiclesWithPickupMetrics[0];
 
   if (isLoading || error || !nearestVehicle) {
     return (
@@ -155,7 +172,7 @@ const EVMap = () => {
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
         />
 
-        {vehicles.map((vehicle) => {
+        {vehiclesWithPickupMetrics.map((vehicle) => {
           const status =
             STATUS_META[vehicle.status] ||
             STATUS_META[VEHICLE_STATUSES.COMPLETED];
@@ -206,13 +223,15 @@ const EVMap = () => {
           </div>
           <div className="min-w-0">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#E53E3E]">
-              Nearest EV
+              Nearest Car
             </p>
             <p className="truncate text-sm font-extrabold text-gray-950">
               {nearestVehicle.brand} {nearestVehicle.model}
             </p>
             <p className="text-xs font-medium text-gray-500">
-              {nearestVehicle.location.label} - 3 min walk
+              {nearestVehicle.location.label} - {nearestVehicle.walkTimeMinutes
+                ? `${nearestVehicle.walkTimeMinutes} min walk`
+                : "detecting walk time"}
             </p>
           </div>
         </div>

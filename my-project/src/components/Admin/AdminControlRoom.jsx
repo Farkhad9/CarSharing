@@ -31,8 +31,6 @@ import {
   FiZap,
 } from "react-icons/fi";
 import { FaCarSide } from "react-icons/fa";
-import { trips } from "../../data/trips";
-import { users } from "../../data/users";
 import { CHARGING_STATION_STATUSES, TRIP_STATUSES, VEHICLE_STATUSES } from "../../data/statuses";
 import { chargingApi } from "../../api/chargingApi";
 import { invoiceApi } from "../../api/invoiceApi";
@@ -49,6 +47,9 @@ const STAFF_TASK_STATUS_LABELS = {
   [STAFF_TASK_STATUSES.InProgress]: "In progress",
   [STAFF_TASK_STATUSES.Done]: "Done",
 };
+
+const users = [];
+const trips = [];
 
 const STAFF_TASK_PRIORITY_LABELS = {
   [STAFF_TASK_PRIORITIES.Low]: "Low",
@@ -427,10 +428,12 @@ const staffSeed = [
   },
 ];
 
+const emptyBackendStaffList = staffSeed.slice(0, 0);
+
 const adminProfiles = {
   admin: {
     roleLabel: "Администратор",
-    name: users.find((user) => user.role === "admin")?.fullName || "Operations",
+    name: "Operations",
   },
   "super-admin": {
     roleLabel: "Суперадмин",
@@ -519,12 +522,10 @@ const normalizeTicketMessage = (message, ticket) => {
     };
   }
 
-  const rider = users.find((user) => user.id === ticket.userId);
-
   return {
     body: message,
     senderRole: "rider",
-    senderName: rider?.fullName || "Customer",
+    senderName: ticket.userName || "Customer",
   };
 };
 
@@ -1009,7 +1010,7 @@ const AdminControlRoom = () => {
     reason: "",
     duration: USER_BLOCK_DURATIONS.FifteenMinutes,
   });
-  const [staff, setStaff] = useState(staffSeed);
+  const [staff, setStaff] = useState(emptyBackendStaffList);
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
   const [incidents, setIncidents] = useState(incidentSeed);
