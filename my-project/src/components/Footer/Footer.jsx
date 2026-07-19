@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FaInstagram, FaTwitter, FaLinkedinIn } from 'react-icons/fa';
 import { FiArrowRight, FiMail, FiX } from 'react-icons/fi';
+import { newsletterApi } from "../../api/newsletterApi";
 
 const footerModalContent = {
     careers: {
@@ -27,7 +28,7 @@ const footerModalContent = {
     },
     cookies: {
         title: 'Cookie settings',
-        body: 'This demo uses local browser storage for login, reservations, and preferences. No marketing cookie panel is enabled yet.',
+        body: 'ElectroStreet uses secure session storage for authentication and essential preferences. Marketing cookies are not enabled.',
     },
 };
 
@@ -35,10 +36,11 @@ const Footer = () => {
     const [activeModal, setActiveModal] = useState(null);
     const [email, setEmail] = useState('');
     const [subscribeMessage, setSubscribeMessage] = useState('');
+    const [isSubscribing, setIsSubscribing] = useState(false);
 
     const openModal = (key) => setActiveModal(footerModalContent[key]);
 
-    const handleSubscribe = (event) => {
+    const handleSubscribe = async (event) => {
         event.preventDefault();
         const cleanEmail = email.trim();
 
@@ -47,8 +49,18 @@ const Footer = () => {
             return;
         }
 
-        setSubscribeMessage(`Thanks. Updates will be sent to ${cleanEmail}.`);
-        setEmail('');
+        setIsSubscribing(true);
+        setSubscribeMessage('');
+
+        try {
+            await newsletterApi.subscribe(cleanEmail);
+            setSubscribeMessage(`Thanks. Updates will be sent to ${cleanEmail}.`);
+            setEmail('');
+        } catch (error) {
+            setSubscribeMessage(error.message || 'Subscription could not be saved.');
+        } finally {
+            setIsSubscribing(false);
+        }
     };
 
     return (
@@ -131,8 +143,12 @@ const Footer = () => {
                                 placeholder="Enter your email"
                                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl py-3 pl-12 pr-32 focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 transition-all placeholder:text-zinc-600"
                             />
-                            <button type="submit" className="absolute right-1.5 top-1.5 bottom-1.5 px-6 bg-white text-zinc-950 font-bold rounded-lg hover:bg-zinc-200 transition-colors">
-                                Subscribe
+                            <button
+                                type="submit"
+                                disabled={isSubscribing}
+                                className="absolute right-1.5 top-1.5 bottom-1.5 px-6 bg-white text-zinc-950 font-bold rounded-lg hover:bg-zinc-200 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {isSubscribing ? 'Saving...' : 'Subscribe'}
                             </button>
                         </form>
                         {subscribeMessage && (

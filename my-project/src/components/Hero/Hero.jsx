@@ -24,7 +24,6 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
       <div className="absolute left-0 top-0 h-full w-1/2 opacity-40 bg-[linear-gradient(90deg,rgba(239,68,68,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(239,68,68,0.08)_1px,transparent_1px)] bg-[size:36px_36px]" />
 
       <div className="relative max-w-[1300px] mx-auto flex flex-col lg:flex-row items-center justify-between gap-10">
-        {/* LEFT SIDE - TEXT */}
         <div className="flex-1 space-y-6">
           <h3
             className="text-red-500 font-semibold text-sm tracking-widest uppercase"
@@ -115,7 +114,6 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
           </div>
         </div>
 
-        {/* RIGHT SIDE - IMAGE */}
         <div className="flex-1" data-aos="zoom-in" data-aos-delay="300">
           <img src={img} alt="Mercedes Benz" className="w-full h-auto object-contain" />
           {availableVehicle && (
@@ -195,7 +193,6 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
           )}
         </div>
       </div>
-
     </section>
   );
 };

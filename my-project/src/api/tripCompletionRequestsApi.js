@@ -8,6 +8,7 @@ export const TRIP_COMPLETION_STATUSES = {
 
 export const tripCompletionRequestsApi = {
   getPending: () => apiRequest("/api/trip-completion-requests/pending"),
+  getMyReviewed: () => apiRequest("/api/trip-completion-requests/reviewed/my"),
   getById: (id) => apiRequest(`/api/trip-completion-requests/${id}`),
   approve: (id) => apiRequest(`/api/trip-completion-requests/${id}/approve`, { method: "POST" }),
   reject: (id, reason) => apiRequest(`/api/trip-completion-requests/${id}/reject`, {

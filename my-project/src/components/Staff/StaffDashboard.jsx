@@ -5,7 +5,7 @@ import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { chargingApi } from "../../api/chargingApi";
 import { STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
-import { tripCompletionRequestsApi } from "../../api/tripCompletionRequestsApi";
+import { TRIP_COMPLETION_STATUSES, tripCompletionRequestsApi } from "../../api/tripCompletionRequestsApi";
 import { vehicleApi } from "../../api/vehicleApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
 
@@ -49,6 +49,11 @@ const filterItems = [
   { id: STAFF_TASK_STATUSES.InProgress, label: "In progress", icon: FiRefreshCw },
   { id: STAFF_TASK_STATUSES.Waiting, label: "Waiting", icon: FiClock },
 ];
+
+const completionDecisionLabels = {
+  [TRIP_COMPLETION_STATUSES.Approved]: "Approved",
+  [TRIP_COMPLETION_STATUSES.Rejected]: "Rejected",
+};
 
 const readSession = () => {
   try {
@@ -102,8 +107,8 @@ const toCompletionTask = (request, vehicleLabel) => ({
   vehicleId: request.vehicleId,
   priority: 3,
   dueAt: request.requestedAt,
-  status: request.localStatus || STAFF_TASK_STATUSES.Waiting,
-  createdAt: request.requestedAt,
+  status: request.status || STAFF_TASK_STATUSES.Waiting,
+  createdAt: request.reviewedAt || request.requestedAt,
 });
 
 const getRemainingMs = (task, now) => {
@@ -163,7 +168,7 @@ const StaffDashboard = () => {
   const [tasks, setTasks] = useState([]);
   const [activeChargingSessions, setActiveChargingSessions] = useState([]);
   const [completionRequests, setCompletionRequests] = useState([]);
-  const [completionReviewHistory, setCompletionReviewHistory] = useState([]);
+  const [reviewedCompletionRequests, setReviewedCompletionRequests] = useState([]);
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -185,10 +190,11 @@ const StaffDashboard = () => {
       setActionError("");
     }
     try {
-      const [nextTasks, nextVehicles, nextCompletionRequests] = await Promise.all([
+      const [nextTasks, nextVehicles, nextCompletionRequests, nextReviewedCompletionRequests] = await Promise.all([
         staffTasksApi.getMyTasks(),
         vehicleApi.getVehicles(),
         tripCompletionRequestsApi.getPending(),
+        tripCompletionRequestsApi.getMyReviewed(),
       ]);
       const nextChargingSessions = await chargingApi.getActiveSessions().catch(() => []);
       setTasks((current) => {
@@ -204,11 +210,11 @@ const StaffDashboard = () => {
         return areListsEqual(current, normalized) ? current : normalized;
       });
       setCompletionRequests((current) => {
-        const existingStatuses = new Map(current.map((request) => [request.id, request.localStatus]));
-        const normalized = (Array.isArray(nextCompletionRequests) ? nextCompletionRequests : []).map((request) => ({
-          ...request,
-          localStatus: existingStatuses.get(request.id) || request.localStatus,
-        }));
+        const normalized = Array.isArray(nextCompletionRequests) ? nextCompletionRequests : [];
+        return areListsEqual(current, normalized) ? current : normalized;
+      });
+      setReviewedCompletionRequests((current) => {
+        const normalized = Array.isArray(nextReviewedCompletionRequests) ? nextReviewedCompletionRequests : [];
         return areListsEqual(current, normalized) ? current : normalized;
       });
       hasLoadedTasksRef.current = true;
@@ -281,15 +287,24 @@ const StaffDashboard = () => {
   }, [session]);
 
   const completionReviewItems = useMemo(
-    () =>
-      [
-        ...completionRequests.map((request) => ({
+    () => {
+      const pendingIds = new Set(completionRequests.map((request) => request.id));
+      const pendingItems = completionRequests.map((request) => ({
+        ...request,
+        backendCompletionStatus: request.status,
+        status: STAFF_TASK_STATUSES.Waiting,
+      }));
+      const reviewedItems = reviewedCompletionRequests
+        .filter((request) => !pendingIds.has(request.id))
+        .map((request) => ({
           ...request,
-          status: request.localStatus || STAFF_TASK_STATUSES.Waiting,
-        })),
-        ...completionReviewHistory,
-      ],
-    [completionRequests, completionReviewHistory]
+          backendCompletionStatus: request.status,
+          status: STAFF_TASK_STATUSES.Done,
+        }));
+
+      return [...pendingItems, ...reviewedItems];
+    },
+    [completionRequests, reviewedCompletionRequests]
   );
 
   const reviewTasksForStats = useMemo(
@@ -297,7 +312,7 @@ const StaffDashboard = () => {
       completionReviewItems.map((request) => {
         const vehicle = backendVehicles.find((item) => item.id === request.vehicleId);
         const vehicleLabel = vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
-        return toCompletionTask({ ...request, localStatus: request.status }, vehicleLabel);
+        return toCompletionTask(request, vehicleLabel);
       }),
     [backendVehicles, completionReviewItems]
   );
@@ -386,45 +401,17 @@ const StaffDashboard = () => {
     }
   };
 
-  const updateCompletionStatus = async (requestId, status) => {
-    if (status === STAFF_TASK_STATUSES.Done) {
-      await reviewCompletionRequest(requestId, "approve");
-      return;
-    }
-
-    setCompletionRequests((items) =>
-      items.map((item) =>
-        item.id === requestId ? { ...item, localStatus: status } : item
-      )
-    );
-    setCompletionReviewHistory((items) =>
-      items.map((item) =>
-        item.id === requestId ? { ...item, status } : item
-      )
-    );
-  };
-
   const reviewCompletionRequest = async (requestId, action, rejectionReason = "") => {
     setCompletionError("");
     try {
-      const reviewItem = completionReviewItems.find((item) => item.id === requestId)
-        || completionRequests.find((item) => item.id === requestId);
       if (action === "approve") {
-        await tripCompletionRequestsApi.approve(requestId);
+        const reviewedRequest = await tripCompletionRequestsApi.approve(requestId);
+        setReviewedCompletionRequests((items) => upsertTask(items, reviewedRequest));
       } else {
-        await tripCompletionRequestsApi.reject(requestId, rejectionReason || "Photos need to be retaken.");
+        const reviewedRequest = await tripCompletionRequestsApi.reject(requestId, rejectionReason || "Photos need to be retaken.");
+        setReviewedCompletionRequests((items) => upsertTask(items, reviewedRequest));
       }
       setCompletionRequests((items) => items.filter((item) => item.id !== requestId));
-      if (reviewItem) {
-        setCompletionReviewHistory((items) =>
-          upsertTask(items, {
-            ...reviewItem,
-            status: STAFF_TASK_STATUSES.Done,
-            localStatus: STAFF_TASK_STATUSES.Done,
-            reviewedAction: action,
-          })
-        );
-      }
       await loadTasks({ silent: true });
     } catch (error) {
       setCompletionError(error.message || "Completion request could not be reviewed.");
@@ -542,18 +529,28 @@ const StaffDashboard = () => {
                         <span className={`rounded-full border px-3 py-1 text-xs font-black ${statusStyles[request.status]}`}>
                           {statusLabels[request.status] || "Unknown"}
                         </span>
+                        {request.status === STAFF_TASK_STATUSES.Done && request.backendCompletionStatus && (
+                          <span className="rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs font-black text-emerald-700">
+                            {completionDecisionLabels[request.backendCompletionStatus] || "Reviewed"}
+                          </span>
+                        )}
                         <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
                           Attempt {request.attemptNumber}
                         </span>
-                        {request.reviewedAction && (
-                          <span className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-black text-zinc-500">
-                            {request.reviewedAction === "approve" ? "Approved" : "Rejected"}
-                          </span>
-                        )}
                       </div>
                       <p className="mt-2 text-sm font-semibold text-zinc-500">
                         Requested {formatDate(request.requestedAt)} · Fare {Number(request.finalRideCost || 0).toFixed(2)} {request.currency || "AZN"}
                       </p>
+                      {request.reviewedAt && (
+                        <p className="mt-1 text-xs font-bold text-zinc-400">
+                          Reviewed {formatDate(request.reviewedAt)}
+                        </p>
+                      )}
+                      {request.rejectionReason && (
+                        <p className="mt-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700">
+                          Rejection reason: {request.rejectionReason}
+                        </p>
+                      )}
                       <div className="mt-3 flex flex-wrap gap-2">
                         {(request.photos || []).map((photo) => (
                           <a
@@ -571,42 +568,32 @@ const StaffDashboard = () => {
                     </div>
 
                     <div className="grid shrink-0 gap-2 sm:w-80">
-                      {request.status !== STAFF_TASK_STATUSES.Done && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => rejectCompletionRequest(request.id)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-xs font-black text-red-600 transition hover:bg-red-50"
-                          >
-                            <FiX />
-                            Reject
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => reviewCompletionRequest(request.id, "approve")}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-black text-white transition hover:bg-emerald-700"
-                          >
+                      <div className="grid grid-cols-2 gap-2">
+                        {request.status === STAFF_TASK_STATUSES.Done ? (
+                          <div className="col-span-2 inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-white px-4 py-3 text-xs font-black text-emerald-700">
                             <FiCheckCircle />
-                            Approve
-                          </button>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-3 gap-2">
-                        {statusOptions.map((status) => (
-                          <button
-                            key={status}
-                            type="button"
-                            onClick={() => updateCompletionStatus(request.id, status)}
-                            disabled={request.status === STAFF_TASK_STATUSES.Done}
-                            className={`rounded-lg border px-3 py-3 text-xs font-black transition disabled:cursor-not-allowed ${
-                              request.status === status
-                                ? statusStyles[status]
-                                : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
-                            }`}
-                          >
-                            {statusLabels[status]}
-                          </button>
-                        ))}
+                            Review completed
+                          </div>
+                        ) : (
+                          <>
+                        <button
+                          type="button"
+                          onClick={() => rejectCompletionRequest(request.id)}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-xs font-black text-red-600 transition hover:bg-red-50"
+                        >
+                          <FiX />
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => reviewCompletionRequest(request.id, "approve")}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-black text-white transition hover:bg-emerald-700"
+                        >
+                          <FiCheckCircle />
+                          Approve
+                        </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -31,6 +31,21 @@ public class TripCompletionRequestsController : ControllerBase
         return Ok(result.Value);
     }
 
+    [HttpGet("reviewed/my")]
+    public async Task<IActionResult> GetMyReviewed(
+        [FromQuery] int take = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _tripService.GetMyReviewedCompletionRequestsAsync(take, cancellationToken);
+
+        if (result.IsFailure)
+        {
+            return ToErrorResponse(result.Errors);
+        }
+
+        return Ok(result.Value);
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {

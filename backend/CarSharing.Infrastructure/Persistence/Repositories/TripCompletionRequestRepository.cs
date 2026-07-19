@@ -44,6 +44,20 @@ public class TripCompletionRequestRepository : ITripCompletionRequestRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<TripCompletionRequest>> GetReviewedByUserIdAsync(
+        Guid reviewedByUserId,
+        int take = 50,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.TripCompletionRequests
+            .Include(request => request.Photos)
+            .Where(request => request.ReviewedByUserId == reviewedByUserId
+                && request.Status != TripCompletionStatus.PendingReview)
+            .OrderByDescending(request => request.ReviewedAt)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task AddAsync(TripCompletionRequest request, CancellationToken cancellationToken = default)
     {
         await _dbContext.TripCompletionRequests.AddAsync(request, cancellationToken);

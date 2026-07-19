@@ -17,6 +17,9 @@ public interface ITripService
         IReadOnlyList<TripCompletionPhotoUpload> photos,
         CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<TripCompletionRequestDto>>> GetPendingCompletionRequestsAsync(CancellationToken cancellationToken = default);
+    Task<Result<IReadOnlyList<TripCompletionRequestDto>>> GetMyReviewedCompletionRequestsAsync(
+        int take = 50,
+        CancellationToken cancellationToken = default);
     Task<Result<TripCompletionRequestDto>> GetCompletionRequestByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Result<TripCompletionRequestDto>> ApproveCompletionRequestAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Result<TripCompletionRequestDto>> RejectCompletionRequestAsync(

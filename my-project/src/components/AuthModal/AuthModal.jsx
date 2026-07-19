@@ -10,6 +10,7 @@ import {
   FiSend,
   FiUser,
 } from "react-icons/fi";
+import { normalizeRole } from "../../api/adminUsersApi";
 import { authApi } from "../../api/authApi";
 
 const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice }) => {
@@ -82,6 +83,12 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
         return;
       }
       const user = await authApi.login(email, password);
+      const role = normalizeRole(user.roleKey || user.role);
+      if (role !== "rider") {
+        await authApi.logout();
+        setAuthError("This login is only for customer accounts. Use the dedicated staff or admin address.");
+        return;
+      }
       if (onAuthSuccess) onAuthSuccess(user);
       else window.location.href = "/";
     } catch (error) {

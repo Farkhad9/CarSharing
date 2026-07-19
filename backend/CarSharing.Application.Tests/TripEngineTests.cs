@@ -284,6 +284,17 @@ public class TripEngineTests
                 .OrderBy(request => request.RequestedAt)
                 .ToList());
 
+        public Task<IReadOnlyList<TripCompletionRequest>> GetReviewedByUserIdAsync(
+            Guid reviewedByUserId,
+            int take = 50,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TripCompletionRequest>>(Requests
+                .Where(request => request.ReviewedByUserId == reviewedByUserId
+                    && request.Status != TripCompletionStatus.PendingReview)
+                .OrderByDescending(request => request.ReviewedAt)
+                .Take(take)
+                .ToList());
+
         public Task AddAsync(TripCompletionRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
