@@ -65,6 +65,34 @@ public sealed class UsersController : ControllerBase
         return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
     }
 
+    [HttpPost("me/password")]
+    public async Task<IActionResult> ChangePassword(
+        ChangePasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out var userId))
+        {
+            return Unauthorized(new { errors = new[] { new Error("User.Unauthenticated", "User must be authenticated.") } });
+        }
+
+        var result = await _userService.ChangePasswordAsync(userId, request, cancellationToken);
+        return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
+    }
+
+    [HttpPost("me/password/set")]
+    public async Task<IActionResult> SetPassword(
+        SetPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out var userId))
+        {
+            return Unauthorized(new { errors = new[] { new Error("User.Unauthenticated", "User must be authenticated.") } });
+        }
+
+        var result = await _userService.SetPasswordAsync(userId, request, cancellationToken);
+        return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
+    }
+
     private bool TryGetCurrentUserId(out Guid userId)
     {
         var value = User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -127,6 +155,11 @@ public sealed class UsersController : ControllerBase
         if (errors.Any(error => error.Code == "User.NotFound"))
         {
             return new NotFoundObjectResult(new { errors });
+        }
+
+        if (errors.Any(error => error.Code is "User.InvalidCurrentPassword" or "User.PasswordAlreadySet" or "User.PasswordNotSet"))
+        {
+            return new BadRequestObjectResult(new { errors });
         }
 
         return new BadRequestObjectResult(new { errors });

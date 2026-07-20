@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
     }
 
     public DbSet<User> Users => Set<User>();
+    public DbSet<UserExternalLogin> UserExternalLogins => Set<UserExternalLogin>();
     public DbSet<Vehicle> Vehicles => Set<Vehicle>();
     public DbSet<Reservation> Reservations => Set<Reservation>();
     public DbSet<Trip> Trips => Set<Trip>();
@@ -25,6 +26,7 @@ public class AppDbContext : DbContext
     public DbSet<TripReview> TripReviews => Set<TripReview>();
     public DbSet<NewsletterSubscription> NewsletterSubscriptions => Set<NewsletterSubscription>();
     public DbSet<ParkingZone> ParkingZones => Set<ParkingZone>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

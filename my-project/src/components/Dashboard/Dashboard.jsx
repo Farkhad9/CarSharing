@@ -9,6 +9,8 @@ import {
   FiClock,
   FiCreditCard,
   FiDollarSign,
+  FiEye,
+  FiEyeOff,
   FiFileText,
   FiHeadphones,
   FiLock,
@@ -16,7 +18,6 @@ import {
   FiMessageSquare,
   FiNavigation,
   FiSend,
-  FiShield,
   FiSmartphone,
   FiStar,
   FiUploadCloud,
@@ -211,6 +212,25 @@ const formatPaymentMethod = (method) => {
 const isUserVerificationStatus = (value, statusName) => {
   const expected = USER_VERIFICATION_STATUS[statusName];
   return value === expected || String(value).toLowerCase() === statusName.toLowerCase();
+};
+
+const getAccountVerificationDisplay = (user) => {
+  if (user?.emailVerified === false) {
+    return { label: "Email pending", iconClassName: "text-amber-500" };
+  }
+
+  if (
+    isUserVerificationStatus(user?.verificationStatus, "Verified")
+    || isUserVerificationStatus(user?.verificationStatus, "Internal")
+  ) {
+    return { label: "Verified", iconClassName: "text-emerald-500" };
+  }
+
+  if (isUserVerificationStatus(user?.verificationStatus, "Rejected")) {
+    return { label: "Rejected", iconClassName: "text-red-500" };
+  }
+
+  return { label: "Pending", iconClassName: "text-amber-500" };
 };
 
 const formatSupportTime = (value) =>
@@ -429,11 +449,19 @@ const Dashboard = ({ onLogout }) => {
   const [isSubmittingDocuments, setIsSubmittingDocuments] = useState(false);
   const [documentsError, setDocumentsError] = useState("");
   const [blockedNotice, setBlockedNotice] = useState("");
-  const [security, setSecurity] = useState({
-    twoFactor: true,
-    biometrics: false,
-    rideAlerts: true,
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
   });
+  const [passwordVisibility, setPasswordVisibility] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirmPassword: false,
+  });
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [supportTickets, setSupportTickets] = useState(() =>
     getStoredJson("electroStreetSupportTickets", [
       {
@@ -566,6 +594,8 @@ const Dashboard = ({ onLogout }) => {
   );
   const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
   const profilePendingHold = Number(user.pendingHold ?? 0);
+  const accountVerificationDisplay = useMemo(() => getAccountVerificationDisplay(user), [user]);
+  const hasPassword = user.hasPassword !== false;
   const receiptByTransactionId = useMemo(() => {
     return new Map(
       paymentInvoices
@@ -2145,50 +2175,111 @@ const Dashboard = ({ onLogout }) => {
     );
   };
 
+  const handlePasswordInputChange = (field, value) => {
+    setPasswordForm((current) => ({ ...current, [field]: value }));
+    setPasswordError("");
+    setPasswordMessage("");
+  };
+
+  const handlePasswordSubmit = async (event) => {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordMessage("");
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError("Passwords do not match.");
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      const response = hasPassword
+        ? await userApi.changePassword(passwordForm)
+        : await userApi.setPassword(passwordForm);
+      setPasswordMessage(response?.message || (hasPassword ? "Password has been updated." : "Password has been set."));
+      if (!hasPassword) {
+        persistUser({ ...user, hasPassword: true });
+      }
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+    } catch (error) {
+      setPasswordError(error.message || "Password could not be updated.");
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
+  const renderPasswordInput = (field, placeholder) => (
+    <div className="relative">
+      <input
+        className="w-full rounded-2xl border border-white/10 bg-white/5 py-4 pl-4 pr-12 text-sm font-bold text-white outline-none transition placeholder:text-white/35 focus:border-red-400"
+        type={passwordVisibility[field] ? "text" : "password"}
+        placeholder={placeholder}
+        value={passwordForm[field]}
+        onChange={(event) => handlePasswordInputChange(field, event.target.value)}
+        autoComplete={field === "currentPassword" ? "current-password" : "new-password"}
+      />
+      <button
+        type="button"
+        onClick={() => setPasswordVisibility((current) => ({ ...current, [field]: !current[field] }))}
+        className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45 transition hover:text-white"
+        aria-label={passwordVisibility[field] ? `Hide ${placeholder.toLowerCase()}` : `Show ${placeholder.toLowerCase()}`}
+        title={passwordVisibility[field] ? `Hide ${placeholder}` : `Show ${placeholder}`}
+      >
+        {passwordVisibility[field] ? <FiEyeOff /> : <FiEye />}
+      </button>
+    </div>
+  );
+
   const renderSecurityPanel = () => (
     <motion.div {...panelMotion} className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
         <p className="text-xs font-black uppercase tracking-[0.22em] text-red-500">Account</p>
         <h2 className="mt-2 text-3xl font-black tracking-tight text-zinc-950">Security</h2>
         <div className="mt-6 grid gap-3">
-          {[
-            ["twoFactor", "Two-factor protection", "Confirmation code during login", FiShield],
-            ["biometrics", "Biometrics", "Fast login on trusted devices", FiUserCheck],
-            ["rideAlerts", "Ride alerts", "Email and push updates for every ride", FiZap],
-          ].map(([key, title, detail, Icon]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSecurity((current) => ({ ...current, [key]: !current[key] }))}
-              className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-100 bg-zinc-50 p-4 text-left transition hover:border-red-200 hover:bg-red-50"
-            >
-              <span className="flex min-w-0 items-center gap-4">
-                <span className="rounded-2xl bg-white p-3 text-red-500 shadow-sm">
-                  <Icon />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-black text-zinc-950">{title}</span>
-                  <span className="block truncate text-xs font-bold text-zinc-500">{detail}</span>
-                </span>
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-100 bg-zinc-50 p-4 text-left">
+            <span className="flex min-w-0 items-center gap-4">
+              <span className="rounded-2xl bg-white p-3 text-red-500 shadow-sm">
+                <FiZap />
               </span>
-              <span className={`h-7 w-12 rounded-full p-1 transition ${security[key] ? "bg-red-500" : "bg-zinc-300"}`}>
-                <span className={`block h-5 w-5 rounded-full bg-white transition ${security[key] ? "translate-x-5" : ""}`} />
+              <span className="min-w-0">
+                <span className="block text-sm font-black text-zinc-950">Email ride alerts</span>
+                <span className="block truncate text-xs font-bold text-zinc-500">Receipts and account security alerts are sent to your email.</span>
               </span>
-            </button>
-          ))}
+            </span>
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-700">
+              Active
+            </span>
+          </div>
         </div>
       </section>
 
-      <section className="rounded-3xl bg-zinc-950 p-6 text-white">
+      <form onSubmit={handlePasswordSubmit} className="rounded-3xl bg-zinc-950 p-6 text-white">
         <p className="text-xs font-black uppercase tracking-[0.22em] text-red-300">Password</p>
-        <h3 className="mt-2 text-3xl font-black tracking-tight">Change password</h3>
+        <h3 className="mt-2 text-3xl font-black tracking-tight">{hasPassword ? "Change password" : "Set password"}</h3>
+        {!hasPassword && (
+          <p className="mt-3 text-sm font-semibold leading-6 text-white/55">
+            Password is not set for this account yet. Add one to sign in with email and password too.
+          </p>
+        )}
         <div className="mt-6 grid gap-3">
-          <input className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm font-bold outline-none transition placeholder:text-white/35 focus:border-red-400" type="password" placeholder="Current password" />
-          <input className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm font-bold outline-none transition placeholder:text-white/35 focus:border-red-400" type="password" placeholder="New password" />
-          <input className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm font-bold outline-none transition placeholder:text-white/35 focus:border-red-400" type="password" placeholder="Repeat password" />
-          <button className="rounded-2xl bg-red-500 px-5 py-4 text-sm font-black transition hover:bg-red-600">Update password</button>
+          {hasPassword && renderPasswordInput("currentPassword", "Current password")}
+          {renderPasswordInput("newPassword", "New password")}
+          {renderPasswordInput("confirmPassword", "Repeat password")}
+          {passwordMessage && <p className="rounded-2xl bg-emerald-500/10 px-4 py-3 text-sm font-black text-emerald-300">{passwordMessage}</p>}
+          {passwordError && <p className="rounded-2xl bg-red-500/10 px-4 py-3 text-sm font-black text-red-200">{passwordError}</p>}
+          <button
+            type="submit"
+            disabled={isUpdatingPassword}
+            className="rounded-2xl bg-red-500 px-5 py-4 text-sm font-black transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/45"
+          >
+            {isUpdatingPassword ? "Saving password..." : hasPassword ? "Update password" : "Save password"}
+          </button>
         </div>
-      </section>
+      </form>
     </motion.div>
   );
 
@@ -2384,9 +2475,9 @@ const Dashboard = ({ onLogout }) => {
             </p>
           </div>
           <div className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
-            <FiCheckCircle className={`text-2xl ${user.emailVerified === false ? "text-amber-500" : "text-emerald-500"}`} />
+            <FiCheckCircle className={`text-2xl ${accountVerificationDisplay.iconClassName}`} />
             <p className="mt-6 text-xs font-black uppercase tracking-wide text-zinc-400">Account status</p>
-            <p className="mt-1 text-xl font-black">{user.emailVerified === false ? "Email pending" : "Verified"}</p>
+            <p className="mt-1 text-xl font-black">{accountVerificationDisplay.label}</p>
           </div>
         </section>
 

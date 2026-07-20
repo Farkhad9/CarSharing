@@ -4,6 +4,8 @@ namespace CarSharing.Domain.Entities;
 
 public class User : BaseEntity
 {
+    private const string ExternalLoginPasswordMarker = "EXTERNAL_LOGIN_ONLY:";
+
     private User()
     {
     }
@@ -31,6 +33,7 @@ public class User : BaseEntity
     public Guid? BlockedByUserId { get; private set; }
     public string? RefreshTokenHash { get; private set; }
     public DateTime? RefreshTokenExpiresAt { get; private set; }
+    public bool HasPassword => !PasswordHash.StartsWith(ExternalLoginPasswordMarker, StringComparison.Ordinal);
 
     public static User CreateRider(
         string firstName,
@@ -57,6 +60,35 @@ public class User : BaseEntity
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             VerifiedAt = null
+        };
+    }
+
+    public static User CreateExternalRider(
+        string firstName,
+        string lastName,
+        string email,
+        string phone,
+        string passwordHash,
+        string driverLicenseNumber,
+        DateTime createdAt)
+    {
+        return new User
+        {
+            Id = Guid.NewGuid(),
+            FirstName = string.IsNullOrWhiteSpace(firstName) ? "ElectroStreet" : firstName.Trim(),
+            LastName = string.IsNullOrWhiteSpace(lastName) ? "Rider" : lastName.Trim(),
+            Email = email.Trim().ToLowerInvariant(),
+            Phone = phone.Trim(),
+            PasswordHash = passwordHash,
+            Balance = 0,
+            PendingHold = 0,
+            DriverLicenseNumber = driverLicenseNumber.Trim(),
+            EmailVerified = true,
+            VerificationStatus = UserVerificationStatus.Pending,
+            Role = UserRole.Rider,
+            IsActive = true,
+            CreatedAt = createdAt,
+            VerifiedAt = createdAt
         };
     }
 
@@ -218,6 +250,12 @@ public class User : BaseEntity
     {
         RefreshTokenHash = null;
         RefreshTokenExpiresAt = null;
+    }
+
+    public void ChangePassword(string passwordHash)
+    {
+        PasswordHash = passwordHash;
+        RevokeRefreshToken();
     }
 
     public void CreditBalance(decimal amount)
