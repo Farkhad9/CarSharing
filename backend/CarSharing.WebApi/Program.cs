@@ -7,10 +7,13 @@ using CarSharing.WebApi.Hubs;
 using CarSharing.WebApi.Seeding;
 using CarSharing.WebApi.Services;
 using CarSharing.Domain.Enums;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +23,7 @@ builder.Logging.AddConsole();
 builder.Logging.AddDebug();
 
 const string FrontendCorsPolicy = "FrontendCorsPolicy";
+const string ExternalOAuthCookieScheme = "ExternalOAuth";
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
@@ -36,7 +40,14 @@ builder.Services.AddHostedService<ReservationExpiryBackgroundService>();
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration is missing.");
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+var authenticationBuilder = builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddCookie(ExternalOAuthCookieScheme, options =>
+    {
+        options.Cookie.Name = "electrostreet.external";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(5);
+    })
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = new TokenValidationParameters
@@ -66,6 +77,104 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             }
         };
     });
+
+if (IsExternalProviderConfigured(builder.Configuration, "Google"))
+{
+    authenticationBuilder.AddGoogle("Google", options =>
+    {
+        options.SignInScheme = ExternalOAuthCookieScheme;
+        options.ClientId = builder.Configuration["ExternalAuth:Google:ClientId"] ?? string.Empty;
+        options.ClientSecret = builder.Configuration["ExternalAuth:Google:ClientSecret"] ?? string.Empty;
+        options.CallbackPath = "/api/auth/external/google/oauth-callback";
+        options.SaveTokens = false;
+    });
+}
+
+if (IsExternalProviderConfigured(builder.Configuration, "GitHub"))
+{
+    authenticationBuilder.AddOAuth("GitHub", options =>
+    {
+        options.SignInScheme = ExternalOAuthCookieScheme;
+        options.ClientId = builder.Configuration["ExternalAuth:GitHub:ClientId"] ?? string.Empty;
+        options.ClientSecret = builder.Configuration["ExternalAuth:GitHub:ClientSecret"] ?? string.Empty;
+        options.CallbackPath = "/api/auth/external/github/oauth-callback";
+        options.AuthorizationEndpoint = "https://github.com/login/oauth/authorize";
+        options.TokenEndpoint = "https://github.com/login/oauth/access_token";
+        options.UserInformationEndpoint = "https://api.github.com/user";
+        options.Scope.Add("user:email");
+        options.SaveTokens = false;
+        options.Events = new OAuthEvents
+        {
+            OnCreatingTicket = async context =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
+                request.Headers.Accept.ParseAdd("application/json");
+                request.Headers.UserAgent.ParseAdd("ElectroStreet");
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", context.AccessToken);
+
+                using var response = await context.Backchannel.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    context.HttpContext.RequestAborted);
+                response.EnsureSuccessStatusCode();
+
+                using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
+                if (context.Identity is not null)
+                {
+                    var root = payload.RootElement;
+                    if (root.TryGetProperty("id", out var id))
+                    {
+                        context.Identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, id.ToString()));
+                    }
+
+                    if (root.TryGetProperty("name", out var name) && !string.IsNullOrWhiteSpace(name.GetString()))
+                    {
+                        context.Identity.AddClaim(new Claim(ClaimTypes.Name, name.GetString()!));
+                    }
+
+                    if (root.TryGetProperty("email", out var profileEmail) && !string.IsNullOrWhiteSpace(profileEmail.GetString()))
+                    {
+                        context.Identity.AddClaim(new Claim(ClaimTypes.Email, profileEmail.GetString()!));
+                    }
+                }
+
+                if (!context.Principal!.HasClaim(claim => claim.Type == ClaimTypes.Email))
+                {
+                    using var emailRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user/emails");
+                    emailRequest.Headers.Accept.ParseAdd("application/json");
+                    emailRequest.Headers.UserAgent.ParseAdd("ElectroStreet");
+                    emailRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", context.AccessToken);
+
+                    using var emailResponse = await context.Backchannel.SendAsync(
+                        emailRequest,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        context.HttpContext.RequestAborted);
+                    emailResponse.EnsureSuccessStatusCode();
+
+                    using var emailPayload = JsonDocument.Parse(await emailResponse.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
+                    string? email = null;
+                    foreach (var item in emailPayload.RootElement.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("primary", out var primary) &&
+                            primary.GetBoolean() &&
+                            item.TryGetProperty("verified", out var verified) &&
+                            verified.GetBoolean() &&
+                            item.TryGetProperty("email", out var emailProperty))
+                        {
+                            email = emailProperty.GetString();
+                            break;
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(email) && context.Identity is not null)
+                    {
+                        context.Identity.AddClaim(new Claim(ClaimTypes.Email, email));
+                    }
+                }
+            }
+        };
+    });
+}
 
 builder.Services.AddAuthorization(options =>
 {
@@ -167,3 +276,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.Run();
+
+static bool IsExternalProviderConfigured(IConfiguration configuration, string provider)
+{
+    var clientId = configuration[$"ExternalAuth:{provider}:ClientId"];
+    var clientSecret = configuration[$"ExternalAuth:{provider}:ClientSecret"];
+    return !string.IsNullOrWhiteSpace(clientId) && !string.IsNullOrWhiteSpace(clientSecret);
+}

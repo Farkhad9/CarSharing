@@ -15,6 +15,7 @@ public class UserDto
     public string? DriverLicenseDocumentUrl { get; set; }
     public string? PassportDocumentUrl { get; set; }
     public bool EmailVerified { get; set; }
+    public bool HasPassword { get; set; }
     public UserVerificationStatus VerificationStatus { get; set; }
     public UserRole Role { get; set; }
     public bool IsActive { get; set; }

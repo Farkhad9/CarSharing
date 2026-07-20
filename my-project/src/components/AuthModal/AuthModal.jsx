@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FaGithub, FaGoogle } from "react-icons/fa";
 import {
   FiCheck,
@@ -8,29 +8,81 @@ import {
   FiMail,
   FiPhone,
   FiSend,
+  FiShield,
   FiUser,
 } from "react-icons/fi";
 import { normalizeRole } from "../../api/adminUsersApi";
 import { authApi } from "../../api/authApi";
 
 const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice }) => {
-  const [isRegister, setIsRegister] = useState(() => {
-    return new URLSearchParams(window.location.search).get("mode") === "register";
-  });
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialAuthMode = (() => {
+    if (initialParams.get("mode") === "reset-password") return "reset";
+    if (initialParams.get("mode") === "forgot-password") return "forgot";
+    if (initialParams.get("mode") === "register") return "register";
+    return "sign-in";
+  })();
+  const [authMode, setAuthMode] = useState(initialAuthMode);
+  const isRegister = authMode === "register";
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [firstName, setFirstName] = useState("Farhad");
   const [lastName, setLastName] = useState("Aliyev");
   const [phone, setPhone] = useState("+994501234567");
-  const [password, setPassword] = useState("Password123!");
-  const [confirmPassword, setConfirmPassword] = useState("Password123!");
+  const [password, setPassword] = useState(initialAuthMode === "reset" ? "" : "Password123!");
+  const [confirmPassword, setConfirmPassword] = useState(initialAuthMode === "reset" ? "" : "Password123!");
   const [licenseNumber, setLicenseNumber] = useState("AZE1234567");
   const [age, setAge] = useState("25");
-  const [email, setEmail] = useState("farhad@electrostreet.az");
+  const [email, setEmail] = useState(initialAuthMode === "forgot" ? "" : "farhad@electrostreet.az");
   const [verificationLink, setVerificationLink] = useState("");
   const [verificationNotice, setVerificationNotice] = useState("");
+  const [resetToken] = useState(() => initialParams.get("token") || "");
+  const [resetCode, setResetCode] = useState("");
+  const [resetNotice, setResetNotice] = useState("");
   const [authError, setAuthError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const externalStatus = params.get("external");
+    if (!externalStatus) return;
+
+    if (externalStatus === "error") {
+      window.setTimeout(() => {
+        setAuthError(params.get("message") || "External sign-in failed.");
+      }, 0);
+      window.history.replaceState({}, "", "/auth");
+      return;
+    }
+
+    if (externalStatus !== "success") return;
+
+    const completeExternalLogin = async () => {
+      setIsSubmitting(true);
+      setAuthError("");
+      try {
+        const user = await authApi.refresh();
+        const role = normalizeRole(user.roleKey || user.role);
+        if (role !== "rider") {
+          await authApi.logout();
+          setAuthError("This login is only for customer accounts. Use the dedicated staff or admin address.");
+          return;
+        }
+
+        if (onAuthSuccess) onAuthSuccess(user);
+        else window.location.href = "/";
+      } catch (error) {
+        setAuthError(error.message || "External sign-in failed.");
+      } finally {
+        setIsSubmitting(false);
+        window.history.replaceState({}, "", "/auth");
+      }
+    };
+
+    window.setTimeout(() => {
+      completeExternalLogin();
+    }, 0);
+  }, [onAuthSuccess]);
 
   if (!isOpen) {
     return null;
@@ -98,6 +150,52 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
     }
   };
 
+  const handleForgotSubmit = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    setResetNotice("");
+    setIsSubmitting(true);
+    try {
+      const response = await authApi.requestPasswordReset(email.trim());
+      setResetNotice(response.message || "If an account exists, reset instructions were sent.");
+    } catch (error) {
+      setAuthError(error.message || "Password reset request failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResetSubmit = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    setResetNotice("");
+    if (!resetToken) {
+      setAuthError("Reset link is missing a token.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+    if (!/^\d{6}$/.test(resetCode.trim())) {
+      setAuthError("Enter the 6-digit verification code from your email.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await authApi.resetPassword(resetToken, resetCode.trim(), password, confirmPassword);
+      setResetNotice(response.message || "Password has been reset.");
+      setResetCode("");
+      setPassword("");
+      setConfirmPassword("");
+    } catch (error) {
+      setAuthError(error.message || "Password reset failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const inputClass =
     "w-full rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-semibold text-zinc-900 outline-none transition focus:border-red-500 focus:bg-white focus:shadow-sm";
 
@@ -160,6 +258,140 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
               </button>
             </div>
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (authMode === "forgot") {
+    return (
+      <main className="auth-page min-h-screen bg-gradient-to-br from-white via-zinc-50 to-red-50 px-4 py-6 text-zinc-900">
+        <div className="mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-3xl items-center justify-center">
+          <form onSubmit={handleForgotSubmit} className="w-full rounded-[28px] border border-red-100 bg-white p-8 text-center shadow-2xl shadow-red-950/10">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-red-500">
+              <FiMail className="text-3xl" />
+            </div>
+            <p className="mt-6 text-xs font-black uppercase tracking-[0.22em] text-red-500">
+              Password reset
+            </p>
+            <h1 className="mt-3 text-3xl font-black tracking-tight text-zinc-950">
+              Forgot password?
+            </h1>
+            <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-zinc-500">
+              Enter your email and we will send reset instructions if an account exists.
+            </p>
+            <div className="relative mx-auto mt-6 w-full max-w-sm">
+              <FiMail className="absolute left-4 top-3.5 text-zinc-400" />
+              <input
+                className={iconInputClass}
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </div>
+            {resetNotice && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-green-600">{resetNotice}</p>}
+            {authError && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-red-600">{authError}</p>}
+            <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+              <button type="submit" className={primaryButtonClass}>
+                {isSubmitting ? "Sending..." : "Send reset link"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("sign-in");
+                  setAuthError("");
+                  setResetNotice("");
+                }}
+                className="rounded-lg border border-zinc-200 px-6 py-3 text-sm font-black text-zinc-700 transition hover:border-red-200 hover:text-red-600"
+              >
+                Back to sign in
+              </button>
+            </div>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  if (authMode === "reset") {
+    return (
+      <main className="auth-page min-h-screen bg-gradient-to-br from-white via-zinc-50 to-red-50 px-4 py-6 text-zinc-900">
+        <div className="mx-auto flex min-h-[calc(100vh-48px)] w-full max-w-3xl items-center justify-center">
+          <form onSubmit={handleResetSubmit} className="w-full rounded-[28px] border border-red-100 bg-white p-8 text-center shadow-2xl shadow-red-950/10">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-red-500">
+              <FiLock className="text-3xl" />
+            </div>
+            <p className="mt-6 text-xs font-black uppercase tracking-[0.22em] text-red-500">
+              Password reset
+            </p>
+            <h1 className="mt-3 text-3xl font-black tracking-tight text-zinc-950">
+              Create a new password
+            </h1>
+            <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-zinc-500">
+              Enter the 6-digit code from your email and choose a strong new password.
+            </p>
+            <div className="relative mx-auto mt-6 w-full max-w-sm">
+              <FiShield className="absolute left-4 top-3.5 text-zinc-400" />
+              <input
+                className={iconInputClass}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength="6"
+                placeholder="Verification code"
+                value={resetCode}
+                onChange={(event) => setResetCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              />
+            </div>
+            <div className="relative mx-auto mt-3 w-full max-w-sm">
+              <FiLock className="absolute left-4 top-3.5 text-zinc-400" />
+              <input
+                className={passwordInputClass}
+                type={showPassword ? "text" : "password"}
+                placeholder="New password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-3.5 text-zinc-400 transition hover:text-red-500"
+                aria-label="Toggle password visibility"
+              >
+                {showPassword ? <FiEyeOff /> : <FiEye />}
+              </button>
+            </div>
+            <div className="relative mx-auto mt-3 w-full max-w-sm">
+              <FiLock className="absolute left-4 top-3.5 text-zinc-400" />
+              <input
+                className={passwordInputClass}
+                type={showPassword ? "text" : "password"}
+                placeholder="Confirm password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+            </div>
+            {resetNotice && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-green-600">{resetNotice}</p>}
+            {authError && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-red-600">{authError}</p>}
+            <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+              <button type="submit" className={primaryButtonClass}>
+                {isSubmitting ? "Saving..." : "Reset password"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("sign-in");
+                  setAuthError("");
+                  setResetNotice("");
+                  window.history.replaceState({}, "", "/auth");
+                }}
+                className="rounded-lg border border-zinc-200 px-6 py-3 text-sm font-black text-zinc-700 transition hover:border-red-200 hover:text-red-600"
+              >
+                Back to sign in
+              </button>
+            </div>
+          </form>
         </div>
       </main>
     );
@@ -547,6 +779,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 <div className="mt-5 flex gap-3">
                   <button
                     type="button"
+                    onClick={() => authApi.startExternalLogin("google")}
                     className={`${socialButtonClass} text-[#4285F4] hover:border-[#4285F4]/25 hover:bg-[#4285F4]/5`}
                     aria-label="Sign up with Google"
                   >
@@ -554,6 +787,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   </button>
                   <button
                     type="button"
+                    onClick={() => authApi.startExternalLogin("github")}
                     className={`${socialButtonClass} text-zinc-950 hover:border-zinc-900/20 hover:bg-zinc-100`}
                     aria-label="Sign up with GitHub"
                   >
@@ -648,7 +882,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
 
                 <button
                   type="button"
-                  onClick={() => setIsRegister(false)}
+                  onClick={() => setAuthMode("sign-in")}
                   className="mt-5 text-sm font-bold text-zinc-500 transition hover:text-red-500 md:hidden"
                 >
                   Already have an account?
@@ -668,6 +902,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 <div className="mt-5 flex gap-3">
                   <button
                     type="button"
+                    onClick={() => authApi.startExternalLogin("google")}
                     className={`${socialButtonClass} text-[#4285F4] hover:border-[#4285F4]/25 hover:bg-[#4285F4]/5`}
                     aria-label="Sign in with Google"
                   >
@@ -675,6 +910,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   </button>
                   <button
                     type="button"
+                    onClick={() => authApi.startExternalLogin("github")}
                     className={`${socialButtonClass} text-zinc-950 hover:border-zinc-900/20 hover:bg-zinc-100`}
                     aria-label="Sign in with GitHub"
                   >
@@ -737,7 +973,12 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   </label>
 
                   <a
-                    href="#forgot-password"
+                    href="/auth?mode=forgot-password"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setAuthMode("forgot");
+                      setAuthError("");
+                    }}
                     className="text-xs font-bold text-zinc-500 transition hover:text-red-500"
                   >
                     Forgot password?
@@ -754,7 +995,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
 
                 <button
                   type="button"
-                  onClick={() => setIsRegister(true)}
+                  onClick={() => setAuthMode("register")}
                   className="mt-5 text-sm font-bold text-zinc-500 transition hover:text-red-500 md:hidden"
                 >
                   Create new account
@@ -798,7 +1039,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   </p>
                   <button
                     type="button"
-                    onClick={() => setIsRegister(false)}
+                    onClick={() => setAuthMode("sign-in")}
                     className={outlineButtonClass}
                   >
                     Sign In
@@ -817,7 +1058,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                   </p>
                   <button
                     type="button"
-                    onClick={() => setIsRegister(true)}
+                    onClick={() => setAuthMode("register")}
                     className={outlineButtonClass}
                   >
                     Sign Up

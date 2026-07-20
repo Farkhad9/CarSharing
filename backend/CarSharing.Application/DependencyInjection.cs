@@ -54,6 +54,10 @@ public static class DependencyInjection
 
         services.AddScoped<IValidator<RegisterUserRequest>, RegisterUserRequestValidator>();
         services.AddScoped<IValidator<LoginUserRequest>, LoginUserRequestValidator>();
+        services.AddScoped<IValidator<RequestPasswordResetRequest>, RequestPasswordResetRequestValidator>();
+        services.AddScoped<IValidator<ResetPasswordRequest>, ResetPasswordRequestValidator>();
+        services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
+        services.AddScoped<IValidator<SetPasswordRequest>, SetPasswordRequestValidator>();
         services.AddScoped<IValidator<CreateReservationRequest>, CreateReservationRequestValidator>();
         services.AddScoped<IValidator<CancelReservationRequest>, CancelReservationRequestValidator>();
         services.AddScoped<IValidator<StartTripRequest>, StartTripRequestValidator>();

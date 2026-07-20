@@ -21,11 +21,20 @@ public class ReservationExpiryBackgroundService : BackgroundService
     {
         using var timer = new PeriodicTimer(CheckInterval);
 
-        await ExpireReservationsAsync(stoppingToken);
-
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        try
         {
             await ExpireReservationsAsync(stoppingToken);
+
+            while (await timer.WaitForNextTickAsync(stoppingToken))
+            {
+                await ExpireReservationsAsync(stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException) when (stoppingToken.IsCancellationRequested)
+        {
         }
     }
 
@@ -45,8 +54,16 @@ public class ReservationExpiryBackgroundService : BackgroundService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             _logger.LogError(exception, "Failed to expire active reservations.");
         }
     }

@@ -26,6 +26,7 @@ public static class DependencyInjection
             options.UseSqlServer(connectionString));
 
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserExternalLoginRepository, UserExternalLoginRepository>();
         services.AddScoped<IReservationRepository, ReservationRepository>();
         services.AddScoped<ITripRepository, TripRepository>();
         services.AddScoped<ITripCompletionRequestRepository, TripCompletionRequestRepository>();
@@ -38,6 +39,7 @@ public static class DependencyInjection
         services.AddScoped<IInvoiceRepository, InvoiceRepository>();
         services.AddScoped<IAdminStatisticsRepository, AdminStatisticsRepository>();
         services.AddScoped<IParkingZoneRepository, ParkingZoneRepository>();
+        services.AddScoped<IPasswordResetTokenRepository, PasswordResetTokenRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();
@@ -48,6 +50,8 @@ public static class DependencyInjection
         services.Configure<SmtpOptions>(configuration.GetSection(SmtpOptions.SectionName));
         services.AddScoped<IReceiptEmailSender, MailtrapReceiptEmailSender>();
         services.AddScoped<IEmailVerificationSender, SmtpEmailVerificationSender>();
+        services.AddScoped<IPasswordResetEmailSender, SmtpPasswordResetEmailSender>();
+        services.AddScoped<IAccountSecurityEmailSender, SmtpAccountSecurityEmailSender>();
 
         var rabbitMqOptions = configuration.GetSection(RabbitMqOptions.SectionName).Get<RabbitMqOptions>() ?? new RabbitMqOptions();
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
@@ -71,6 +75,10 @@ public static class DependencyInjection
                 });
             });
             services.AddScoped<IEventPublisher, MassTransitEventPublisher>();
+        }
+        else
+        {
+            services.AddScoped<IEventPublisher, LocalInvoiceDeliveryEventPublisher>();
         }
 
         return services;
