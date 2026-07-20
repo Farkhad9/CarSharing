@@ -45,6 +45,48 @@ public sealed class AdminStatisticsTests
     }
 
     [Fact]
+    public async Task GetFinanceStatisticsAsync_ForSuperAdmin_ReturnsPeriodSummary()
+    {
+        var repository = new StatisticsRepo(CreateSnapshot());
+        var service = CreateService(repository, new CurrentUser(UserRole.SuperAdmin));
+
+        var result = await service.GetFinanceStatisticsAsync(new AdminFinanceStatisticsRequest(
+            DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7)),
+            DateOnly.FromDateTime(DateTime.UtcNow)));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(321m, result.Value!.Revenue);
+        Assert.Equal(6, result.Value.CompletedTrips);
+        Assert.Equal(40, result.Value.UtilizationPercent);
+    }
+
+    [Fact]
+    public async Task GetFinanceStatisticsAsync_ForAdmin_IsForbidden()
+    {
+        var service = CreateService(new StatisticsRepo(CreateSnapshot()), new CurrentUser(UserRole.Admin));
+
+        var result = await service.GetFinanceStatisticsAsync(new AdminFinanceStatisticsRequest(
+            DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7)),
+            DateOnly.FromDateTime(DateTime.UtcNow)));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminStatistics.SuperAdminRequired", result.Errors.Single().Code);
+    }
+
+    [Fact]
+    public async Task GetFinanceStatisticsAsync_ForInvalidPeriod_ReturnsValidationError()
+    {
+        var service = CreateService(new StatisticsRepo(CreateSnapshot()), new CurrentUser(UserRole.SuperAdmin));
+
+        var result = await service.GetFinanceStatisticsAsync(new AdminFinanceStatisticsRequest(
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1))));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("Validation.Period", result.Errors.Single().Code);
+    }
+
+    [Fact]
     public async Task GetLiveStatisticsAsync_ForRider_IsForbidden()
     {
         var service = CreateService(new StatisticsRepo(CreateSnapshot()), new CurrentUser(UserRole.Rider));
@@ -74,6 +116,9 @@ public sealed class AdminStatisticsTests
             new UserRepo([]),
             new StaffTaskRepo([]),
             new StaffKpiEventRepo([]),
+            new TripCompletionRequestRepo(),
+            new TripRepo(),
+            new VehicleRepo(),
             new UnitOfWork(),
             currentUser);
 
@@ -120,6 +165,27 @@ public sealed class AdminStatisticsTests
             LastPeriod = period;
             return Task.FromResult(snapshot);
         }
+
+        public Task<AdminFinanceStatisticsDto> GetFinanceSnapshotAsync(
+            DateTime fromUtc,
+            DateTime toUtc,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AdminFinanceStatisticsDto(
+                DateTime.UtcNow,
+                "Asia/Baku",
+                DateOnly.FromDateTime(fromUtc),
+                DateOnly.FromDateTime(toUtc.AddDays(-1)),
+                321m,
+                "AZN",
+                6,
+                7,
+                1,
+                2,
+                0,
+                10,
+                4,
+                40,
+                snapshot.TopVehicles));
     }
 
     private sealed class UserRepo(IReadOnlyList<User> users) : IUserRepository
@@ -155,6 +221,9 @@ public sealed class AdminStatisticsTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) =>
             Task.FromResult(users.Any(user => user.Phone == phone));
 
+        public Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default) =>
+            Task.FromResult(users.Any(user => user.DriverLicenseNumber.Equals(driverLicenseNumber, StringComparison.OrdinalIgnoreCase)));
+
         public Task AddAsync(User user, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }
@@ -189,6 +258,66 @@ public sealed class AdminStatisticsTests
             Task.FromResult(events.Any(kpiEvent => kpiEvent.StaffUserId == staffUserId && kpiEvent.SourceId == sourceId));
 
         public Task AddAsync(StaffKpiEvent kpiEvent, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class TripCompletionRequestRepo : ITripCompletionRequestRepository
+    {
+        public Task<TripCompletionRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult<TripCompletionRequest?>(null);
+
+        public Task<TripCompletionRequest?> GetLatestByTripIdAsync(Guid tripId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<TripCompletionRequest?>(null);
+
+        public Task<IReadOnlyList<TripCompletionRequest>> GetPendingReviewAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TripCompletionRequest>>([]);
+
+        public Task<IReadOnlyList<TripCompletionRequest>> GetReviewedByUserIdAsync(Guid reviewedByUserId, int take = 50, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TripCompletionRequest>>([]);
+
+        public Task AddAsync(TripCompletionRequest request, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class TripRepo : ITripRepository
+    {
+        public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Trip?>(null);
+
+        public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Trip?>(null);
+
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>([]);
+
+        public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Trip?>(null);
+
+        public Task AddAsync(Trip trip, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class VehicleRepo : IVehicleRepository
+    {
+        public Task<IReadOnlyList<Vehicle>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Vehicle>>([]);
+
+        public Task<Vehicle?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Vehicle?>(null);
+
+        public Task<Vehicle?> GetByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Vehicle?>(null);
+
+        public Task<int> CountAvailableByZoneAsync(string zone, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
+
+        public Task<bool> ExistsByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> ExistsByPlateNumberAsync(string plateNumber, Guid excludedVehicleId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
+        public Task AddAsync(Vehicle vehicle, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }
 

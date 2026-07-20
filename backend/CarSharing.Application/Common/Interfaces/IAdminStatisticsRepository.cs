@@ -14,4 +14,9 @@ public interface IAdminStatisticsRepository
     Task<AdminStatisticsSnapshot> GetLiveSnapshotAsync(
         AdminStatisticsPeriod period,
         CancellationToken cancellationToken = default);
+
+    Task<AdminFinanceStatisticsDto> GetFinanceSnapshotAsync(
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken = default);
 }

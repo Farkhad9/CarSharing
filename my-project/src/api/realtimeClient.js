@@ -14,7 +14,7 @@ export const createOperationsConnection = () =>
       accessTokenFactory: () => getAccessToken() || "",
     })
     .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
-    .configureLogging(LogLevel.Warning)
+    .configureLogging(LogLevel.None)
     .build();
 
 export const startConnection = async (connection) => {

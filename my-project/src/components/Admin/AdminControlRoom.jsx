@@ -37,6 +37,7 @@ import { invoiceApi } from "../../api/invoiceApi";
 import { authApi } from "../../api/authApi";
 import { adminStatisticsApi } from "../../api/adminStatisticsApi";
 import { adminUsersApi, USER_BLOCK_DURATIONS, USER_ROLES, USER_VERIFICATION_STATUSES, normalizeRole } from "../../api/adminUsersApi";
+import { parkingZoneApi } from "../../api/parkingZoneApi";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { adminStaffTasksApi, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES } from "../../api/staffTasksApi";
 import { vehicleApi } from "../../api/vehicleApi";
@@ -145,6 +146,20 @@ const mapBackendStaffUser = (user) => ({
   supportTicketsClosed: [],
 });
 
+const normalizeStaffWorkTitle = (title) => {
+  if (title === "Trip completion photo review") return "Vehicle return photo review";
+  return title || "Completed staff task";
+};
+
+const normalizeStaffWorkResult = (result) => {
+  const text = String(result || "").trim();
+  if (/^Approved completion photos for trip [0-9a-f-]+\.?$/i.test(text)) {
+    return "Approved vehicle return photos.";
+  }
+
+  return text.replace(/^Approved completion photos/i, "Approved vehicle return photos");
+};
+
 const mapBackendStaffKpiRow = (row) => ({
   id: row.id,
   name: row.name || row.email,
@@ -162,15 +177,15 @@ const mapBackendStaffKpiRow = (row) => ({
   applicationsProcessed: Array.isArray(row.completedTasks)
     ? row.completedTasks.map((task) => ({
       id: task.id,
-      title: task.title,
-      result: task.result,
+      title: normalizeStaffWorkTitle(task.title),
+      result: normalizeStaffWorkResult(task.result),
       time: formatBakuDateTime(task.completedAt, "Completed"),
     }))
     : [],
   supportTicketsClosed: Array.from({ length: Number(row.supportTicketsClosed || 0) }, (_, index) => ({
     id: `${row.id}-ticket-${index + 1}`,
     title: "Closed support ticket",
-    result: "Calculated from backend support data.",
+    result: "Calculated from support data.",
     time: `#${index + 1}`,
   })),
 });
@@ -181,6 +196,110 @@ const CHARGING_PERCENT_PER_MINUTE = 10;
 const COMPLETED_TASK_VISIBLE_MS = 24 * 60 * 60 * 1000;
 const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
 const LEGACY_DEVELOPMENT_ADMIN_EMAIL = "admin@carsharing.local";
+const MAINTENANCE_VEHICLE_STATUS = VEHICLE_STATUSES.COMPLETED;
+const VEHICLE_CONNECTOR_OPTIONS = ["CCS2", "Type2", "CHAdeMO"];
+const SUPERADMIN_VEHICLE_STATUS_OPTIONS = [
+  [VEHICLE_STATUSES.AVAILABLE, "Available"],
+  [VEHICLE_STATUSES.RESERVED, "Reserved"],
+  [VEHICLE_STATUSES.IN_USE, "In Use"],
+  [VEHICLE_STATUSES.CHARGING, "Charging"],
+  [MAINTENANCE_VEHICLE_STATUS, "Maintenance"],
+];
+
+const getLocalDateInputValue = (date = new Date()) => {
+  const parts = getBakuDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const getDefaultFinancePeriod = () => {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - 29);
+
+  return {
+    from: getLocalDateInputValue(start),
+    to: getLocalDateInputValue(end),
+  };
+};
+
+const getEmptyVehicleDraft = () => ({
+  brand: "",
+  model: "",
+  year: new Date().getFullYear(),
+  plateNumber: "",
+  mileageKm: 0,
+  batteryPercent: 80,
+  rangeKm: 250,
+  pricePerMinute: 0.45,
+  currency: "AZN",
+  seats: 4,
+  color: "",
+  connectorType: "CCS2",
+  chargingStationId: null,
+  locationLabel: "Baku",
+  zone: "City",
+  latitude: BAKU_CENTER[0],
+  longitude: BAKU_CENTER[1],
+  pickOnMap: false,
+  status: VEHICLE_STATUSES.AVAILABLE,
+});
+
+const vehicleToDraft = (vehicle) => ({
+  brand: vehicle?.brand || "",
+  model: vehicle?.model || "",
+  year: Number(vehicle?.year || new Date().getFullYear()),
+  plateNumber: vehicle?.plateNumber || "",
+  mileageKm: Number(vehicle?.mileageKm || 0),
+  batteryPercent: Number(vehicle?.batteryPercent || 80),
+  rangeKm: Number(vehicle?.rangeKm || 250),
+  pricePerMinute: Number(vehicle?.pricePerMinute || 0),
+  currency: vehicle?.currency || "AZN",
+  seats: Number(vehicle?.seats || 4),
+  color: vehicle?.color || "",
+  connectorType: vehicle?.connectorType || "CCS2",
+  chargingStationId: vehicle?.chargingStationId || null,
+  locationLabel: vehicle?.locationLabel || vehicle?.location?.label || "Baku",
+  zone: vehicle?.zone || vehicle?.location?.zone || "City",
+  latitude: Number(vehicle?.latitude ?? vehicle?.location?.lat ?? BAKU_CENTER[0]),
+  longitude: Number(vehicle?.longitude ?? vehicle?.location?.lng ?? BAKU_CENTER[1]),
+  pickOnMap: false,
+  status: vehicle?.status || VEHICLE_STATUSES.AVAILABLE,
+});
+
+const parseVehicleNumber = (value) => Number(String(value ?? "").trim().replace(",", "."));
+
+const sanitizeVehicleDraft = (draft) => {
+  const latitude = parseVehicleNumber(draft.latitude);
+  const longitude = parseVehicleNumber(draft.longitude);
+
+  return {
+    brand: String(draft.brand || "").trim(),
+    model: String(draft.model || "").trim(),
+    plateNumber: String(draft.plateNumber || "").trim().toUpperCase(),
+    mileageKm: parseVehicleNumber(draft.mileageKm),
+    batteryPercent: parseVehicleNumber(draft.batteryPercent),
+    rangeKm: parseVehicleNumber(draft.rangeKm),
+    pricePerMinute: parseVehicleNumber(draft.pricePerMinute),
+    currency: "AZN",
+    seats: parseVehicleNumber(draft.seats),
+    color: String(draft.color || "").trim(),
+    connectorType: String(draft.connectorType || "").trim(),
+    chargingStationId: draft.chargingStationId || null,
+    locationLabel: String(draft.locationLabel || "").trim(),
+    zone: String(draft.zone || "").trim(),
+    latitude,
+    longitude,
+    year: parseVehicleNumber(draft.year),
+    status: draft.status || VEHICLE_STATUSES.AVAILABLE,
+  };
+};
+
+const getEmptyVehiclePhotoDraft = () => ({
+  mainImage: null,
+  galleryImage1: null,
+  galleryImage2: null,
+  galleryImage3: null,
+});
 
 const STATUS_META = {
   available: {
@@ -289,6 +408,28 @@ const parkingZones = [
       [40.3627, 49.8373],
     ],
   },
+  {
+    id: "red-khyrdalan-west",
+    name: "No Parking: Khyrdalan West",
+    type: "restricted",
+    positions: [
+      [40.4208, 49.7359],
+      [40.4241, 49.7884],
+      [40.3988, 49.8176],
+      [40.3864, 49.7633],
+    ],
+  },
+  {
+    id: "red-khyrdalan-east",
+    name: "No Parking: Khyrdalan East",
+    type: "restricted",
+    positions: [
+      [40.4712, 49.8553],
+      [40.4655, 49.9188],
+      [40.4302, 49.9093],
+      [40.4165, 49.8491],
+    ],
+  },
 ];
 
 const PARKING_ZONES_STORAGE_KEY = "electroStreetParkingZones";
@@ -334,6 +475,30 @@ const normalizeParkingZone = (zone, index) => {
   };
 };
 
+const mergeParkingZonesWithDefaults = (storedZones = []) => {
+  const zonesById = new Map();
+  const defaultZoneIds = new Set();
+
+  parkingZones
+    .map(normalizeParkingZone)
+    .filter(Boolean)
+    .forEach((zone) => {
+      zonesById.set(zone.id, zone);
+      defaultZoneIds.add(zone.id);
+    });
+
+  storedZones
+    .map(normalizeParkingZone)
+    .filter(Boolean)
+    .forEach((zone) => {
+      if (!defaultZoneIds.has(zone.id)) {
+        zonesById.set(zone.id, zone);
+      }
+    });
+
+  return Array.from(zonesById.values());
+};
+
 const getInitialParkingZones = () => {
   try {
     const storedZones = localStorage.getItem(PARKING_ZONES_STORAGE_KEY);
@@ -342,9 +507,7 @@ const getInitialParkingZones = () => {
     const parsedZones = JSON.parse(storedZones);
     if (!Array.isArray(parsedZones)) return parkingZones;
 
-    return parsedZones
-      .map(normalizeParkingZone)
-      .filter(Boolean);
+    return mergeParkingZonesWithDefaults(parsedZones);
   } catch {
     return parkingZones;
   }
@@ -582,9 +745,10 @@ const sidebarItems = [
   { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
   { id: "users", label: "Users & KYC", icon: FiUserCheck, filter: "all" },
   { id: "billing", label: "Receipts", icon: FiDollarSign, filter: "all" },
-  { id: "kpi", label: "Manager KPI", icon: FiUsers, filter: "all" },
+  { id: "kpi", label: "Staff Work", icon: FiUsers, filter: "all" },
   { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
   { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
+  { id: "superadmin", label: "SuperAdmin", icon: FiShield, filter: "all", superOnly: true },
 ];
 
 const formatSenderTitle = ({ senderRole, senderName }) => {
@@ -916,8 +1080,8 @@ const createServicePointIcon = (point) =>
 const makeEvent = (vehicle) => {
   const actions = {
     available: "Available for booking",
-    in_use: "Active ride from backend",
-    low_charge: "Low battery vehicle from backend",
+    in_use: "Active ride in progress",
+    low_charge: "Low battery vehicle",
     service: "Vehicle is in service mode",
   };
 
@@ -925,7 +1089,7 @@ const makeEvent = (vehicle) => {
     id: `feed-${Date.now()}-${vehicle.id}`,
     vehicleId: vehicle.id,
     title: `${vehicle.brand} ${vehicle.model || ""}`.trim(),
-    detail: actions[vehicle.liveStatus] || "Vehicle status updated from backend",
+    detail: actions[vehicle.liveStatus] || "Vehicle status updated",
     plate: vehicle.plateNumber,
     time: "just now",
     status: vehicle.liveStatus,
@@ -1036,6 +1200,61 @@ const ZoneDrawEvents = ({ enabled, onAddPoint }) => {
   return null;
 };
 
+const VehicleLocationPickerEvents = ({ enabled, onPick }) => {
+  useMapEvents({
+    click(event) {
+      if (!enabled) return;
+      onPick(event.latlng.lat, event.latlng.lng);
+    },
+  });
+
+  return null;
+};
+
+const VehicleLocationPicker = ({ enabled, latitude, longitude, onPick }) => {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  const center = Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : BAKU_CENTER;
+
+  return (
+    <div className={`overflow-hidden rounded-2xl border ${enabled ? "border-emerald-400/40" : "border-white/10"} bg-[#08111f]`}>
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+        <div>
+          <p className="text-xs font-black text-white">Vehicle location</p>
+          <p className="text-[10px] font-bold text-slate-500">
+            {enabled ? "Click on the map to place the vehicle." : "Enable map picking to move the point."}
+          </p>
+        </div>
+        <span className={`rounded-lg px-2 py-1 text-[10px] font-black ${enabled ? "bg-emerald-500 text-white" : "bg-white/[0.06] text-slate-300"}`}>
+          {enabled ? "Picking" : "Locked"}
+        </span>
+      </div>
+      <div className="h-56">
+        <MapContainer
+          center={center}
+          zoom={13}
+          minZoom={10}
+          maxBounds={BAKU_MAP_BOUNDS}
+          className="h-full w-full"
+          scrollWheelZoom={enabled}
+        >
+          <TileLayer
+            attribution='&copy; OpenStreetMap contributors &copy; CARTO'
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          />
+          <Circle
+            center={center}
+            radius={140}
+            pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.32, weight: 2 }}
+          />
+          <VehicleLocationPickerEvents enabled={enabled} onPick={onPick} />
+          <LeafletLayoutFix refreshKey={`${enabled}:${center[0]}:${center[1]}`} />
+        </MapContainer>
+      </div>
+    </div>
+  );
+};
+
 const AdminLogin = ({ onLogin }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1063,7 +1282,7 @@ const AdminLogin = ({ onLogin }) => {
       setError(
         nextError.status === 401
           ? "Invalid email or password."
-          : "Backend is not connected. Please start the server and try again."
+          : "Service is not connected. Please start the server and try again."
       );
     } finally {
       setIsSubmitting(false);
@@ -1166,6 +1385,8 @@ const AdminControlRoom = () => {
   const [managedChargingStations, setManagedChargingStations] = useState([]);
   const [managedServicePoints, setManagedServicePoints] = useState([]);
   const [managedZones, setManagedZones] = useState(getInitialParkingZones);
+  const [parkingZonesError, setParkingZonesError] = useState("");
+  const [isLoadingParkingZones, setIsLoadingParkingZones] = useState(false);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [focusTarget, setFocusTarget] = useState(null);
   const [selectedChargingStationId, setSelectedChargingStationId] = useState("");
@@ -1206,6 +1427,13 @@ const AdminControlRoom = () => {
   const [adminStatisticsError, setAdminStatisticsError] = useState("");
   const [isLoadingAdminStatistics, setIsLoadingAdminStatistics] = useState(false);
   const [adminStatisticsLoadedAt, setAdminStatisticsLoadedAt] = useState(null);
+  const [superAdminFinance, setSuperAdminFinance] = useState(null);
+  const [superAdminFinanceError, setSuperAdminFinanceError] = useState("");
+  const [isLoadingSuperAdminFinance, setIsLoadingSuperAdminFinance] = useState(false);
+  const [superAdminFinancePeriod, setSuperAdminFinancePeriod] = useState(getDefaultFinancePeriod);
+  const [superAdminTab, setSuperAdminTab] = useState("finance");
+  const [superAdminRoleSearchQuery, setSuperAdminRoleSearchQuery] = useState("");
+  const [superAdminRoleFilter, setSuperAdminRoleFilter] = useState("all");
   const [chargingStationsError, setChargingStationsError] = useState("");
   const [isLoadingChargingStations, setIsLoadingChargingStations] = useState(false);
   const [backendUsers, setBackendUsers] = useState([]);
@@ -1226,6 +1454,7 @@ const AdminControlRoom = () => {
     duration: USER_BLOCK_DURATIONS.FifteenMinutes,
   });
   const [staff, setStaff] = useState(emptyBackendStaffList);
+  const [adminWorkRows, setAdminWorkRows] = useState([]);
   const [staffKpiSummary, setStaffKpiSummary] = useState(null);
   const [isLoadingStaffKpi, setIsLoadingStaffKpi] = useState(false);
   const [staffKpiError, setStaffKpiError] = useState("");
@@ -1240,6 +1469,10 @@ const AdminControlRoom = () => {
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [backendVehiclesError, setBackendVehiclesError] = useState("");
   const [isLoadingBackendVehicles, setIsLoadingBackendVehicles] = useState(false);
+  const [vehicleDraft, setVehicleDraft] = useState(getEmptyVehicleDraft);
+  const [vehiclePhotoDraft, setVehiclePhotoDraft] = useState(getEmptyVehiclePhotoDraft);
+  const [editingVehicleId, setEditingVehicleId] = useState("");
+  const [vehicleManagementBusyId, setVehicleManagementBusyId] = useState("");
   const [activeChargingSessions, setActiveChargingSessions] = useState([]);
   const [isLoadingChargingSessions, setIsLoadingChargingSessions] = useState(false);
   const [chargingSessionsError, setChargingSessionsError] = useState("");
@@ -1407,12 +1640,33 @@ const AdminControlRoom = () => {
       setAdminStatisticsError(
         error.status === 401 || error.status === 403
           ? "Admin session expired. Please log in again."
-          : "Backend statistics are unavailable. Please check the server and refresh."
+          : "Statistics are unavailable. Please check the service and refresh."
       );
     } finally {
       setIsLoadingAdminStatistics(false);
     }
   }, []);
+
+  const loadSuperAdminFinance = useCallback(async (period = superAdminFinancePeriod) => {
+    if (!isSuperAdmin) return;
+
+    setIsLoadingSuperAdminFinance(true);
+    setSuperAdminFinance(null);
+    setSuperAdminFinanceError("");
+
+    try {
+      setSuperAdminFinance(await adminStatisticsApi.getFinanceStatistics(period));
+    } catch (error) {
+      setSuperAdminFinance(null);
+      setSuperAdminFinanceError(
+        error.status === 401 || error.status === 403
+          ? "SuperAdmin access is required for finance statistics."
+          : error.message || "Finance statistics are unavailable."
+      );
+    } finally {
+      setIsLoadingSuperAdminFinance(false);
+    }
+  }, [isSuperAdmin, superAdminFinancePeriod]);
 
   const loadBackendUsers = useCallback(async () => {
     setIsLoadingBackendUsers(true);
@@ -1429,7 +1683,7 @@ const AdminControlRoom = () => {
         assigneeId: draft.assigneeId || backendStaff[0]?.id || "",
       }));
     } catch (error) {
-      setBackendUsersError(error.message || "Backend users are unavailable.");
+      setBackendUsersError(error.message || "Users are unavailable.");
     } finally {
       setIsLoadingBackendUsers(false);
     }
@@ -1443,7 +1697,7 @@ const AdminControlRoom = () => {
     try {
       setStaffTasks(await adminStaffTasksApi.getTasks());
     } catch (error) {
-      setStaffTasksError(error.message || "Backend staff tasks are unavailable.");
+      setStaffTasksError(error.message || "Staff tasks are unavailable.");
     } finally {
       if (!silent) setIsLoadingStaffTasks(false);
     }
@@ -1458,8 +1712,10 @@ const AdminControlRoom = () => {
       const summary = await adminStatisticsApi.getStaffKpi();
       setStaffKpiSummary(summary);
       setStaff(Array.isArray(summary?.staff) ? summary.staff.map(mapBackendStaffKpiRow) : []);
+      setAdminWorkRows(Array.isArray(summary?.admins) ? summary.admins.map(mapBackendStaffKpiRow) : []);
     } catch (error) {
-      setStaffKpiError(error.message || "Backend staff KPI is unavailable.");
+      setStaffKpiError(error.message || "Staff KPI is unavailable.");
+      setAdminWorkRows([]);
     } finally {
       if (!silent) setIsLoadingStaffKpi(false);
     }
@@ -1488,7 +1744,7 @@ const AdminControlRoom = () => {
       setLiveVehicles([]);
       setSelectedVehicleId("");
       setEvents([]);
-      setBackendVehiclesError(error.message || "Backend vehicles are unavailable.");
+      setBackendVehiclesError(error.message || "Vehicles are unavailable.");
     } finally {
       if (!silent) setIsLoadingBackendVehicles(false);
     }
@@ -1503,9 +1759,25 @@ const AdminControlRoom = () => {
       setManagedChargingStations(await chargingApi.getStations());
     } catch (error) {
       setManagedChargingStations([]);
-      setChargingStationsError(error.message || "Backend charging stations are unavailable.");
+      setChargingStationsError(error.message || "Charging stations are unavailable.");
     } finally {
       if (!silent) setIsLoadingChargingStations(false);
+    }
+  }, []);
+
+  const loadParkingZones = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingParkingZones(true);
+    setParkingZonesError("");
+
+    try {
+      const zones = await parkingZoneApi.getZones();
+      setManagedZones(zones);
+    } catch (error) {
+      setManagedZones((items) => items.length ? items : getInitialParkingZones());
+      setParkingZonesError(error.message || "Parking zones are unavailable.");
+    } finally {
+      if (!silent) setIsLoadingParkingZones(false);
     }
   }, []);
 
@@ -1518,7 +1790,7 @@ const AdminControlRoom = () => {
       setActiveChargingSessions(await chargingApi.getActiveSessions());
     } catch (error) {
       setActiveChargingSessions([]);
-      setChargingSessionsError(error.message || "Backend charging sessions are unavailable.");
+      setChargingSessionsError(error.message || "Charging sessions are unavailable.");
     } finally {
       if (!silent) setIsLoadingChargingSessions(false);
     }
@@ -1541,6 +1813,7 @@ const AdminControlRoom = () => {
     const initialVehiclesTimer = window.setTimeout(loadBackendVehicles, 0);
     const initialChargingTimer = window.setTimeout(loadChargingStations, 0);
     const initialChargingSessionsTimer = window.setTimeout(loadChargingSessions, 0);
+    const initialParkingZonesTimer = window.setTimeout(loadParkingZones, 0);
     const initialBillingTimer = window.setTimeout(loadBillingInvoices, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
     const billingTimer = window.setInterval(async () => {
@@ -1567,13 +1840,21 @@ const AdminControlRoom = () => {
       window.clearTimeout(initialVehiclesTimer);
       window.clearTimeout(initialChargingTimer);
       window.clearTimeout(initialChargingSessionsTimer);
+      window.clearTimeout(initialParkingZonesTimer);
       window.clearTimeout(initialBillingTimer);
       window.clearInterval(statisticsTimer);
       window.clearInterval(billingTimer);
       window.clearInterval(vehiclesTimer);
       window.clearInterval(chargingSessionsTimer);
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadStaffKpi, loadBackendVehicles, loadChargingStations, loadChargingSessions]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadStaffKpi, loadBackendVehicles, loadChargingStations, loadChargingSessions, loadParkingZones]);
+
+  useEffect(() => {
+    if (activeSection !== "superadmin" || !isSuperAdmin) return undefined;
+
+    const financeTimer = window.setTimeout(loadSuperAdminFinance, 0);
+    return () => window.clearTimeout(financeTimer);
+  }, [activeSection, isSuperAdmin, loadSuperAdminFinance]);
 
   useEffect(() => {
     if (!adminSession) return undefined;
@@ -1618,6 +1899,8 @@ const AdminControlRoom = () => {
         loadBackendVehicles();
         loadStaffTasks();
         loadStaffKpi({ silent: true });
+      } else if (message?.scope === "parkingZones") {
+        loadParkingZones({ silent: true });
       } else {
         refreshReceipts();
         loadAdminStatistics();
@@ -1643,7 +1926,7 @@ const AdminControlRoom = () => {
       connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
       stopConnection(connection).catch(() => {});
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadStaffTasks, loadStaffKpi]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadParkingZones, loadStaffTasks, loadStaffKpi]);
 
   useEffect(() => {
     if (activeSection === "billing" || activeSection === "control") {
@@ -1785,8 +2068,8 @@ const AdminControlRoom = () => {
   }, [kycFilter, kycRows]);
 
   const selectedKycUser = useMemo(
-    () => kycRows.find((row) => row.id === selectedKycUserId) || null,
-    [kycRows, selectedKycUserId]
+    () => filteredKycRows.find((row) => row.id === selectedKycUserId) || null,
+    [filteredKycRows, selectedKycUserId]
   );
 
   const userTableRows = useMemo(() => {
@@ -2033,6 +2316,147 @@ const AdminControlRoom = () => {
 
     return error?.message || fallback;
   };
+  const updateVehicleDraft = (field, value) => {
+    setVehicleDraft((draft) => ({ ...draft, [field]: value }));
+  };
+  const setVehicleDraftPoint = (lat, lng) => {
+    setVehicleDraft((draft) => ({
+      ...draft,
+      latitude: Number(lat).toFixed(6),
+      longitude: Number(lng).toFixed(6),
+      locationLabel: draft.locationLabel || "Selected map point",
+    }));
+  };
+  const updateVehiclePhotoDraft = (field, file) => {
+    setVehiclePhotoDraft((draft) => ({ ...draft, [field]: file || null }));
+  };
+  const hasVehiclePhotos = Object.values(vehiclePhotoDraft).some(Boolean);
+  const beginCreateVehicle = () => {
+    setEditingVehicleId("");
+    setVehicleDraft(getEmptyVehicleDraft());
+    setVehiclePhotoDraft(getEmptyVehiclePhotoDraft());
+  };
+  const beginEditVehicle = (vehicle) => {
+    setEditingVehicleId(vehicle.id);
+    setVehicleDraft(vehicleToDraft(vehicle));
+    setVehiclePhotoDraft(getEmptyVehiclePhotoDraft());
+  };
+  const saveSuperAdminVehicle = async () => {
+    const payload = sanitizeVehicleDraft(vehicleDraft);
+    if (!payload.brand || !payload.model || !payload.plateNumber || !payload.color || !payload.connectorType || !payload.locationLabel || !payload.zone || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
+      showAdminNotice("Fill brand, model, plate, color, connector, location, zone, and map point.", "superadmin", "error");
+      return;
+    }
+    if (!Number.isFinite(payload.pricePerMinute) || payload.pricePerMinute <= 0) {
+      showAdminNotice("Price per minute must be greater than 0. Use AZN, for example 0.20.", "superadmin", "error");
+      return;
+    }
+    if (!Number.isInteger(payload.year) || payload.year < 2010 || payload.year > new Date().getFullYear() + 1) {
+      showAdminNotice("Year must be a valid vehicle model year.", "superadmin", "error");
+      return;
+    }
+    if (!Number.isInteger(payload.seats) || payload.seats < 1 || payload.seats > 9) {
+      showAdminNotice("Seats must be between 1 and 9.", "superadmin", "error");
+      return;
+    }
+    if (!Number.isInteger(payload.batteryPercent) || payload.batteryPercent < 0 || payload.batteryPercent > 100) {
+      showAdminNotice("Battery percent must be between 0 and 100.", "superadmin", "error");
+      return;
+    }
+
+    try {
+      setVehicleManagementBusyId(editingVehicleId || "__create");
+      let savedVehicle;
+      if (editingVehicleId) {
+        savedVehicle = await vehicleApi.updateVehicle(editingVehicleId, payload);
+        showAdminNotice("Vehicle updated.", "superadmin");
+      } else {
+        savedVehicle = await vehicleApi.createVehicle(payload);
+        showAdminNotice("Vehicle created.", "superadmin");
+      }
+      if (hasVehiclePhotos && savedVehicle?.id) {
+        try {
+          await vehicleApi.uploadVehiclePhotos(savedVehicle.id, vehiclePhotoDraft);
+          showAdminNotice("Vehicle saved and photos uploaded.", "superadmin");
+        } catch (photoError) {
+          showAdminNotice(getApiErrorMessage(photoError, "Vehicle saved, but photos could not be uploaded."), "superadmin", "error");
+        }
+      }
+      beginCreateVehicle();
+      await Promise.all([
+        loadBackendVehicles(),
+        loadAdminStatistics(),
+        loadSuperAdminFinance(superAdminFinancePeriod),
+      ]);
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Vehicle could not be saved."), "superadmin", "error");
+    } finally {
+      setVehicleManagementBusyId("");
+    }
+  };
+  const deactivateSuperAdminVehicle = async (vehicle) => {
+    const confirmed = await confirm({
+      title: `Deactivate ${vehicle.brand} ${vehicle.model}?`,
+      message: "The vehicle will move to Maintenance and disappear from available rider flows.",
+      confirmLabel: "Deactivate",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+
+    try {
+      setVehicleManagementBusyId(vehicle.id);
+      await vehicleApi.updateVehicleStatus(vehicle.id, MAINTENANCE_VEHICLE_STATUS);
+      await Promise.all([
+        loadBackendVehicles(),
+        loadAdminStatistics(),
+        loadSuperAdminFinance(superAdminFinancePeriod),
+      ]);
+      showAdminNotice("Vehicle deactivated.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Vehicle could not be deactivated."), "superadmin", "error");
+    } finally {
+      setVehicleManagementBusyId("");
+    }
+  };
+  const applySuperAdminFinancePeriod = async () => {
+    await loadSuperAdminFinance(superAdminFinancePeriod);
+  };
+  const updateSuperAdminUserRole = async (user, role) => {
+    if (user.id === adminSession?.id) {
+      showAdminNotice("You cannot change your own role.", "superadmin", "error");
+      return;
+    }
+
+    try {
+      await adminUsersApi.updateRole(user.id, Number(role));
+      await loadBackendUsers();
+      showAdminNotice("User role updated.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User role could not be updated."), "superadmin", "error");
+    }
+  };
+  const updateSuperAdminUserStatus = async (user, isActive) => {
+    if (user.id === adminSession?.id) {
+      showAdminNotice("You cannot deactivate your own account.", "superadmin", "error");
+      return;
+    }
+
+    const confirmed = isActive || await confirm({
+      title: `Deactivate ${user.email}?`,
+      message: "The account will be disabled without deleting trips, payments, receipts, or audit history.",
+      confirmLabel: "Deactivate",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+
+    try {
+      await adminUsersApi.updateStatus(user.id, isActive);
+      await loadBackendUsers();
+      showAdminNotice(isActive ? "User activated." : "User deactivated.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User status could not be updated."), "superadmin", "error");
+    }
+  };
   const openVehicleNotification = (notice) => {
     if (notice.vehicleId) {
       focusVehicle(notice.vehicleId);
@@ -2061,7 +2485,12 @@ const AdminControlRoom = () => {
     showAdminNotice(`Зона сохранена: ${nextZone.name}`);
   };
 
-  const saveParkingZoneDraft = () => {
+  const saveParkingZoneDraft = async () => {
+    if (!isSuperAdmin) {
+      showAdminNotice("SuperAdmin access is required to manage parking zones.", "control", "error");
+      return;
+    }
+
     if (draftZonePoints.length < 3) {
       showAdminNotice("Add at least 3 points on the map to save a parking zone.", "control", "error");
       return;
@@ -2069,21 +2498,37 @@ const AdminControlRoom = () => {
 
     const zoneMeta = getParkingZoneMeta(draftZoneType);
     const nextZone = {
-      id: `zone-${Date.now()}`,
       name: `${zoneMeta.label} custom zone`,
       type: zoneMeta.id,
       positions: draftZonePoints,
     };
 
-    setManagedZones((items) => [...items, nextZone]);
-    setDraftZonePoints([]);
-    setIsDrawingZone(false);
-    showAdminNotice(`Parking zone saved: ${nextZone.name}`, "control");
+    try {
+      const savedZone = await parkingZoneApi.createZone(nextZone);
+      setManagedZones((items) => [...items, savedZone].filter(Boolean));
+      setDraftZonePoints([]);
+      setIsDrawingZone(false);
+      setParkingZonesError("");
+      showAdminNotice(`Parking zone saved: ${savedZone.name}`, "control");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Parking zone could not be saved."), "control", "error");
+    }
   };
 
-  const deleteParkingZone = (zoneId) => {
-    setManagedZones((items) => items.filter((zone) => zone.id !== zoneId));
-    showAdminNotice("Parking zone removed.", "control");
+  const deleteParkingZone = async (zoneId) => {
+    if (!isSuperAdmin) {
+      showAdminNotice("SuperAdmin access is required to manage parking zones.", "control", "error");
+      return;
+    }
+
+    try {
+      await parkingZoneApi.deactivateZone(zoneId);
+      setManagedZones((items) => items.filter((zone) => zone.id !== zoneId));
+      setParkingZonesError("");
+      showAdminNotice("Parking zone removed.", "control");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Parking zone could not be removed."), "control", "error");
+    }
   };
 
   const updateKycStatus = async (userId, status) => {
@@ -2518,7 +2963,7 @@ const AdminControlRoom = () => {
   const deleteChargingPoint = async (station) => {
     const confirmed = await confirm({
       title: "Delete charging station?",
-      message: `Station "${station.name}" will be removed from the backend. Active sessions or assigned vehicles can block deletion; completed charging history for this station will be removed with it.`,
+      message: `Station "${station.name}" will be removed from operations. Active sessions or assigned vehicles can block deletion; completed charging history for this station will be removed with it.`,
       confirmLabel: "Delete",
       cancelLabel: "Keep",
       tone: "danger",
@@ -2695,7 +3140,7 @@ const AdminControlRoom = () => {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">
-                {adminStatistics ? "Live API connected" : "Backend statistics"}
+                {adminStatistics ? "Live data connected" : "Statistics unavailable"}
               </p>
               <p className="mt-1 text-xs font-semibold text-slate-400">
                 {adminStatisticsLoadedAt
@@ -2771,7 +3216,7 @@ const AdminControlRoom = () => {
         <div className="mb-4 flex items-center justify-between">
           <p className="text-sm font-black text-slate-300">Операции сейчас</p>
           <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-200">
-            {adminStatistics ? "Live API" : "Mock feed"}
+            {adminStatistics ? "Live data" : "Demo feed"}
           </span>
         </div>
 
@@ -2808,6 +3253,7 @@ const AdminControlRoom = () => {
 
   const renderControlPanelV2 = () => {
     const activeZoneMeta = getParkingZoneMeta(draftZoneType);
+    const canManageParkingZones = isSuperAdmin;
 
     return (
       <>
@@ -2820,8 +3266,9 @@ const AdminControlRoom = () => {
               loadAdminStatistics();
               loadBillingInvoices();
               loadBackendVehicles({ silent: true });
+              loadParkingZones({ silent: true });
             }}
-            disabled={isLoadingAdminStatistics || isLoadingBillingInvoices}
+            disabled={isLoadingAdminStatistics || isLoadingBillingInvoices || isLoadingParkingZones}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
           >
             <FiActivity />
@@ -2919,60 +3366,70 @@ const AdminControlRoom = () => {
                 </p>
               </div>
               <span className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-black text-slate-200">
-                {zoneStats.allowed} zones
+                {zoneStats.allowed} green / {zoneStats.restricted} red
               </span>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {PARKING_ZONE_TYPES.map((type) => (
-                <button
-                  key={type.id}
-                  type="button"
-                  onClick={() => setDraftZoneType(type.id)}
-                  className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
-                    draftZoneType === type.id
-                      ? type.activeClassName
-                      : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.07]"
-                  }`}
-                >
-                  {type.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-4 rounded-xl border border-white/10 bg-[#111a2b] p-3">
-              <p className="text-xs font-black text-white">{activeZoneMeta.title}</p>
-              <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{activeZoneMeta.description}</p>
-              <p className="mt-2 text-[11px] font-bold text-slate-500">
-                Points: {draftZonePoints.length}. Minimum 3 points to save.
+            {parkingZonesError && (
+              <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100">
+                {parkingZonesError}
               </p>
-            </div>
+            )}
 
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setIsDrawingZone((value) => !value)}
-                className={`rounded-xl px-3 py-2 text-xs font-black transition ${
-                  isDrawingZone ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
-                }`}
-              >
-                <FiEdit3 className="inline" /> {isDrawingZone ? "Stop drawing" : "Draw zone"}
-              </button>
-              <button
-                type="button"
-                onClick={saveParkingZoneDraft}
-                className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-600"
-              >
-                Save zone
-              </button>
-              <button
-                type="button"
-                onClick={() => setDraftZonePoints([])}
-                className="rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-white/[0.1]"
-              >
-                Clear points
-              </button>
-            </div>
+            {canManageParkingZones && (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {PARKING_ZONE_TYPES.map((type) => (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => setDraftZoneType(type.id)}
+                      className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+                        draftZoneType === type.id
+                          ? type.activeClassName
+                          : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.07]"
+                      }`}
+                    >
+                      {type.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 rounded-xl border border-white/10 bg-[#111a2b] p-3">
+                  <p className="text-xs font-black text-white">{activeZoneMeta.title}</p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{activeZoneMeta.description}</p>
+                  <p className="mt-2 text-[11px] font-bold text-slate-500">
+                    Points: {draftZonePoints.length}. Minimum 3 points to save.
+                  </p>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsDrawingZone((value) => !value)}
+                    className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+                      isDrawingZone ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
+                    }`}
+                  >
+                    <FiEdit3 className="inline" /> {isDrawingZone ? "Stop drawing" : "Draw zone"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveParkingZoneDraft}
+                    className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-600"
+                  >
+                    Save zone
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDraftZonePoints([])}
+                    className="rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-white/[0.1]"
+                  >
+                    Clear points
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="mt-4 grid gap-2">
@@ -2989,14 +3446,16 @@ const AdminControlRoom = () => {
                       {zoneMeta.title}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => deleteParkingZone(zone.id)}
-                    className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
-                  >
-                    <FiTrash2 />
-                    Delete zone
-                  </button>
+                  {canManageParkingZones && (
+                    <button
+                      type="button"
+                      onClick={() => deleteParkingZone(zone.id)}
+                      className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                    >
+                      <FiTrash2 />
+                      Delete zone
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -3090,6 +3549,37 @@ const AdminControlRoom = () => {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+          <div className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.035] p-2 md:grid-cols-5">
+            {tabItems.map((item) => {
+              const meta = getStatusMeta(item.id);
+              const isActive = kycFilter === item.id;
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setKycFilter(item.id);
+                    setSelectedKycUserId(null);
+                  }}
+                  className={`inline-flex min-h-12 items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition ${
+                    isActive
+                      ? "bg-red-500 text-white shadow-lg shadow-red-950/20"
+                      : "bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white"
+                  }`}
+                >
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    {item.id !== "all" && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`} />}
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  <span className={`shrink-0 rounded-lg px-2 py-1 text-xs font-black ${isActive ? "bg-white/20 text-white" : "bg-white/[0.08] text-slate-200"}`}>
+                    {item.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -3175,130 +3665,102 @@ const AdminControlRoom = () => {
             </p>
           )}
 
-          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
-            <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-black text-white">All registered users</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {visibleUserTableRows.length}/{userTableRows.length} users across all time
-                </p>
+          {kycFilter === "all" && (
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+              <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-black text-white">All registered users</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {visibleUserTableRows.length}/{userTableRows.length} users across all time
+                  </p>
+                </div>
+                <label className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400 md:w-[320px]">
+                  <FiSearch className="shrink-0 text-slate-500" />
+                  <input
+                    value={userTableSearchQuery}
+                    onChange={(event) => setUserTableSearchQuery(event.target.value)}
+                    placeholder="Search users"
+                    className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                  />
+                </label>
               </div>
-              <label className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400 md:w-[320px]">
-                <FiSearch className="shrink-0 text-slate-500" />
-                <input
-                  value={userTableSearchQuery}
-                  onChange={(event) => setUserTableSearchQuery(event.target.value)}
-                  placeholder="Search users"
-                  className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
-                />
-              </label>
-            </div>
-            <div className="max-h-[420px] min-h-[220px] overflow-auto">
-              <table className="w-full min-w-[860px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-[#10192a] text-[10px] font-black uppercase tracking-wide text-slate-500">
-                  <tr>
-                    {userTableColumns.map(([key, label]) => (
-                      <th key={key} className="px-4 py-3">
-                        <button type="button" onClick={() => toggleUserTableSort(key)} className="flex items-center gap-1 hover:text-white">
-                          {label}
-                          {userTableSort.key === key && <span>{userTableSort.direction === "asc" ? "^" : "v"}</span>}
-                        </button>
-                      </th>
-                    ))}
-                    <th className="px-4 py-3">Block</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10">
-                  {visibleUserTableRows.map((row) => {
-                    const status = userStatusMeta[row.accountStatus] || userStatusMeta.pending;
+              <div className="max-h-[420px] min-h-[220px] overflow-auto">
+                <table className="w-full min-w-[860px] text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-[#10192a] text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    <tr>
+                      {userTableColumns.map(([key, label]) => (
+                        <th key={key} className="px-4 py-3">
+                          <button type="button" onClick={() => toggleUserTableSort(key)} className="flex items-center gap-1 hover:text-white">
+                            {label}
+                            {userTableSort.key === key && <span>{userTableSort.direction === "asc" ? "^" : "v"}</span>}
+                          </button>
+                        </th>
+                      ))}
+                      <th className="px-4 py-3">Block</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {visibleUserTableRows.map((row) => {
+                      const status = userStatusMeta[row.accountStatus] || userStatusMeta.pending;
 
-                    return (
-                      <tr key={row.id} className="hover:bg-white/[0.04]">
-                        <td className="px-4 py-3 font-black text-white">{row.username}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-300">{row.email}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-300">{row.phone}</td>
-                        <td className="px-4 py-3 font-black text-white">
-                          {row.balanceAmount.toFixed(2)} {row.balanceCurrency}
-                        </td>
-                        <td className="px-4 py-3 font-semibold text-slate-300">{row.registeredAt}</td>
-                        <td className="px-4 py-3 font-black text-slate-200">{row.role}</td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase ${status.className}`}>
-                            {status.label}
-                          </span>
-                          {row.raw?.blockReason && (
-                            <p className="mt-1 max-w-[220px] text-[10px] font-bold leading-4 text-red-200">
-                              {row.raw.blockReason}
-                              {row.raw.blockedUntil ? ` - until ${formatBakuDateTime(row.raw.blockedUntil)}` : " - forever"}
-                            </p>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setBlockDraft((draft) => ({ ...draft, userId: row.id }));
-                                showAdminNotice("User selected. Add a block reason and press Block.", "users");
-                              }}
-                              className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
-                            >
-                              Select
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => unblockBackendUser(row.id)}
-                              className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[10px] font-black uppercase text-emerald-100"
-                            >
-                              Unblock
-                            </button>
-                          ) : (
-                            <span className="rounded-lg bg-white/[0.06] px-3 py-2 text-[10px] font-black uppercase text-slate-500">
-                              Protected
+                      return (
+                        <tr key={row.id} className="hover:bg-white/[0.04]">
+                          <td className="px-4 py-3 font-black text-white">{row.username}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{row.email}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{row.phone}</td>
+                          <td className="px-4 py-3 font-black text-white">
+                            {row.balanceAmount.toFixed(2)} {row.balanceCurrency}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">{row.registeredAt}</td>
+                          <td className="px-4 py-3 font-black text-slate-200">{row.role}</td>
+                          <td className="px-4 py-3">
+                            <span className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase ${status.className}`}>
+                              {status.label}
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            {row.raw?.blockReason && (
+                              <p className="mt-1 max-w-[220px] text-[10px] font-bold leading-4 text-red-200">
+                                {row.raw.blockReason}
+                                {row.raw.blockedUntil ? ` - until ${formatBakuDateTime(row.raw.blockedUntil)}` : " - forever"}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBlockDraft((draft) => ({ ...draft, userId: row.id }));
+                                  showAdminNotice("User selected. Add a block reason and press Block.", "users");
+                                }}
+                                className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
+                              >
+                                Select
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => unblockBackendUser(row.id)}
+                                className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[10px] font-black uppercase text-emerald-100"
+                              >
+                                Unblock
+                              </button>
+                            ) : (
+                              <span className="rounded-lg bg-white/[0.06] px-3 py-2 text-[10px] font-black uppercase text-slate-500">
+                                Protected
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {tabItems.map((item) => {
-              const meta = getStatusMeta(item.id);
-              const activeClass = item.id === "all"
-                ? "border-red-400/60 bg-red-500/15 text-white"
-                : meta.active;
-
-              return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setKycFilter(item.id)}
-                className={`rounded-xl border px-3 py-3 text-left transition hover:bg-white/[0.09] ${
-                  kycFilter === item.id ? activeClass : "border-white/10 bg-white/[0.04] text-slate-300"
-                }`}
-              >
-                <span className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2 text-xs font-black">
-                    {item.id !== "all" && <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />}
-                    {item.label}
-                  </span>
-                  <span className="rounded-lg bg-white/[0.08] px-2 py-1 text-xs font-black text-white">
-                    {item.count}
-                  </span>
-                </span>
-              </button>
-              );
-            })}
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <div className="grid max-h-[520px] content-start gap-3 overflow-y-auto">
+          <div className={`grid gap-4 ${selectedKycUser ? "xl:grid-cols-[360px_minmax(0,1fr)]" : ""}`}>
+            <div className={`grid max-h-[520px] content-start gap-3 overflow-y-auto ${selectedKycUser ? "" : "md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"}`}>
               {filteredKycRows.map((row) => (
                 (() => {
                   const meta = getStatusMeta(row.kyc.status);
@@ -3427,6 +3889,646 @@ const AdminControlRoom = () => {
               </div>
             )}
           </div>
+        </div>
+      </>
+    );
+  };
+
+  const renderSuperAdminPanel = () => {
+    const finance = superAdminFinance;
+    const currency = finance?.currency || adminStatistics?.revenue?.currency || "AZN";
+    const money = (value) => `${Number(value || 0).toFixed(2)} ${currency}`;
+    const selectedVehicle = backendVehicles.find((vehicle) => vehicle.id === editingVehicleId);
+    const internalUsers = backendUsers
+      .filter((user) => [USER_ROLES.Staff, USER_ROLES.Admin, USER_ROLES.SuperAdmin].includes(user.role))
+      .sort((first, second) => {
+        const roleOrder = second.role - first.role;
+        if (roleOrder !== 0) return roleOrder;
+        return String(first.email || "").localeCompare(String(second.email || ""));
+      });
+    const roleSearch = superAdminRoleSearchQuery.trim().toLowerCase();
+    const roleCounts = internalUsers.reduce(
+      (acc, user) => {
+        if (user.role === USER_ROLES.Staff) acc.staff += 1;
+        if (user.role === USER_ROLES.Admin) acc.admin += 1;
+        if (user.role === USER_ROLES.SuperAdmin) acc.superAdmin += 1;
+        if (!user.isActive || isCurrentlyBlockedUser(user)) acc.inactive += 1;
+        return acc;
+      },
+      { all: internalUsers.length, staff: 0, admin: 0, superAdmin: 0, inactive: 0 }
+    );
+    const roleFilterItems = [
+      { id: "all", label: "All", count: roleCounts.all, dot: "bg-slate-300" },
+      { id: "superAdmin", label: "SuperAdmin", count: roleCounts.superAdmin, dot: "bg-red-400" },
+      { id: "admin", label: "Admin", count: roleCounts.admin, dot: "bg-sky-400" },
+      { id: "staff", label: "Staff", count: roleCounts.staff, dot: "bg-emerald-400" },
+      { id: "inactive", label: "Inactive", count: roleCounts.inactive, dot: "bg-amber-400" },
+    ];
+    const visibleInternalUsers = internalUsers.filter((user) => {
+      const matchesFilter =
+        superAdminRoleFilter === "all" ||
+        (superAdminRoleFilter === "superAdmin" && user.role === USER_ROLES.SuperAdmin) ||
+        (superAdminRoleFilter === "admin" && user.role === USER_ROLES.Admin) ||
+        (superAdminRoleFilter === "staff" && user.role === USER_ROLES.Staff) ||
+        (superAdminRoleFilter === "inactive" && (!user.isActive || isCurrentlyBlockedUser(user)));
+
+      if (!matchesFilter) return false;
+      if (!roleSearch) return true;
+
+      return [
+        user.firstName,
+        user.lastName,
+        user.email,
+        user.phone,
+        roleLabel(user.role),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(roleSearch);
+    });
+    const statusLabel = (status) => {
+      if (status === VEHICLE_STATUSES.AVAILABLE) return "Available";
+      if (status === VEHICLE_STATUSES.RESERVED) return "Reserved";
+      if (status === VEHICLE_STATUSES.IN_USE) return "In use";
+      if (status === VEHICLE_STATUSES.CHARGING) return "Charging";
+      if (status === MAINTENANCE_VEHICLE_STATUS) return "Maintenance";
+      return status || "Unknown";
+    };
+    function roleLabel(role) {
+      if (role === USER_ROLES.SuperAdmin) return "SuperAdmin";
+      if (role === USER_ROLES.Admin) return "Admin";
+      if (role === USER_ROLES.Staff) return "Staff";
+      return "Rider";
+    }
+
+    return (
+      <>
+        {renderPanelHeader(
+          "SuperAdmin",
+          "Fleet and finance controls",
+          <button
+            type="button"
+            onClick={() => Promise.all([loadBackendVehicles(), loadSuperAdminFinance(superAdminFinancePeriod)])}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500"
+          >
+            <FiActivity />
+            Refresh
+          </button>
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+          <div className="sticky top-0 z-20 grid gap-2 rounded-2xl border border-white/10 bg-[#0b1422]/95 p-2 shadow-xl shadow-black/20 backdrop-blur md:grid-cols-3">
+            {[
+              ["finance", "Finance", FiDollarSign],
+              ["fleet", "Fleet", FaCarSide],
+              ["roles", "Roles", FiUsers],
+            ].map(([id, label, Icon]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={superAdminTab === id}
+                onClick={() => setSuperAdminTab(id)}
+                className={`inline-flex min-h-14 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
+                  superAdminTab === id
+                    ? "bg-red-500 text-white shadow-lg shadow-red-950/20"
+                    : "bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white"
+                }`}
+              >
+                <Icon />
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {superAdminTab === "finance" && (
+            <>
+          <div className="grid gap-3 md:grid-cols-4">
+            {[
+              ["Today revenue", money(adminStatistics?.revenue?.today), FiDollarSign, "text-emerald-200"],
+              ["Week revenue", money(adminStatistics?.revenue?.thisWeek), FiTrendingUp, "text-cyan-200"],
+              ["Month revenue", money(adminStatistics?.revenue?.thisMonth), FiActivity, "text-blue-200"],
+              ["Fleet utilization", `${finance?.utilizationPercent ?? fleetStats.utilization}%`, FiZap, "text-amber-200"],
+            ].map(([label, value, Icon, tone]) => (
+              <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <Icon className={`text-xl ${tone}`} />
+                <p className="mt-3 text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</p>
+                <p className="mt-2 text-2xl font-black text-white">{value}</p>
+              </div>
+            ))}
+          </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <p className="text-sm font-black text-white">Custom finance period</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Revenue, payments, trips, and top earning vehicles. End date is included.
+                  </p>
+                  {finance && (
+                    <p className="mt-1 text-[11px] font-black uppercase tracking-wide text-emerald-200">
+                      Showing {finance.from} to {finance.to}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[150px_150px_120px]">
+                  <input
+                    type="date"
+                    value={superAdminFinancePeriod.from}
+                    onChange={(event) => setSuperAdminFinancePeriod((period) => ({ ...period, from: event.target.value }))}
+                    className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                  />
+                  <input
+                    type="date"
+                    value={superAdminFinancePeriod.to}
+                    onChange={(event) => setSuperAdminFinancePeriod((period) => ({ ...period, to: event.target.value }))}
+                    className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={applySuperAdminFinancePeriod}
+                    className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+
+              {(superAdminFinanceError || isLoadingSuperAdminFinance) && (
+                <p className={`mt-3 rounded-xl border px-3 py-2 text-xs font-bold ${superAdminFinanceError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+                  {superAdminFinanceError || "Loading finance statistics..."}
+                </p>
+              )}
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {[
+                  ["Period revenue", money(finance?.revenue)],
+                  ["Completed trips", finance?.completedTrips ?? 0],
+                  ["Completed payments", finance?.completedPayments ?? 0],
+                  ["Pending payments", finance?.pendingPayments ?? 0],
+                  ["Failed payments", finance?.failedPayments ?? 0],
+                  ["Fleet performance", `${finance?.activeOrReservedVehicles ?? 0}/${finance?.fleetSize ?? fleetStats.total ?? 0} active or reserved`],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-white/10 bg-[#111a2b] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</p>
+                    <p className="mt-2 text-lg font-black text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
+                <div className="border-b border-white/10 bg-white/[0.04] px-4 py-3 text-xs font-black uppercase text-slate-500">
+                  Top earning vehicles
+                </div>
+                {(finance?.topVehicles || adminStatistics?.topVehicles || []).length === 0 ? (
+                  <div className="bg-[#111a2b] px-4 py-5 text-sm font-semibold text-slate-400">No vehicle revenue in this period.</div>
+                ) : (
+                  <div className="divide-y divide-white/10">
+                    {(finance?.topVehicles || adminStatistics?.topVehicles || []).map((vehicle) => (
+                      <div key={vehicle.vehicleId} className="grid gap-2 bg-white/[0.02] px-4 py-3 sm:grid-cols-[1fr_120px_120px] sm:items-center">
+                        <div>
+                          <p className="font-black text-white">{vehicle.label}</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">{vehicle.plateNumber}</p>
+                        </div>
+                        <p className="text-sm font-black text-slate-200">{vehicle.completedTrips} trips</p>
+                        <p className="text-sm font-black text-emerald-200">{money(vehicle.revenue)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            </>
+          )}
+
+          {superAdminTab === "fleet" && (
+            <>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-white">{editingVehicleId ? "Edit vehicle" : "Add vehicle"}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">{selectedVehicle ? `${selectedVehicle.brand} ${selectedVehicle.model}` : "Create a vehicle profile."}</p>
+                </div>
+                <button type="button" onClick={beginCreateVehicle} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
+                  New
+                </button>
+              </div>
+              <div className="mb-4 rounded-2xl border border-white/10 bg-[#111a2b] p-3">
+                <div className="grid gap-2 md:grid-cols-[1fr_140px_160px] md:items-end">
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Edit existing vehicle</span>
+                    <select
+                      value={editingVehicleId}
+                      onChange={(event) => {
+                        const vehicle = backendVehicles.find((item) => item.id === event.target.value);
+                        if (vehicle) {
+                          beginEditVehicle(vehicle);
+                        } else {
+                          beginCreateVehicle();
+                        }
+                      }}
+                      className="w-full rounded-xl border border-white/10 bg-[#0d1728] px-3 py-3 text-sm font-bold text-white outline-none"
+                    >
+                      <option value="">Create new vehicle</option>
+                      {backendVehicles.map((vehicle) => (
+                        <option key={vehicle.id} value={vehicle.id}>
+                          {vehicle.brand} {vehicle.model} - {vehicle.plateNumber}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className={`rounded-xl px-3 py-3 text-center text-xs font-black uppercase tracking-wide ${editingVehicleId ? "bg-emerald-500/15 text-emerald-100" : "bg-white/[0.06] text-slate-400"}`}>
+                    {editingVehicleId ? "Editing" : "Creating"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={saveSuperAdminVehicle}
+                    disabled={!editingVehicleId || vehicleManagementBusyId === editingVehicleId}
+                    className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    Save changes
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                {[
+                  ["brand", "Brand", "text"],
+                  ["model", "Model", "text"],
+                  ["year", "Year", "number"],
+                  ["plateNumber", "Plate number", "text"],
+                  ["mileageKm", "Mileage km", "number"],
+                  ["batteryPercent", "Battery %", "number"],
+                  ["rangeKm", "Range km", "number"],
+                  ["pricePerMinute", "Price/min", "number"],
+                  ["currency", "Currency", "text"],
+                  ["seats", "Seats", "number"],
+                  ["color", "Color", "text"],
+                  ["connectorType", "Connector", "text"],
+                  ["status", "Status", "select"],
+                  ["locationLabel", "Location", "text"],
+                  ["zone", "Zone", "text"],
+                ]
+                  .filter(([key]) => editingVehicleId || key !== "status")
+                  .map(([key, placeholder, type]) => (
+                  key === "currency" ? (
+                    <select
+                      key={key}
+                      value="AZN"
+                      onChange={(event) => updateVehicleDraft(key, event.target.value)}
+                      className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                    >
+                      <option value="AZN">AZN</option>
+                    </select>
+                  ) : key === "connectorType" ? (
+                    <select
+                      key={key}
+                      value={vehicleDraft.connectorType}
+                      onChange={(event) => updateVehicleDraft(key, event.target.value)}
+                      className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                    >
+                      {VEHICLE_CONNECTOR_OPTIONS.map((connector) => (
+                        <option key={connector} value={connector}>{connector}</option>
+                      ))}
+                    </select>
+                  ) : key === "status" ? (
+                    <select
+                      key={key}
+                      value={vehicleDraft.status}
+                      onChange={(event) => updateVehicleDraft(key, event.target.value)}
+                      className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                    >
+                      {SUPERADMIN_VEHICLE_STATUS_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      key={key}
+                      type={type}
+                      step={key === "pricePerMinute" || key === "mileageKm" ? "0.01" : "1"}
+                      value={vehicleDraft[key]}
+                      onChange={(event) => updateVehicleDraft(key, event.target.value)}
+                      placeholder={placeholder}
+                      className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                    />
+                  )
+                ))}
+                <div className="md:col-span-3">
+                  <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-wide text-slate-500">Map point</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                        {Number(vehicleDraft.latitude).toFixed(5)}, {Number(vehicleDraft.longitude).toFixed(5)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => updateVehicleDraft("pickOnMap", !vehicleDraft.pickOnMap)}
+                      className={`rounded-xl px-3 py-2 text-xs font-black ${vehicleDraft.pickOnMap ? "bg-emerald-500 text-white" : "bg-white/[0.06] text-slate-200"}`}
+                    >
+                      {vehicleDraft.pickOnMap ? "Picking on map" : "Pick on map"}
+                    </button>
+                  </div>
+                  <VehicleLocationPicker
+                    enabled={vehicleDraft.pickOnMap}
+                    latitude={vehicleDraft.latitude}
+                    longitude={vehicleDraft.longitude}
+                    onPick={setVehicleDraftPoint}
+                  />
+                </div>
+                <div className="md:col-span-3">
+                  <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Vehicle photos</p>
+                  <div className="grid gap-2 md:grid-cols-4">
+                    {[
+                      ["mainImage", "Main photo"],
+                      ["galleryImage1", "Gallery 1"],
+                      ["galleryImage2", "Gallery 2"],
+                      ["galleryImage3", "Gallery 3"],
+                    ].map(([key, label]) => (
+                      <label key={key} className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-xs font-bold text-slate-300">
+                        <span className="block text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</span>
+                        <span className="mt-2 block truncate text-white">{vehiclePhotoDraft[key]?.name || "Choose image"}</span>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={(event) => updateVehiclePhotoDraft(key, event.target.files?.[0])}
+                          className="sr-only"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] font-semibold text-slate-500">
+                    Photos upload after the vehicle record is saved.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={saveSuperAdminVehicle}
+                  disabled={vehicleManagementBusyId === "__create" || Boolean(editingVehicleId && vehicleManagementBusyId === editingVehicleId)}
+                  className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50 md:col-span-3"
+                >
+                  {editingVehicleId ? "Save vehicle" : "Create vehicle"}
+                </button>
+              </div>
+            </div>
+
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+            <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-black text-white">Fleet management</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Create, edit, or deactivate vehicles. Rider map marker behavior is untouched.</p>
+              </div>
+              <p className="text-xs font-black uppercase tracking-wide text-slate-500">{backendVehicles.length} vehicles</p>
+            </div>
+            {backendVehiclesError && (
+              <p className="m-4 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{backendVehiclesError}</p>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[920px] text-left text-sm">
+                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Vehicle</th>
+                    <th className="px-4 py-3">Plate</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Battery</th>
+                    <th className="px-4 py-3">Price</th>
+                    <th className="px-4 py-3">Location</th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {backendVehicles.map((vehicle) => (
+                    <tr key={vehicle.id} className="bg-white/[0.02]">
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{vehicle.brand} {vehicle.model}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{vehicle.year} · {vehicle.color} · {vehicle.connectorType}</p>
+                      </td>
+                      <td className="px-4 py-3 font-black text-slate-200">{vehicle.plateNumber}</td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={vehicle.status}
+                          onChange={async (event) => {
+                            setVehicleManagementBusyId(vehicle.id);
+                            try {
+                              await vehicleApi.updateVehicleStatus(vehicle.id, event.target.value);
+                              await loadBackendVehicles();
+                              showAdminNotice("Vehicle status updated.", "superadmin");
+                            } catch (error) {
+                              showAdminNotice(getApiErrorMessage(error, "Vehicle status could not be updated."), "superadmin", "error");
+                            } finally {
+                              setVehicleManagementBusyId("");
+                            }
+                          }}
+                          disabled={vehicleManagementBusyId === vehicle.id}
+                          className="rounded-lg border border-white/10 bg-[#111a2b] px-3 py-2 text-xs font-black text-white outline-none"
+                        >
+                          {!SUPERADMIN_VEHICLE_STATUS_OPTIONS.some(([value]) => value === vehicle.status) && (
+                            <option value={vehicle.status}>{statusLabel(vehicle.status)}</option>
+                          )}
+                          {SUPERADMIN_VEHICLE_STATUS_OPTIONS.map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[10px] font-bold text-slate-500">{statusLabel(vehicle.status)}</p>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{vehicle.batteryPercent}% · {vehicle.rangeKm} km</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{Number(vehicle.pricePerMinute || 0).toFixed(2)} {vehicle.currency}/min</td>
+                      <td className="px-4 py-3 font-semibold text-slate-300">{vehicle.locationLabel || vehicle.location?.label || "Baku"}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => beginEditVehicle(vehicle)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-black text-white transition hover:border-red-300 hover:text-red-200">
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deactivateSuperAdminVehicle(vehicle)}
+                            disabled={vehicle.status === MAINTENANCE_VEHICLE_STATUS || vehicleManagementBusyId === vehicle.id}
+                            className="rounded-lg bg-red-500 px-3 py-2 text-xs font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            Deactivate
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+            </>
+          )}
+
+          {superAdminTab === "roles" && (
+            <div className="grid gap-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-white">Create internal account</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Create Staff, Admin, or SuperAdmin accounts.</p>
+                  </div>
+                  <span className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-red-100">
+                    SuperAdmin only
+                  </span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-4">
+                  {[
+                    ["firstName", "First name"],
+                    ["lastName", "Last name"],
+                    ["email", "Email"],
+                    ["phone", "+994501234567"],
+                    ["password", "Password"],
+                    ["driverLicenseNumber", "License number"],
+                  ].map(([key, placeholder]) => (
+                    <input
+                      key={key}
+                      type={key === "password" ? "password" : key === "email" ? "email" : "text"}
+                      value={createUserDraft[key]}
+                      onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, [key]: event.target.value }))}
+                      placeholder={placeholder}
+                      className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                    />
+                  ))}
+                  <select
+                    value={createUserDraft.role}
+                    onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, role: Number(event.target.value) }))}
+                    className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+                  >
+                    <option value={USER_ROLES.Staff}>Staff</option>
+                    <option value={USER_ROLES.Admin}>Admin</option>
+                    <option value={USER_ROLES.SuperAdmin}>SuperAdmin</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={createBackendUser}
+                    className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600"
+                  >
+                    Create account
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+                <div className="flex flex-col gap-3 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-white">Role management</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      {visibleInternalUsers.length}/{internalUsers.length} internal accounts
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                    <label className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400 md:w-[320px]">
+                      <FiSearch className="shrink-0 text-slate-500" />
+                      <input
+                        value={superAdminRoleSearchQuery}
+                        onChange={(event) => setSuperAdminRoleSearchQuery(event.target.value)}
+                        placeholder="Search internal users"
+                        className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={loadBackendUsers}
+                      className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200"
+                    >
+                      Refresh users
+                    </button>
+                  </div>
+                </div>
+                {backendUsersError && (
+                  <p className="m-4 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{backendUsersError}</p>
+                )}
+                <div className="grid gap-2 border-b border-white/10 p-4 md:grid-cols-5">
+                  {roleFilterItems.map((item) => {
+                    const active = superAdminRoleFilter === item.id;
+
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setSuperAdminRoleFilter(item.id)}
+                        className={`flex min-h-14 items-center justify-between rounded-xl border px-4 py-3 text-left transition ${
+                          active
+                            ? "border-red-400/50 bg-red-500/15 text-white"
+                            : "border-white/10 bg-[#111a2b] text-slate-300 hover:border-white/20 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 text-sm font-black">
+                          <span className={`h-2.5 w-2.5 rounded-full ${item.dot}`} />
+                          {item.label}
+                        </span>
+                        <span className="rounded-lg bg-white/[0.08] px-2 py-1 text-xs font-black">{item.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[860px] text-left text-sm">
+                    <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">User</th>
+                        <th className="px-4 py-3">Role</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Phone</th>
+                        <th className="px-4 py-3">Created</th>
+                        <th className="px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10">
+                      {visibleInternalUsers.map((user) => {
+                        const isCurrentUser = user.id === adminSession?.id;
+                        const isBlocked = isCurrentlyBlockedUser(user);
+
+                        return (
+                          <tr key={user.id} className="bg-white/[0.02]">
+                            <td className="px-4 py-3">
+                              <p className="font-black text-white">{`${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email}</p>
+                              <p className="mt-1 text-xs font-semibold text-slate-500">{user.email}</p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={user.role}
+                                onChange={(event) => updateSuperAdminUserRole(user, event.target.value)}
+                                disabled={isCurrentUser}
+                                className="rounded-lg border border-white/10 bg-[#111a2b] px-3 py-2 text-xs font-black text-white outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <option value={USER_ROLES.Staff}>Staff</option>
+                                <option value={USER_ROLES.Admin}>Admin</option>
+                                <option value={USER_ROLES.SuperAdmin}>SuperAdmin</option>
+                              </select>
+                              {isCurrentUser && <p className="mt-1 text-[10px] font-bold text-slate-500">Current session</p>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${user.isActive && !isBlocked ? "bg-emerald-500/15 text-emerald-200" : "bg-red-500/15 text-red-100"}`}>
+                                {user.isActive && !isBlocked ? "Active" : "Inactive"}
+                              </span>
+                              <p className="mt-1 text-[10px] font-semibold text-slate-500">{isBlocked ? user.blockReason || "Blocked" : roleLabel(user.role)}</p>
+                            </td>
+                            <td className="px-4 py-3 font-semibold text-slate-300">{user.phone}</td>
+                            <td className="px-4 py-3 font-semibold text-slate-300">{formatBakuDate(user.createdAt, "Unknown")}</td>
+                            <td className="px-4 py-3">
+                              <button
+                                type="button"
+                                onClick={() => updateSuperAdminUserStatus(user, !user.isActive)}
+                                disabled={isCurrentUser}
+                                className={`rounded-lg px-3 py-2 text-xs font-black text-white transition disabled:cursor-not-allowed disabled:opacity-45 ${user.isActive ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}
+                              >
+                                {user.isActive ? "Deactivate" : "Activate"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {visibleInternalUsers.length === 0 && (
+                    <div className="bg-[#111a2b] px-4 py-6 text-sm font-semibold text-slate-400">
+                      No internal users match this filter.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </>
     );
@@ -4155,7 +5257,7 @@ const AdminControlRoom = () => {
         <div className="grid gap-4 overflow-y-auto p-5">
           {(staffKpiError || isLoadingStaffKpi) && (
             <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${staffKpiError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
-              {staffKpiError || "Loading backend KPI..."}
+              {staffKpiError || "Loading KPI..."}
             </p>
           )}
 
@@ -4299,6 +5401,167 @@ const AdminControlRoom = () => {
     );
   };
 
+  const renderStaffWorkPanel = () => {
+    const sortedStaff = [...staff].sort((first, second) => second.ordersCompleted - first.ordersCompleted);
+    const sortedAdmins = [...adminWorkRows].sort((first, second) => second.ordersCompleted - first.ordersCompleted);
+    const workRows = [...sortedStaff, ...sortedAdmins];
+    const selectedManager = workRows.find((manager) => manager.id === selectedKpiDetail?.staffId);
+    const completedItems = selectedManager?.applicationsProcessed || [];
+    const completedTotal = workRows.reduce((total, manager) => total + Number(manager.ordersCompleted || 0), 0);
+
+    return (
+      <>
+        {renderPanelHeader(
+          "Staff Work",
+          "Completed service tasks",
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-right">
+            <p className="text-[10px] font-black uppercase text-slate-500">Completed</p>
+            <p className="text-lg font-black text-white">{completedTotal}</p>
+          </div>
+        )}
+
+        <div className="grid gap-4 overflow-y-auto p-5">
+          {(staffKpiError || isLoadingStaffKpi) && (
+            <p className={`rounded-xl border px-4 py-3 text-sm font-bold ${staffKpiError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+              {staffKpiError || "Loading staff work..."}
+            </p>
+          )}
+
+          {selectedManager && (
+            <div className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase text-blue-200">Completed tasks</p>
+                  <p className="mt-1 text-sm font-black text-white">{selectedManager.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedKpiDetail(null)}
+                  className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {completedItems.length ? completedItems.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-white/10 bg-white/[0.05] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm font-black text-white">{item.title}</p>
+                      <span className="shrink-0 text-[10px] font-black text-slate-500">{item.time}</span>
+                    </div>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-300">{item.result}</p>
+                  </div>
+                )) : (
+                  <p className="rounded-xl border border-white/10 bg-white/[0.05] p-3 text-xs font-semibold text-slate-400">
+                    No completed work for this account yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
+              <div>
+                <p className="text-sm font-black text-white">System staff</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{sortedStaff.length} staff members</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadStaffKpi()}
+                disabled={isLoadingStaffKpi}
+                className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Staff member</th>
+                    <th className="px-4 py-3">Completed tasks</th>
+                    <th className="px-4 py-3">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {sortedStaff.map((manager) => (
+                    <tr key={manager.id} className="bg-white/[0.02]">
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{manager.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{manager.specialty || manager.role}</p>
+                      </td>
+                      <td className="px-4 py-3 text-2xl font-black text-white">{manager.ordersCompleted}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
+                          className="rounded-lg bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200 transition hover:bg-blue-500 hover:text-white"
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sortedStaff.length === 0 && (
+                <div className="bg-[#111a2b] px-4 py-6 text-sm font-semibold text-slate-400">
+                  No staff work data yet.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
+              <div>
+                <p className="text-sm font-black text-white">System admins</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{sortedAdmins.length} admin accounts</p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Admin</th>
+                    <th className="px-4 py-3">Completed work</th>
+                    <th className="px-4 py-3">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {sortedAdmins.map((manager) => (
+                    <tr key={manager.id} className="bg-white/[0.02]">
+                      <td className="px-4 py-3">
+                        <p className="font-black text-white">{manager.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{manager.specialty || manager.role}</p>
+                      </td>
+                      <td className="px-4 py-3 text-2xl font-black text-white">{manager.ordersCompleted}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedKpiDetail({ staffId: manager.id, type: "applications" })}
+                          className="rounded-lg bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200 transition hover:bg-blue-500 hover:text-white"
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sortedAdmins.length === 0 && (
+                <div className="bg-[#111a2b] px-4 py-6 text-sm font-semibold text-slate-400">
+                  No admin work data yet.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  };
+
   const renderIncidentPanel = () => (
     <>
       {renderPanelHeader("Incidents", "Критические уведомления")}
@@ -4411,7 +5674,7 @@ const AdminControlRoom = () => {
                 className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
               >
                 <option value="">No vehicle</option>
-                {isLoadingBackendVehicles && <option value="">Loading backend vehicles...</option>}
+                {isLoadingBackendVehicles && <option value="">Loading vehicles...</option>}
                 {backendVehicles.map((vehicle) => (
                   <option key={vehicle.id} value={vehicle.id}>
                     {vehicle.plateNumber} - {vehicle.brand} {vehicle.model}
@@ -5292,14 +6555,16 @@ const AdminControlRoom = () => {
       users: renderUsersKycPanel,
       pricing: renderPricingPanel,
       billing: renderBillingPanel,
-      kpi: renderKpiPanelV2,
+      kpi: renderStaffWorkPanel,
       __legacy_kpi: renderKpiPanel,
+      __legacy_kpi_v2: renderKpiPanelV2,
       incidents: renderIncidentPanel,
       tasks: renderTasksPanel,
       chargers: renderChargersPanel,
       "service-points": renderServicePointsPanel,
       helpdesk: renderHelpdeskPanel,
       analytics: renderAnalyticsPanel,
+      superadmin: renderSuperAdminPanel,
     };
 
     const Panel = panels[activeSection] || renderControlPanel;
@@ -5320,7 +6585,8 @@ const AdminControlRoom = () => {
     activeSection === "billing" ||
     activeSection === "kpi" ||
     activeSection === "helpdesk" ||
-    activeSection === "analytics";
+    activeSection === "analytics" ||
+    activeSection === "superadmin";
 
   if (!adminSession) {
     return <AdminLogin onLogin={setAdminSession} />;
@@ -6005,11 +7271,11 @@ const AdminControlRoom = () => {
 
               {!isOperationsMap && (isLoadingBackendVehicles || backendVehiclesError || !liveVehicles.length) && (
                 <div className="pointer-events-none absolute left-1/2 top-1/2 z-[505] w-[min(420px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-[#0b1424]/90 p-5 text-center shadow-2xl shadow-black/30 backdrop-blur-xl">
-                  <p className="text-xs font-black uppercase tracking-[0.2em] text-red-300">Backend fleet</p>
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-red-300">Fleet data</p>
                   <p className="mt-2 text-lg font-black text-white">
                     {isLoadingBackendVehicles
                       ? "Loading vehicles..."
-                      : backendVehiclesError || "No vehicles available from backend."}
+                      : backendVehiclesError || "No vehicles available."}
                   </p>
                 </div>
               )}
@@ -6098,7 +7364,7 @@ const AdminControlRoom = () => {
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">
-                        {adminStatistics ? "Live API connected" : "Backend statistics"}
+                        {adminStatistics ? "Live data connected" : "Statistics unavailable"}
                       </p>
                       <p className="mt-1 text-xs font-semibold text-slate-400">
                         {adminStatisticsLoadedAt
@@ -6174,7 +7440,7 @@ const AdminControlRoom = () => {
                 <div className="mb-4 flex items-center justify-between">
                   <p className="text-sm font-black text-slate-300">Current operations</p>
                   <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-200">
-                    {adminStatistics ? "Live API" : "Mock feed"}
+                    {adminStatistics ? "Live data" : "Demo feed"}
                   </span>
                 </div>
 

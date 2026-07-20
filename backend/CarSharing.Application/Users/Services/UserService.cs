@@ -16,6 +16,7 @@ public class UserService : IUserService
 
     private static readonly Error EmailNotUnique = new("User.EmailNotUnique", "User with this email already exists.");
     private static readonly Error PhoneNotUnique = new("User.PhoneNotUnique", "User with this phone number already exists.");
+    private static readonly Error DriverLicenseNotUnique = new("User.DriverLicenseNotUnique", "User with this driver license number already exists.");
     private static readonly Error InvalidCredentials = new("User.InvalidCredentials", "Invalid email or password.");
     private static readonly Error NotFound = new("User.NotFound", "User was not found.");
     private static readonly Error InvalidRefreshToken = new("User.InvalidRefreshToken", "Refresh token is invalid or expired.");
@@ -67,13 +68,19 @@ public class UserService : IUserService
             return Result<UserDto>.Failure(PhoneNotUnique);
         }
 
+        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
+        if (await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
+        {
+            return Result<UserDto>.Failure(DriverLicenseNotUnique);
+        }
+
         var user = User.CreateRider(
             request.FirstName,
             request.LastName,
             normalizedEmail,
             normalizedPhone,
             _passwordHasher.Hash(request.Password),
-            request.DriverLicenseNumber);
+            normalizedDriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -277,5 +284,10 @@ public class UserService : IUserService
         if (value.StartsWith("994", StringComparison.Ordinal)) return $"+{value}";
         if (value.StartsWith("0", StringComparison.Ordinal)) return $"+994{value[1..]}";
         return value;
+    }
+
+    private static string NormalizeDriverLicenseNumber(string driverLicenseNumber)
+    {
+        return driverLicenseNumber.Trim().ToUpperInvariant();
     }
 }

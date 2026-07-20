@@ -1,3 +1,5 @@
+using CarSharing.Domain.Enums;
+
 namespace CarSharing.Application.Vehicles.Dtos;
 
 public class UpdateVehicleRequest : IVehicleDetailsRequest
@@ -19,4 +21,5 @@ public class UpdateVehicleRequest : IVehicleDetailsRequest
     public string Zone { get; set; } = null!;
     public double Latitude { get; set; }
     public double Longitude { get; set; }
+    public VehicleStatus Status { get; set; } = VehicleStatus.Available;
 }

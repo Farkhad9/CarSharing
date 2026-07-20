@@ -2,6 +2,7 @@ using CarSharing.Application.Common.Models;
 using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Application.Vehicles.Services;
+using CarSharing.Domain.Enums;
 using CarSharing.WebApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -23,21 +24,32 @@ public class VehiclesController : ControllerBase
 
     private readonly IVehicleService _vehicleService;
     private readonly IVehicleImageStorage _vehicleImageStorage;
+    private readonly ICurrentUserService _currentUser;
 
     public VehiclesController(
         IVehicleService vehicleService,
-        IVehicleImageStorage vehicleImageStorage)
+        IVehicleImageStorage vehicleImageStorage,
+        ICurrentUserService currentUser)
     {
         _vehicleService = vehicleService;
         _vehicleImageStorage = vehicleImageStorage;
+        _currentUser = currentUser;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
     {
         var result = await _vehicleService.GetAllAsync(cancellationToken);
+        var vehicles = result.Value ?? [];
 
-        return Ok(result.Value);
+        if (!CanSeeFullFleet())
+        {
+            vehicles = vehicles
+                .Where(vehicle => vehicle.Status == VehicleStatus.Available)
+                .ToList();
+        }
+
+        return Ok(vehicles);
     }
 
     [HttpGet("{id:guid}")]
@@ -50,11 +62,16 @@ public class VehiclesController : ControllerBase
             return ToErrorResponse(result.Errors);
         }
 
+        if (!CanSeeFullFleet() && result.Value!.Status != VehicleStatus.Available)
+        {
+            return NotFound();
+        }
+
         return Ok(result.Value);
     }
 
     [HttpPost]
-    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
+    [Authorize(Policy = AuthorizationPolicies.SuperAdminOnly)]
     public async Task<IActionResult> Create(
         CreateVehicleRequest request,
         CancellationToken cancellationToken)
@@ -70,7 +87,7 @@ public class VehiclesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
-    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
+    [Authorize(Policy = AuthorizationPolicies.SuperAdminOnly)]
     public async Task<IActionResult> Update(
         Guid id,
         UpdateVehicleRequest request,
@@ -87,7 +104,7 @@ public class VehiclesController : ControllerBase
     }
 
     [HttpPost("{id:guid}/photos")]
-    [Authorize(Policy = AuthorizationPolicies.AdminOnly)]
+    [Authorize(Policy = AuthorizationPolicies.SuperAdminOnly)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadPhotos(
         Guid id,
@@ -159,8 +176,16 @@ public class VehiclesController : ControllerBase
             return Conflict(new { errors });
         }
 
+        if (errors.Any(error => error.Code == "Vehicle.SuperAdminRequired"))
+        {
+            return Forbid();
+        }
+
         return BadRequest(new { errors });
     }
+
+    private bool CanSeeFullFleet() =>
+        _currentUser.Role is UserRole.Staff or UserRole.Admin or UserRole.SuperAdmin;
 
     private async Task<Result<VehicleImageUrls>> SaveVehicleImagesAsync(
         VehiclePhotoUploadRequest request,

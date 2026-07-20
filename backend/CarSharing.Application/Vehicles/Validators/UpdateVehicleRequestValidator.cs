@@ -8,5 +8,9 @@ public class UpdateVehicleRequestValidator : AbstractValidator<UpdateVehicleRequ
     public UpdateVehicleRequestValidator()
     {
         Include(new VehicleRequestValidator<UpdateVehicleRequest>());
+
+        RuleFor(x => x.Status)
+            .IsInEnum()
+            .WithMessage("Vehicle status is not valid.");
     }
 }

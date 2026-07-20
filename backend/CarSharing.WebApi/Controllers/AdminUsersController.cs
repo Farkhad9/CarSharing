@@ -166,7 +166,7 @@ public sealed class AdminUsersController : ControllerBase
             return Unauthorized(new { errors });
         }
 
-        if (errors.Any(error => error.Code is "AdminUsers.AdminRequired" or "AdminUsers.SuperAdminRequired" or "AdminUsers.CannotManageSuperAdmin" or "AdminUsers.CannotManageAdminAccount"))
+        if (errors.Any(error => error.Code is "AdminUsers.AdminRequired" or "AdminUsers.SuperAdminRequired" or "AdminUsers.CannotManageSuperAdmin" or "AdminUsers.CannotManageAdminAccount" or "AdminUsers.CannotChangeOwnRole"))
         {
             return Forbid();
         }

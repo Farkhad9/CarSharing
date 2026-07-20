@@ -53,6 +53,10 @@ export const adminUsersApi = {
     method: "PATCH",
     body: JSON.stringify({ role }),
   }),
+  updateStatus: (id, isActive) => apiRequest(`/api/admin/users/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ isActive }),
+  }),
   blockUser: (id, payload) => apiRequest(`/api/admin/users/${id}/block`, {
     method: "PATCH",
     body: JSON.stringify(payload),

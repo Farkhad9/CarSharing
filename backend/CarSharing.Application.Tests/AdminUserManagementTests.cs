@@ -79,6 +79,19 @@ public sealed class AdminUserManagementTests
     }
 
     [Fact]
+    public async Task UpdateRoleAsync_ForCurrentSuperAdmin_IsRejected()
+    {
+        var currentUser = User.CreateSuperAdmin("Root", "Admin", "root-super@test.local", "+994502222223", "hash", "ROOTSUPER");
+        var fixture = CreateFixture(UserRole.SuperAdmin, currentUser.Id, currentUser);
+
+        var result = await fixture.Service.UpdateRoleAsync(currentUser.Id, new UpdateUserRoleRequest(UserRole.Admin));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotChangeOwnRole", result.Errors.Single().Code);
+        Assert.Equal(UserRole.SuperAdmin, currentUser.Role);
+    }
+
+    [Fact]
     public async Task UpdateVerificationAsync_ForRider_ApprovesVerification()
     {
         var rider = User.CreateRider("Test", "Rider", "rider@test.local", "+994503333333", "hash", "RIDER1");
@@ -151,6 +164,40 @@ public sealed class AdminUserManagementTests
 
         Assert.True(result.IsFailure);
         Assert.Equal("AdminUsers.PhoneNotUnique", result.Errors.Single().Code);
+    }
+
+    [Fact]
+    public async Task CreateStaffAsync_WithDuplicateDriverLicenseNumber_IsRejected()
+    {
+        var existing = User.CreateRider("Test", "Rider", "license@test.local", "+994501234569", "hash", "STAFF123");
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: existing);
+
+        var result = await fixture.Service.CreateStaffAsync(CreateStaffRequest() with
+        {
+            Email = "new-license-staff@test.local",
+            Phone = "+994501234570",
+            DriverLicenseNumber = "staff123"
+        });
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.DriverLicenseNotUnique", result.Errors.Single().Code);
+    }
+
+    [Fact]
+    public async Task CreateAdminAsync_WithDuplicateDriverLicenseNumber_IsRejected()
+    {
+        var existing = User.CreateStaff("Test", "Staff", "admin-license@test.local", "+994501234571", "hash", "ADMIN123");
+        var fixture = CreateFixture(UserRole.SuperAdmin, seedUsers: existing);
+
+        var result = await fixture.Service.CreateAdminAsync(CreateAdminRequest(UserRole.Admin) with
+        {
+            Email = "new-admin-license@test.local",
+            Phone = "+994501234572",
+            DriverLicenseNumber = "admin123"
+        });
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.DriverLicenseNotUnique", result.Errors.Single().Code);
     }
 
     private static Fixture CreateFixture(
@@ -377,6 +424,11 @@ public sealed class AdminUserManagementTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Items.Any(user => user.Phone == phone.Trim()));
+        }
+
+        public Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Items.Any(user => user.DriverLicenseNumber == driverLicenseNumber.Trim().ToUpperInvariant()));
         }
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default)

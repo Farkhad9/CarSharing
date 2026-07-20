@@ -24,6 +24,7 @@ public class AppDbContext : DbContext
     public DbSet<StaffKpiEvent> StaffKpiEvents => Set<StaffKpiEvent>();
     public DbSet<TripReview> TripReviews => Set<TripReview>();
     public DbSet<NewsletterSubscription> NewsletterSubscriptions => Set<NewsletterSubscription>();
+    public DbSet<ParkingZone> ParkingZones => Set<ParkingZone>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

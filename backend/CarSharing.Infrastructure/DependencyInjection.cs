@@ -37,6 +37,7 @@ public static class DependencyInjection
         services.AddScoped<IStaffKpiEventRepository, StaffKpiEventRepository>();
         services.AddScoped<IInvoiceRepository, InvoiceRepository>();
         services.AddScoped<IAdminStatisticsRepository, AdminStatisticsRepository>();
+        services.AddScoped<IParkingZoneRepository, ParkingZoneRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();
