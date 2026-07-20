@@ -87,6 +87,73 @@ public sealed class AdminStatisticsRepository : IAdminStatisticsRepository
             topVehicles);
     }
 
+    public async Task<AdminFinanceStatisticsDto> GetFinanceSnapshotAsync(
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var ridePayments = _dbContext.PaymentTransactions
+            .Where(payment => payment.Type == PaymentTransactionType.RidePayment
+                && payment.Status == PaymentTransactionStatus.Completed
+                && payment.CompletedAt != null
+                && payment.CompletedAt >= fromUtc
+                && payment.CompletedAt < toUtc);
+
+        var revenue = await ridePayments
+            .SumAsync(payment => (decimal?)payment.Amount, cancellationToken) ?? 0m;
+
+        var currency = await _dbContext.PaymentTransactions
+            .Where(payment => payment.Status == PaymentTransactionStatus.Completed)
+            .OrderByDescending(payment => payment.CompletedAt ?? payment.CreatedAt)
+            .Select(payment => payment.Currency)
+            .FirstOrDefaultAsync(cancellationToken) ?? DefaultCurrency;
+
+        var paymentStatusCounts = await _dbContext.PaymentTransactions
+            .Where(payment => (payment.CompletedAt ?? payment.CreatedAt) >= fromUtc
+                && (payment.CompletedAt ?? payment.CreatedAt) < toUtc)
+            .GroupBy(payment => payment.Status)
+            .Select(group => new { Status = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count, cancellationToken);
+
+        var completedTrips = await _dbContext.Trips
+            .CountAsync(
+                trip => trip.Status == TripStatus.Completed
+                    && trip.EndedAt >= fromUtc
+                    && trip.EndedAt < toUtc,
+                cancellationToken);
+
+        var vehicleStatusCounts = await _dbContext.Vehicles
+            .GroupBy(vehicle => vehicle.Status)
+            .Select(group => new { Status = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count, cancellationToken);
+
+        var fleetSize = vehicleStatusCounts.Values.Sum();
+        var activeOrReserved = GetCount(vehicleStatusCounts, VehicleStatus.InUse)
+            + GetCount(vehicleStatusCounts, VehicleStatus.Reserved);
+        var utilization = fleetSize == 0
+            ? 0
+            : (int)Math.Round(((decimal)activeOrReserved / fleetSize) * 100, MidpointRounding.AwayFromZero);
+
+        var timeZone = GetBakuTimeZone();
+
+        return new AdminFinanceStatisticsDto(
+            DateTime.UtcNow,
+            "Asia/Baku",
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(fromUtc, timeZone)),
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(toUtc.AddTicks(-1), timeZone)),
+            revenue,
+            currency,
+            completedTrips,
+            GetCount(paymentStatusCounts, PaymentTransactionStatus.Completed),
+            GetCount(paymentStatusCounts, PaymentTransactionStatus.Pending),
+            GetCount(paymentStatusCounts, PaymentTransactionStatus.Failed),
+            GetCount(paymentStatusCounts, PaymentTransactionStatus.Refunded),
+            fleetSize,
+            activeOrReserved,
+            utilization,
+            await GetTopVehiclesAsync(fromUtc, toUtc, cancellationToken));
+    }
+
     private static async Task<decimal> SumRideRevenueAsync(
         IQueryable<PaymentTransaction> ridePayments,
         DateTime fromUtc,

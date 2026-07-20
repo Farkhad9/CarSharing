@@ -56,6 +56,27 @@ public sealed record AdminTopVehicleDto(
     int CompletedTrips,
     decimal Revenue);
 
+public sealed record AdminFinanceStatisticsRequest(
+    DateOnly From,
+    DateOnly To);
+
+public sealed record AdminFinanceStatisticsDto(
+    DateTime GeneratedAt,
+    string TimeZone,
+    DateOnly From,
+    DateOnly To,
+    decimal Revenue,
+    string Currency,
+    int CompletedTrips,
+    int CompletedPayments,
+    int PendingPayments,
+    int FailedPayments,
+    int RefundedPayments,
+    int FleetSize,
+    int ActiveOrReservedVehicles,
+    int UtilizationPercent,
+    IReadOnlyList<AdminTopVehicleDto> TopVehicles);
+
 public sealed record AdminStaffKpiSummaryDto(
     DateTime GeneratedAt,
     string TimeZone,
@@ -65,7 +86,8 @@ public sealed record AdminStaffKpiSummaryDto(
     int AverageCompletionMinutes,
     decimal AverageRating,
     int WeeklyChangePercent,
-    IReadOnlyList<AdminStaffKpiRowDto> Staff);
+    IReadOnlyList<AdminStaffKpiRowDto> Staff,
+    IReadOnlyList<AdminStaffKpiRowDto> Admins);
 
 public sealed record AdminStaffKpiRowDto(
     Guid Id,

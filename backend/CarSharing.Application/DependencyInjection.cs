@@ -14,6 +14,9 @@ using CarSharing.Application.Vehicles.Validators;
 using CarSharing.Application.Payments.Dtos;
 using CarSharing.Application.Payments.Services;
 using CarSharing.Application.Payments.Validators;
+using CarSharing.Application.ParkingZones.Dtos;
+using CarSharing.Application.ParkingZones.Services;
+using CarSharing.Application.ParkingZones.Validators;
 using CarSharing.Application.Pricing.Services;
 using CarSharing.Application.Charging.Services;
 using CarSharing.Application.StaffTasks.Dtos;
@@ -44,6 +47,7 @@ public static class DependencyInjection
         services.AddScoped<IInvoiceService, InvoiceService>();
         services.AddScoped<IAdminStatisticsService, AdminStatisticsService>();
         services.AddScoped<IAdminUserService, AdminUserService>();
+        services.AddScoped<IParkingZoneService, ParkingZoneService>();
         services.AddScoped<IEventPublisher, NoOpEventPublisher>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);
@@ -64,6 +68,7 @@ public static class DependencyInjection
         services.AddScoped<IValidator<UpdateUserVerificationRequest>, UpdateUserVerificationRequestValidator>();
         services.AddScoped<IValidator<BlockUserRequest>, BlockUserRequestValidator>();
         services.AddScoped<IValidator<CreateStaffTaskRequest>, CreateStaffTaskRequestValidator>();
+        services.AddScoped<IValidator<UpsertParkingZoneRequest>, UpsertParkingZoneRequestValidator>();
 
         return services;
     }

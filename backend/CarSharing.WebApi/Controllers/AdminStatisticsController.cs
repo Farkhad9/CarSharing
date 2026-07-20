@@ -26,6 +26,20 @@ public sealed class AdminStatisticsController : ControllerBase
         return result.IsSuccess ? Ok(result.Value) : ToErrorResponse(result.Errors);
     }
 
+    [HttpGet("finance")]
+    [Authorize(Policy = AuthorizationPolicies.SuperAdminOnly)]
+    public async Task<IActionResult> GetFinance(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        CancellationToken cancellationToken)
+    {
+        var result = await _statisticsService.GetFinanceStatisticsAsync(
+            new AdminFinanceStatisticsRequest(from, to),
+            cancellationToken);
+
+        return result.IsSuccess ? Ok(result.Value) : ToErrorResponse(result.Errors);
+    }
+
     [HttpGet("staff-kpi")]
     public async Task<IActionResult> GetStaffKpi(CancellationToken cancellationToken)
     {
@@ -49,7 +63,7 @@ public sealed class AdminStatisticsController : ControllerBase
             return new UnauthorizedObjectResult(new { errors });
         }
 
-        if (errors.Any(error => error.Code == "AdminStatistics.AdminRequired"))
+        if (errors.Any(error => error.Code is "AdminStatistics.AdminRequired" or "AdminStatistics.SuperAdminRequired"))
         {
             return new ForbidResult();
         }

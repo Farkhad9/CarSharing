@@ -14,11 +14,13 @@ public class VehicleService : IVehicleService
     private static readonly Error NotFound = new("Vehicle.NotFound", "Vehicle was not found.");
     private static readonly Error PlateNumberNotUnique = new("Vehicle.PlateNumberNotUnique", "Vehicle with this plate number already exists.");
     private static readonly Error CannotChargeInUseVehicle = new("Vehicle.CannotChargeInUse", "Vehicle cannot be sent to charging while it is in use or reserved.");
+    private static readonly Error SuperAdminRequired = new("Vehicle.SuperAdminRequired", "Super admin access is required.");
 
     private readonly IVehicleRepository _vehicleRepository;
     private readonly IChargingSessionRepository _chargingSessionRepository;
     private readonly IStaffTaskRepository _staffTaskRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUser;
     private readonly IMapper _mapper;
     private readonly IValidator<CreateVehicleRequest> _createVehicleValidator;
     private readonly IValidator<UpdateVehicleRequest> _updateVehicleValidator;
@@ -29,6 +31,7 @@ public class VehicleService : IVehicleService
         IChargingSessionRepository chargingSessionRepository,
         IStaffTaskRepository staffTaskRepository,
         IUnitOfWork unitOfWork,
+        ICurrentUserService currentUser,
         IMapper mapper,
         IValidator<CreateVehicleRequest> createVehicleValidator,
         IValidator<UpdateVehicleRequest> updateVehicleValidator,
@@ -38,6 +41,7 @@ public class VehicleService : IVehicleService
         _chargingSessionRepository = chargingSessionRepository;
         _staffTaskRepository = staffTaskRepository;
         _unitOfWork = unitOfWork;
+        _currentUser = currentUser;
         _mapper = mapper;
         _createVehicleValidator = createVehicleValidator;
         _updateVehicleValidator = updateVehicleValidator;
@@ -158,6 +162,7 @@ public class VehicleService : IVehicleService
             request.Zone,
             request.Latitude,
             request.Longitude);
+        vehicle.ChangeStatus(request.Status == default ? VehicleStatus.Available : request.Status);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -203,6 +208,11 @@ public class VehicleService : IVehicleService
         if (request.Status == VehicleStatus.Charging && vehicle.Status is VehicleStatus.InUse or VehicleStatus.Reserved)
         {
             return Result<VehicleDto>.Failure(CannotChargeInUseVehicle);
+        }
+
+        if (_currentUser.Role != UserRole.SuperAdmin && request.Status != VehicleStatus.Charging)
+        {
+            return Result<VehicleDto>.Failure(SuperAdminRequired);
         }
 
         vehicle.ChangeStatus(request.Status);

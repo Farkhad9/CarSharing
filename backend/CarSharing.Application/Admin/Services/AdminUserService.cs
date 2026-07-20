@@ -15,7 +15,9 @@ public sealed class AdminUserService : IAdminUserService
     private static readonly Error NotFound = new("AdminUsers.NotFound", "User was not found.");
     private static readonly Error EmailNotUnique = new("AdminUsers.EmailNotUnique", "User with this email already exists.");
     private static readonly Error PhoneNotUnique = new("AdminUsers.PhoneNotUnique", "User with this phone number already exists.");
+    private static readonly Error DriverLicenseNotUnique = new("AdminUsers.DriverLicenseNotUnique", "User with this driver license number already exists.");
     private static readonly Error CannotDisableSelf = new("AdminUsers.CannotDisableSelf", "You cannot disable your own account.");
+    private static readonly Error CannotChangeOwnRole = new("AdminUsers.CannotChangeOwnRole", "You cannot change your own role.");
     private static readonly Error CannotManageSuperAdmin = new("AdminUsers.CannotManageSuperAdmin", "Only SuperAdmin can manage a SuperAdmin account.");
     private static readonly Error CannotManageAdminAccount = new("AdminUsers.CannotManageAdminAccount", "Only SuperAdmin can manage admin accounts.");
     private static readonly Error CannotVerifyInternalUser = new("AdminUsers.CannotVerifyInternalUser", "Internal users do not use rider verification.");
@@ -117,13 +119,19 @@ public sealed class AdminUserService : IAdminUserService
             return Result<AdminUserDto>.Failure(PhoneNotUnique);
         }
 
+        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
+        if (await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
+        {
+            return Result<AdminUserDto>.Failure(DriverLicenseNotUnique);
+        }
+
         var user = User.CreateStaff(
             request.FirstName,
             request.LastName,
             normalizedEmail,
             normalizedPhone,
             _passwordHasher.Hash(request.Password),
-            request.DriverLicenseNumber);
+            normalizedDriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -226,10 +234,16 @@ public sealed class AdminUserService : IAdminUserService
             return Result<AdminUserDto>.Failure(PhoneNotUnique);
         }
 
+        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
+        if (await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
+        {
+            return Result<AdminUserDto>.Failure(DriverLicenseNotUnique);
+        }
+
         var passwordHash = _passwordHasher.Hash(request.Password);
         var user = request.Role == UserRole.SuperAdmin
-            ? User.CreateSuperAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, request.DriverLicenseNumber)
-            : User.CreateAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, request.DriverLicenseNumber);
+            ? User.CreateSuperAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, normalizedDriverLicenseNumber)
+            : User.CreateAdmin(request.FirstName, request.LastName, normalizedEmail, normalizedPhone, passwordHash, normalizedDriverLicenseNumber);
 
         await _userRepository.AddAsync(user, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -258,6 +272,11 @@ public sealed class AdminUserService : IAdminUserService
         if (user is null)
         {
             return Result<AdminUserDto>.Failure(NotFound);
+        }
+
+        if (user.Id == _currentUser.UserId)
+        {
+            return Result<AdminUserDto>.Failure(CannotChangeOwnRole);
         }
 
         user.ChangeRole(request.Role);
@@ -465,5 +484,10 @@ public sealed class AdminUserService : IAdminUserService
         if (value.StartsWith("994", StringComparison.Ordinal)) return $"+{value}";
         if (value.StartsWith("0", StringComparison.Ordinal)) return $"+994{value[1..]}";
         return value;
+    }
+
+    private static string NormalizeDriverLicenseNumber(string driverLicenseNumber)
+    {
+        return driverLicenseNumber.Trim().ToUpperInvariant();
     }
 }

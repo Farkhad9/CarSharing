@@ -122,6 +122,7 @@ public sealed class PaymentEngineTests
         public Task<User?> GetByRefreshTokenHashAsync(string refreshTokenHash, CancellationToken cancellationToken = default) => Task.FromResult<User?>(null);
         public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 

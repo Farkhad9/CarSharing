@@ -130,12 +130,14 @@ public class TripEngineTests
             DateTime.UtcNow);
         var completionRepository = new FakeCompletionRequestRepository();
         completionRepository.Requests.Add(completionRequest);
+        var kpiEvents = new FakeStaffKpiEventRepository();
         var service = CreateService(
             staffId,
             reservation,
             vehicle,
             trip,
             completionRepository: completionRepository,
+            staffKpiEventRepository: kpiEvents,
             role: UserRole.Staff);
 
         var result = await service.ApproveCompletionRequestAsync(
@@ -145,6 +147,12 @@ public class TripEngineTests
         Assert.Equal(TripCompletionStatus.Approved, completionRequest.Status);
         Assert.Equal(TripStatus.AwaitingPayment, trip.Status);
         Assert.Equal(VehicleStatus.InUse, vehicle.Status);
+        var kpiEvent = Assert.Single(kpiEvents.Events);
+        Assert.Equal("Vehicle return photo review", kpiEvent.Title);
+        Assert.Contains("Approved vehicle return photos for", kpiEvent.Result);
+        Assert.Contains("Tesla Model 3", kpiEvent.Result);
+        Assert.Contains("10-AA-001", kpiEvent.Result);
+        Assert.DoesNotContain(trip.Id.ToString(), kpiEvent.Result);
     }
 
     private static TripService CreateService(
@@ -154,6 +162,7 @@ public class TripEngineTests
         Trip? trip = null,
         FakeTripRepository? tripRepository = null,
         FakeCompletionRequestRepository? completionRepository = null,
+        FakeStaffKpiEventRepository? staffKpiEventRepository = null,
         FakeUnitOfWork? unitOfWork = null,
         UserRole role = UserRole.Rider)
     {
@@ -164,6 +173,7 @@ public class TripEngineTests
         }
 
         completionRepository ??= new FakeCompletionRequestRepository();
+        staffKpiEventRepository ??= new FakeStaffKpiEventRepository();
         unitOfWork ??= new FakeUnitOfWork();
         var mapper = new MapperConfiguration(
             configuration => configuration.AddProfile<TripMappingProfile>(),
@@ -173,7 +183,7 @@ public class TripEngineTests
         return new TripService(
             tripRepository,
             completionRepository,
-            new FakeStaffKpiEventRepository(),
+            staffKpiEventRepository,
             new FakeReservationRepository(reservation),
             new FakeVehicleRepository(vehicle),
             new FakePhotoStorage(),

@@ -218,6 +218,9 @@ public sealed class StaffTaskManagementTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) =>
             Task.FromResult(false);
 
+        public Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }

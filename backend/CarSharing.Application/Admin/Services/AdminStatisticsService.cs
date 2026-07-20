@@ -12,12 +12,17 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
 
     private static readonly Error Unauthenticated = new("AdminStatistics.Unauthenticated", "User must be authenticated.");
     private static readonly Error AdminRequired = new("AdminStatistics.AdminRequired", "Only admin or super admin can access live statistics.");
+    private static readonly Error SuperAdminRequired = new("AdminStatistics.SuperAdminRequired", "Super admin access is required.");
+    private static readonly Error InvalidPeriod = new("Validation.Period", "Period end date must be on or after start date.");
     private static readonly Error StaffNotFound = new("AdminStatistics.StaffNotFound", "Staff user was not found.");
 
     private readonly IAdminStatisticsRepository _statisticsRepository;
     private readonly IUserRepository _userRepository;
     private readonly IStaffTaskRepository _staffTaskRepository;
     private readonly IStaffKpiEventRepository _staffKpiEventRepository;
+    private readonly ITripCompletionRequestRepository _tripCompletionRequestRepository;
+    private readonly ITripRepository _tripRepository;
+    private readonly IVehicleRepository _vehicleRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICurrentUserService _currentUser;
 
@@ -26,6 +31,9 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
         IUserRepository userRepository,
         IStaffTaskRepository staffTaskRepository,
         IStaffKpiEventRepository staffKpiEventRepository,
+        ITripCompletionRequestRepository tripCompletionRequestRepository,
+        ITripRepository tripRepository,
+        IVehicleRepository vehicleRepository,
         IUnitOfWork unitOfWork,
         ICurrentUserService currentUser)
     {
@@ -33,6 +41,9 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
         _userRepository = userRepository;
         _staffTaskRepository = staffTaskRepository;
         _staffKpiEventRepository = staffKpiEventRepository;
+        _tripCompletionRequestRepository = tripCompletionRequestRepository;
+        _tripRepository = tripRepository;
+        _vehicleRepository = vehicleRepository;
         _unitOfWork = unitOfWork;
         _currentUser = currentUser;
     }
@@ -103,6 +114,21 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
         return Result<AdminLiveStatisticsDto>.Success(dto);
     }
 
+    public async Task<Result<AdminFinanceStatisticsDto>> GetFinanceStatisticsAsync(
+        AdminFinanceStatisticsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var accessError = RequireSuperAdmin();
+        if (accessError is not null) return Result<AdminFinanceStatisticsDto>.Failure(accessError);
+        if (request.To < request.From) return Result<AdminFinanceStatisticsDto>.Failure(InvalidPeriod);
+
+        var fromUtc = ToUtc(request.From.ToDateTime(TimeOnly.MinValue));
+        var toUtc = ToUtc(request.To.AddDays(1).ToDateTime(TimeOnly.MinValue));
+
+        var snapshot = await _statisticsRepository.GetFinanceSnapshotAsync(fromUtc, toUtc, cancellationToken);
+        return Result<AdminFinanceStatisticsDto>.Success(snapshot);
+    }
+
     public async Task<Result<AdminStaffKpiSummaryDto>> GetStaffKpiAsync(CancellationToken cancellationToken = default)
     {
         var accessError = RequireAdmin();
@@ -121,9 +147,22 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
         var previousWeekEndUtc = ToUtc(previousWeekEnd);
 
         var staffUsers = await _userRepository.GetAllAsync(role: UserRole.Staff, cancellationToken: cancellationToken);
-        var staffUserIds = staffUsers.Select(staff => staff.Id).ToList();
-        var kpiEvents = await _staffKpiEventRepository.GetByStaffIdsAsync(staffUserIds, cancellationToken);
+        var allUsers = await _userRepository.GetAllAsync(cancellationToken: cancellationToken);
+        var adminUsers = allUsers
+            .Where(user => user.Role is UserRole.Admin or UserRole.SuperAdmin)
+            .ToList();
+        var systemUserIds = staffUsers
+            .Select(staff => staff.Id)
+            .Concat(adminUsers.Select(admin => admin.Id))
+            .ToList();
+        var kpiEvents = await _staffKpiEventRepository.GetByStaffIdsAsync(systemUserIds, cancellationToken);
         var tasks = await _staffTaskRepository.GetAllAsync(cancellationToken);
+
+        var completedEventDtos = new Dictionary<Guid, AdminStaffKpiItemDto>();
+        foreach (var kpiEvent in kpiEvents.Where(IsCompletedWorkEvent).Concat(kpiEvents.Where(IsAdminWorkEvent)))
+        {
+            completedEventDtos[kpiEvent.Id] = await ToCompletedKpiItemDtoAsync(kpiEvent, cancellationToken);
+        }
 
         var rows = staffUsers
             .Select(staff =>
@@ -167,11 +206,7 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
                     ? 0
                     : Math.Round(ratings.Average(), 1, MidpointRounding.AwayFromZero);
                 var completedTaskItems = completedEvents
-                    .Select(kpiEvent => new AdminStaffKpiItemDto(
-                        kpiEvent.Id,
-                        kpiEvent.Title,
-                        kpiEvent.Result,
-                        kpiEvent.OccurredAt))
+                    .Select(kpiEvent => completedEventDtos[kpiEvent.Id])
                     .Concat(completedTaskFallbacks.Select(task => new AdminStaffKpiItemDto(
                         task.Id,
                         task.Title,
@@ -203,6 +238,52 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
             .ThenBy(row => row.Name)
             .ToList();
 
+        var adminRows = adminUsers
+            .Select(admin =>
+            {
+                var adminEvents = kpiEvents
+                    .Where(kpiEvent => kpiEvent.StaffUserId == admin.Id)
+                    .ToList();
+                var completedAdminEvents = adminEvents
+                    .Where(IsAdminWorkEvent)
+                    .ToList();
+                var completedThisWeek = completedAdminEvents.Count(kpiEvent => kpiEvent.OccurredAt >= weekStartUtc);
+                var completedPreviousWeek = completedAdminEvents.Count(kpiEvent =>
+                    kpiEvent.OccurredAt >= previousWeekStartUtc && kpiEvent.OccurredAt < previousWeekEndUtc);
+                var completionDurations = completedAdminEvents
+                    .Select(kpiEvent => kpiEvent.DurationMinutes)
+                    .ToList();
+                var averageCompletionMinutes = completionDurations.Count == 0
+                    ? 0
+                    : (int)Math.Round(completionDurations.Average(), MidpointRounding.AwayFromZero);
+                var completedItems = completedAdminEvents
+                    .Select(kpiEvent => completedEventDtos[kpiEvent.Id])
+                    .OrderByDescending(item => item.CompletedAt)
+                    .Take(20)
+                    .ToList();
+
+                return new AdminStaffKpiRowDto(
+                    admin.Id,
+                    $"{admin.FirstName} {admin.LastName}".Trim(),
+                    admin.Email,
+                    admin.Role.ToString(),
+                    !admin.IsBlocked(utcNow),
+                    completedAdminEvents.Count,
+                    averageCompletionMinutes,
+                    0,
+                    0,
+                    0,
+                    0,
+                    CalculatePercentChange(completedThisWeek, completedPreviousWeek),
+                    0,
+                    completedAdminEvents.Count,
+                    0,
+                    completedItems);
+            })
+            .OrderByDescending(row => row.OrdersCompleted)
+            .ThenBy(row => row.Name)
+            .ToList();
+
         var totalCompleted = rows.Sum(row => row.OrdersCompleted);
         var averageMinutes = rows.Count == 0
             ? 0
@@ -223,7 +304,8 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
             averageMinutes,
             averageRating,
             weeklyAverage,
-            rows);
+            rows,
+            adminRows);
 
         return Result<AdminStaffKpiSummaryDto>.Success(dto);
     }
@@ -269,6 +351,12 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
         return _currentUser.Role is UserRole.Admin or UserRole.SuperAdmin ? null : AdminRequired;
     }
 
+    private Error? RequireSuperAdmin()
+    {
+        if (!_currentUser.IsAuthenticated || _currentUser.UserId is null) return Unauthenticated;
+        return _currentUser.Role == UserRole.SuperAdmin ? null : SuperAdminRequired;
+    }
+
     private static int CountVehicles(AdminStatisticsSnapshot snapshot, VehicleStatus status) =>
         snapshot.VehicleStatusCounts.TryGetValue(status, out var count) ? count : 0;
 
@@ -289,6 +377,64 @@ public sealed class AdminStatisticsService : IAdminStatisticsService
             or StaffKpiEventType.TripPhotoApproved
             or StaffKpiEventType.TripPhotoRejected
             or StaffKpiEventType.SupportTicketClosed;
+
+    private static bool IsAdminWorkEvent(StaffKpiEvent kpiEvent) =>
+        kpiEvent.Type is StaffKpiEventType.KycVerificationApproved
+            or StaffKpiEventType.KycVerificationRejected
+            or StaffKpiEventType.KycVerificationReset;
+
+    private async Task<AdminStaffKpiItemDto> ToCompletedKpiItemDtoAsync(
+        StaffKpiEvent kpiEvent,
+        CancellationToken cancellationToken)
+    {
+        if (kpiEvent.Type is StaffKpiEventType.TripPhotoApproved or StaffKpiEventType.TripPhotoRejected)
+        {
+            var title = "Vehicle return photo review";
+            var action = kpiEvent.Type == StaffKpiEventType.TripPhotoApproved
+                ? "Approved vehicle return photos"
+                : "Rejected vehicle return photos";
+
+            var result = await BuildVehicleReturnPhotoResultAsync(action, kpiEvent, cancellationToken);
+            return new AdminStaffKpiItemDto(kpiEvent.Id, title, result, kpiEvent.OccurredAt);
+        }
+
+        return new AdminStaffKpiItemDto(
+            kpiEvent.Id,
+            kpiEvent.Title,
+            kpiEvent.Result,
+            kpiEvent.OccurredAt);
+    }
+
+    private async Task<string> BuildVehicleReturnPhotoResultAsync(
+        string action,
+        StaffKpiEvent kpiEvent,
+        CancellationToken cancellationToken)
+    {
+        if (kpiEvent.SourceId is null)
+        {
+            return $"{action}.";
+        }
+
+        var completionRequest = await _tripCompletionRequestRepository.GetByIdAsync(kpiEvent.SourceId.Value, cancellationToken);
+        if (completionRequest is null)
+        {
+            return $"{action}.";
+        }
+
+        var trip = await _tripRepository.GetByIdAsync(completionRequest.TripId, cancellationToken);
+        if (trip is null)
+        {
+            return $"{action} for {completionRequest.RequestedAt:dd.MM.yyyy}.";
+        }
+
+        var vehicle = await _vehicleRepository.GetByIdAsync(trip.VehicleId, cancellationToken);
+        if (vehicle is null)
+        {
+            return $"{action} for {completionRequest.RequestedAt:dd.MM.yyyy}.";
+        }
+
+        return $"{action} for {completionRequest.RequestedAt:dd.MM.yyyy} - {vehicle.Brand} {vehicle.Model} ({vehicle.PlateNumber}).";
+    }
 
     private static IReadOnlyList<Error> ValidateKpiEventRequest(RecordStaffKpiEventRequest request)
     {

@@ -55,6 +55,20 @@ const App = () => {
   const userId = user?.id;
 
   useEffect(() => {
+    if ("scrollRestoration" in window.history) {
+      window.history.scrollRestoration = "manual";
+    }
+
+    if (window.location.pathname === "/" && window.location.hash !== "#fleet") {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      const scrollTimer = window.setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 0);
+      return () => window.clearTimeout(scrollTimer);
+    }
+
+    return undefined;
+  }, []);
+
+  useEffect(() => {
     AOS.init({
       duration: 800,
       once: true,

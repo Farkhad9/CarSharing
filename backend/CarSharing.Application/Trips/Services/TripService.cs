@@ -6,6 +6,7 @@ using CarSharing.Domain.Enums;
 using AutoMapper;
 using CarSharing.Application.Pricing.Services;
 using FluentValidation;
+using System.Globalization;
 
 namespace CarSharing.Application.Trips.Services;
 
@@ -420,14 +421,15 @@ public class TripService : ITripService
         trip.MarkAwaitingPayment();
         if (_currentUserService.Role == UserRole.Staff)
         {
+            var vehicle = await _vehicleRepository.GetByIdAsync(trip.VehicleId, cancellationToken);
             await _staffKpiEventRepository.AddAsync(
                 StaffKpiEvent.Create(
                     reviewerId.Value,
                     StaffKpiEventType.TripPhotoApproved,
                     StaffTaskType.PhotoVerification,
                     request.Id,
-                    "Trip completion photo review",
-                    $"Approved completion photos for trip {trip.Id}.",
+                    "Vehicle return photo review",
+                    BuildTripPhotoReviewResult("Approved vehicle return photos", request.RequestedAt, vehicle),
                     now,
                     request.RequestedAt,
                     now),
@@ -483,7 +485,7 @@ public class TripService : ITripService
                     StaffKpiEventType.TripPhotoRejected,
                     StaffTaskType.PhotoVerification,
                     completionRequest.Id,
-                    "Trip completion photo review",
+                    "Vehicle return photo review",
                     request.Reason,
                     now,
                     completionRequest.RequestedAt,
@@ -599,6 +601,17 @@ public class TripService : ITripService
         }
 
         return dto;
+    }
+
+    private static string BuildTripPhotoReviewResult(string action, DateTime tripDay, Vehicle? vehicle)
+    {
+        var day = tripDay.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture);
+        if (vehicle is null)
+        {
+            return $"{action} for {day}.";
+        }
+
+        return $"{action} for {day} - {vehicle.Brand} {vehicle.Model} ({vehicle.PlateNumber}).";
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)

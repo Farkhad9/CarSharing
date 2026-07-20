@@ -16,6 +16,12 @@ const validateVehiclePayload = (payload) => {
   }
 };
 
+const toVehiclePayload = (payload) => ({
+  ...payload,
+  connectorType: String(payload.connectorType).trim(),
+  status: apiStatusByValue[payload.status] || payload.status || apiStatusByValue[VEHICLE_STATUSES.AVAILABLE],
+});
+
 export const vehicleApi = {
   getVehicles: async () => normalizeVehicles(await apiRequest("/api/vehicles")),
   getVehicle: async (id) => normalizeVehicle(await apiRequest(`/api/vehicles/${id}`)),
@@ -23,14 +29,26 @@ export const vehicleApi = {
     validateVehiclePayload(payload);
     return normalizeVehicle(await apiRequest("/api/vehicles", {
       method: "POST",
-      body: JSON.stringify({ ...payload, connectorType: String(payload.connectorType).trim() }),
+      body: JSON.stringify(toVehiclePayload(payload)),
     }));
   },
   updateVehicle: async (id, payload) => {
     validateVehiclePayload(payload);
     return normalizeVehicle(await apiRequest(`/api/vehicles/${id}`, {
       method: "PUT",
-      body: JSON.stringify({ ...payload, connectorType: String(payload.connectorType).trim() }),
+      body: JSON.stringify(toVehiclePayload(payload)),
+    }));
+  },
+  uploadVehiclePhotos: async (id, photos = {}) => {
+    const formData = new FormData();
+    if (photos.mainImage) formData.append("MainImage", photos.mainImage);
+    if (photos.galleryImage1) formData.append("GalleryImage1", photos.galleryImage1);
+    if (photos.galleryImage2) formData.append("GalleryImage2", photos.galleryImage2);
+    if (photos.galleryImage3) formData.append("GalleryImage3", photos.galleryImage3);
+
+    return normalizeVehicle(await apiRequest(`/api/vehicles/${id}/photos`, {
+      method: "POST",
+      body: formData,
     }));
   },
   updateVehicleStatus: async (id, status) =>

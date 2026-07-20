@@ -48,6 +48,9 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
             .IsRequired()
             .HasMaxLength(20);
 
+        builder.HasIndex(user => user.DriverLicenseNumber)
+            .IsUnique();
+
         builder.Property(user => user.DriverLicenseDocumentUrl)
             .HasMaxLength(600);
 
