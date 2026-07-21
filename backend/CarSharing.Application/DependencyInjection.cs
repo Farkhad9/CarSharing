@@ -50,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminStatisticsService, AdminStatisticsService>();
         services.AddScoped<IAdminUserService, AdminUserService>();
         services.AddScoped<IParkingZoneService, ParkingZoneService>();
+        services.AddScoped<IPricingPolicyService, PricingPolicyService>();
         services.AddScoped<IEventPublisher, NoOpEventPublisher>();
 
         services.AddAutoMapper(_ => { }, typeof(UserMappingProfile).Assembly);

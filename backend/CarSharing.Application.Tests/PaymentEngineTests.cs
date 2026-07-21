@@ -16,25 +16,39 @@ public sealed class PaymentEngineTests
     [Fact]
     public async Task PayTrip_WithEnoughBalance_CompletesTripAndMakesVehicleAvailable()
     {
-        var fixture = CreateFixture(balance: 100, battery: 40);
+        var fixture = CreateFixture(balance: 100, battery: 60);
         var result = await fixture.Service.PayTripAsync(fixture.Trip.Id);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(TripStatus.Completed, fixture.Trip.Status);
         Assert.Equal(VehicleStatus.Available, fixture.Vehicle.Status);
+        Assert.Equal(50, fixture.Vehicle.BatteryPercent);
+        Assert.Equal(200, fixture.Vehicle.RangeKm);
         Assert.Equal(90m, fixture.User.Balance);
         Assert.Equal(PaymentTransactionStatus.Completed, fixture.Payments.Items.Single().Status);
         Assert.Single(fixture.Invoices.Items);
     }
 
     [Fact]
-    public async Task PayTrip_WithBatteryBelowForty_MovesVehicleToCharging()
+    public async Task PayTrip_WithBatteryAtOrBelowThirty_MovesVehicleToCharging()
     {
-        var fixture = CreateFixture(balance: 100, battery: 39);
+        var fixture = CreateFixture(balance: 100, battery: 40);
         var result = await fixture.Service.PayTripAsync(fixture.Trip.Id);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(VehicleStatus.Charging, fixture.Vehicle.Status);
+        Assert.Equal(30, fixture.Vehicle.BatteryPercent);
+    }
+
+    [Fact]
+    public async Task PayTrip_WithBatteryAboveThirty_MakesVehicleAvailable()
+    {
+        var fixture = CreateFixture(balance: 100, battery: 41);
+        var result = await fixture.Service.PayTripAsync(fixture.Trip.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(VehicleStatus.Available, fixture.Vehicle.Status);
+        Assert.Equal(31, fixture.Vehicle.BatteryPercent);
     }
 
     [Fact]
@@ -94,7 +108,14 @@ public sealed class PaymentEngineTests
         var vehicle = Vehicle.Create("Tesla", "Model 3", 2025, "99AA999", 1000, battery, 300,
             1m, "AZN", 5, "White", "CCS", null, "Baku", "Center", 40.4, 49.8);
         var start = DateTime.UtcNow.AddMinutes(-10);
-        var reservation = Reservation.Create(user.Id, vehicle.Id, start.AddMinutes(-5), DateTime.UtcNow.AddMinutes(10));
+        var reservation = Reservation.Create(
+            user.Id,
+            vehicle.Id,
+            start.AddMinutes(-5),
+            DateTime.UtcNow.AddMinutes(10),
+            "Fountain Square parking",
+            40.3716,
+            49.8372);
         var trip = Trip.StartFromReservation(reservation, vehicle, start);
         vehicle.ChangeStatus(VehicleStatus.InUse);
         trip.RequestCompletion(start.AddMinutes(10));
@@ -129,6 +150,7 @@ public sealed class PaymentEngineTests
     private sealed class TripRepo(Trip trip) : ITripRepository
     {
         public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(id == trip.Id ? trip : null);
+        public Task<IReadOnlyList<Trip>> GetOpenTripsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Trip>>([trip]);
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
         public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Trip>>([trip]);
         public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) => Task.FromResult<Trip?>(trip);
@@ -204,6 +226,7 @@ public sealed class PaymentEngineTests
                 transaction.Type == PaymentTransactionType.TopUp ? InvoiceType.BalanceTopUp : InvoiceType.TripPayment,
                 InvoiceStatus.Ready,
                 InvoiceDeliveryStatus.Pending,
+                transaction.PaymentMethod ?? "Payment",
                 transaction.Amount,
                 transaction.Currency,
                 "/invoices/test.pdf",

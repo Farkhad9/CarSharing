@@ -104,7 +104,7 @@ public class Vehicle : BaseEntity
         PlateNumber = plateNumber.Trim().ToUpperInvariant();
         MileageKm = mileageKm;
         BatteryPercent = batteryPercent;
-        RangeKm = rangeKm;
+        RangeKm = batteryPercent * 4;
         PricePerMinute = pricePerMinute;
         Currency = currency.Trim().ToUpperInvariant();
         Seats = seats;
@@ -153,6 +153,7 @@ public class Vehicle : BaseEntity
         }
 
         BatteryPercent = batteryPercent;
+        RangeKm = batteryPercent * 4;
     }
 
     public void MarkAvailableAfterCharging(int finalBatteryPercent)

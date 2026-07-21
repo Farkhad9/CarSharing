@@ -50,6 +50,7 @@ import { tripApi } from "../../api/tripApi";
 import { tripReviewsApi } from "../../api/tripReviewsApi";
 import { userApi } from "../../api/userApi";
 import { vehicleApi } from "../../api/vehicleApi";
+import { normalizeVehicle } from "../../api/vehicleMapper";
 import {
   DEFAULT_PICKUP_USER_LOCATION,
   formatPickupDistance,
@@ -145,6 +146,17 @@ const readPendingTripReview = () => {
   } catch {
     return null;
   }
+};
+
+const storePendingTripReview = (tripId, vehicleName, paymentMethod = "balance") => {
+  if (!tripId) return;
+
+  localStorage.setItem(PENDING_TRIP_REVIEW_STORAGE_KEY, JSON.stringify({
+    tripId,
+    vehicleName: vehicleName || "your EV",
+    paymentMethod,
+    createdAt: new Date().toISOString(),
+  }));
 };
 
 const panelMotion = {
@@ -328,15 +340,27 @@ const getReservationVehicle = (reservation, backendVehicles = []) => {
 
 const mapBackendRideState = ({ reservations, activeTrips, vehicles }) => {
   const mappedReservations = (Array.isArray(reservations) ? reservations : []).map((reservation) => {
-    const vehicle = vehicles.find((item) => item.id === reservation.vehicleId);
+    const snapshotVehicle = normalizeVehicle(reservation);
+    const vehicle = vehicles.find((item) => item.id === reservation.vehicleId) || snapshotVehicle;
     return {
       ...reservation,
       reservationId: reservation.id,
-      rate: Number(vehicle?.pricePerMinute || 0),
+      brand: vehicle?.brand,
+      model: vehicle?.model,
+      image: vehicle?.image,
+      galleryImages: vehicle?.galleryImages,
+      plateNumber: vehicle?.plateNumber,
+      location: vehicle?.location,
+      destinationLabel: reservation.destinationLabel || "",
+      destinationLatitude: Number(reservation.destinationLatitude),
+      destinationLongitude: Number(reservation.destinationLongitude),
+      rate: Number(vehicle?.pricePerMinute || reservation.pricePerMinute || 0),
     };
   });
 
   const mappedTrips = (Array.isArray(activeTrips) ? activeTrips : []).map((activeTrip) => {
+    const snapshotVehicle = normalizeVehicle(activeTrip);
+    const vehicle = vehicles.find((item) => item.id === activeTrip.vehicleId) || snapshotVehicle;
     const completion = activeTrip.latestCompletionRequest;
     const completionStatus = completion?.status;
     const isRejected =
@@ -347,11 +371,25 @@ const mapBackendRideState = ({ reservations, activeTrips, vehicles }) => {
       reservationId: activeTrip.reservationId || activeTrip.id,
       tripId: activeTrip.id,
       vehicleId: activeTrip.vehicleId,
+      brand: vehicle?.brand,
+      model: vehicle?.model,
+      image: vehicle?.image,
+      galleryImages: vehicle?.galleryImages,
+      plateNumber: vehicle?.plateNumber,
+      location: vehicle?.location || {
+        label: activeTrip.startLocationLabel || "Baku",
+        zone: "City",
+        lat: Number(activeTrip.startLatitude),
+        lng: Number(activeTrip.startLongitude),
+      },
       reservedAt: activeTrip.startedAt,
       expiresAt: activeTrip.startedAt,
       tripStartedAt: activeTrip.startedAt,
       billingStartedAt: activeTrip.startedAt,
       finishRequestedAt: activeTrip.endRequestedAt,
+      destinationLabel: activeTrip.destinationLabel || "",
+      destinationLatitude: Number(activeTrip.destinationLatitude),
+      destinationLongitude: Number(activeTrip.destinationLongitude),
       tripStatus:
         activeTrip.status === TRIP_STATUS.AwaitingPayment
           ? "awaiting_payment"
@@ -366,6 +404,9 @@ const mapBackendRideState = ({ reservations, activeTrips, vehicles }) => {
       rideCost: Number(activeTrip.totalPrice || 0),
       discountPercent: Number(activeTrip.discountPercent || 0),
       discountAmount: Number(activeTrip.discountAmount || 0),
+      startBatteryPercent: Number(activeTrip.startBatteryPercent ?? activeTrip.currentBatteryPercent ?? 0),
+      currentBatteryPercent: Number(activeTrip.currentBatteryPercent ?? activeTrip.startBatteryPercent ?? 0),
+      currentRangeKm: Number(activeTrip.currentRangeKm ?? 0),
       currency: activeTrip.currency || "AZN",
       latestCompletionRequest: activeTrip.latestCompletionRequest || null,
     };
@@ -549,6 +590,12 @@ const Dashboard = ({ onLogout }) => {
       const rideCost = isFinishingRide || isCompletionPending || isCompletionRejected || isAwaitingPayment
         ? storedFinalCost
         : liveRideCost;
+      const rideBatteryDrainPercent = isRideActive ? Math.ceil(rideElapsedSeconds / 60) : 0;
+      const batteryBasePercent = isRideActive && Number(reservation?.startBatteryPercent) > 0
+        ? Number(reservation.startBatteryPercent)
+        : Number(vehicle?.batteryPercent || reservation?.currentBatteryPercent || 0);
+      const liveBatteryPercent = Math.max(0, batteryBasePercent - rideBatteryDrainPercent);
+      const liveRangeKm = Math.max(0, liveBatteryPercent * 4);
       const resolvedReservationId = reservation.reservationId || reservation.id || reservation.vehicleId || reservation.tripId;
 
       return {
@@ -565,12 +612,16 @@ const Dashboard = ({ onLogout }) => {
         reservationProgress,
         rideElapsedSeconds,
         rideCost,
+        batteryPercent: liveBatteryPercent,
+        rangeKm: liveRangeKm,
       };
     });
   }, [backendVehicles, reservations, timerNow]);
   const activeVehicle = activeReservations[0] || null;
   const selectedMapVehicle = activeReservations.find((vehicle) => vehicle.reservationId === selectedMapReservationId)
     || activeVehicle;
+  const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
+  const profilePendingHold = Number(user.pendingHold ?? 0);
   const paymentVehicle = activeReservations.find((vehicle) => {
     const tripId = vehicle?.tripId || vehicle?.id;
     return vehicle.isAwaitingPayment && !hiddenPaymentTripIds.has(tripId);
@@ -579,15 +630,17 @@ const Dashboard = ({ onLogout }) => {
     ? activeTrips.find((trip) => trip.id === paymentVehicle.tripId)
     : null;
   const paymentRequest = paymentVehicle?.latestCompletionRequest || paymentTrip?.latestCompletionRequest || null;
+  const paymentBaseFare = toMoney(paymentRequest?.baseRideCost || paymentVehicle?.baseRideCost || paymentVehicle?.rideCost || 0);
+  const paymentDiscountAmount = toMoney(paymentRequest?.discountAmount || 0);
   const tripCardAmount = toMoney(paymentRequest?.finalRideCost || paymentVehicle?.finalRideCost || paymentVehicle?.rideCost || 0);
+  const paymentDynamicAdjustment = toMoney(Math.max(0, tripCardAmount + paymentDiscountAmount - paymentBaseFare));
+  const isTripBalanceInsufficient = Boolean(paymentVehicle && tripPaymentMethod === "balance" && profileBalance + 0.001 < tripCardAmount);
   const isTripCardAmountTooSmall = Boolean(paymentVehicle && tripCardAmount > 0 && tripCardAmount < 1.1);
   const activeSupportTicket = useMemo(
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
   );
   const displayedSupportTicket = supportDraftMeta ? null : activeSupportTicket;
-  const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
-  const profilePendingHold = Number(user.pendingHold ?? 0);
   const accountVerificationDisplay = useMemo(() => getAccountVerificationDisplay(user), [user]);
   const hasPassword = user.hasPassword !== false;
   const receiptByTransactionId = useMemo(() => {
@@ -838,7 +891,7 @@ const Dashboard = ({ onLogout }) => {
       if (stripeResult === "success") {
         const pendingReview = readPendingTripReview();
         setTripNotice("Card payment was accepted. Balance will update after confirmation.");
-        if (pendingReview) {
+        if (pendingReview?.paymentMethod === "card") {
           setReviewTrip({
             tripId: pendingReview.tripId,
             vehicleName: pendingReview.vehicleName || "your EV",
@@ -847,7 +900,7 @@ const Dashboard = ({ onLogout }) => {
           setReviewRating(5);
           setReviewComment("");
           setReviewError("");
-        } else {
+        } else if (!pendingReview) {
           setPaymentSuccessDialog({ source: "card" });
         }
       }
@@ -1243,6 +1296,7 @@ const Dashboard = ({ onLogout }) => {
     const missingAmount = Math.max(5, Math.ceil(Math.max(0, amount - profileBalance) * 100) / 100);
 
     localStorage.setItem(AUTO_PAY_TRIP_STORAGE_KEY, tripId);
+    storePendingTripReview(tripId, `${targetVehicle.brand} ${targetVehicle.model}`, "balance");
     setHiddenPaymentTripIds((items) => new Set([...items, tripId]));
     setTopUpAmount(missingAmount.toFixed(2));
     setPaymentError("");
@@ -1255,6 +1309,13 @@ const Dashboard = ({ onLogout }) => {
     if (!tripId) return;
     const targetRequest = targetVehicle?.latestCompletionRequest || paymentRequest;
     const amount = toMoney(targetRequest?.finalRideCost || targetVehicle.finalRideCost || targetVehicle.rideCost || 0);
+    const vehicleName = `${targetVehicle.brand || ""} ${targetVehicle.model || ""}`.trim() || "your EV";
+
+    if (profileBalance + 0.001 < amount && !options.skipBalanceGuard) {
+      setPaymentError("Insufficient balance. Top up your profile balance to complete this trip.");
+      handleOpenTopUpForTrip(targetVehicle);
+      return;
+    }
 
     if (!options.skipConfirm) {
       const confirmed = await confirm({
@@ -1280,12 +1341,13 @@ const Dashboard = ({ onLogout }) => {
       await loadPayments();
       setTripNotice(`Payment of ${amount.toFixed(2)} AZN was successful. The ride is completed.`);
       localStorage.removeItem(AUTO_PAY_TRIP_STORAGE_KEY);
+      storePendingTripReview(tripId, vehicleName, "balance");
       setHiddenPaymentTripIds((items) => {
         const next = new Set(items);
         next.delete(tripId);
         return next;
       });
-      setReviewTrip({ tripId, vehicleName: `${targetVehicle.brand} ${targetVehicle.model}` });
+      setReviewTrip({ tripId, vehicleName, paymentMethod: "balance" });
       setReviewRating(5);
       setReviewComment("");
       setReviewError("");
@@ -1339,12 +1401,11 @@ const Dashboard = ({ onLogout }) => {
     setPaymentError("");
 
     try {
-      localStorage.setItem(PENDING_TRIP_REVIEW_STORAGE_KEY, JSON.stringify({
-        tripId,
-        vehicleName: `${targetVehicle.brand} ${targetVehicle.model}`,
-        createdAt: new Date().toISOString(),
-      }));
+      storePendingTripReview(tripId, `${targetVehicle.brand} ${targetVehicle.model}`, "card");
       const checkout = await paymentApi.createTripCheckout(tripId);
+      if (!checkout?.checkoutUrl) {
+        throw new Error("Card checkout could not be opened. Please try again.");
+      }
       window.location.assign(checkout.checkoutUrl);
     } catch (error) {
       localStorage.removeItem(PENDING_TRIP_REVIEW_STORAGE_KEY);
@@ -1609,9 +1670,10 @@ const Dashboard = ({ onLogout }) => {
         const displayDistanceMeters = Number.isFinite(routeState.distanceMeters)
           ? routeState.distanceMeters
           : fallbackDistanceMeters;
+        const hasRouteLine = !vehicle.isRideActive && Array.isArray(routeState.positions) && routeState.positions.length > 1;
         const routePositions = vehicle.isRideActive
           ? [vehiclePosition]
-          : routeState.positions?.length > 1 || hasResolvedUserLocation ? routeState.positions?.length > 1 ? routeState.positions : [userLocation, vehiclePosition] : [vehiclePosition];
+          : hasRouteLine ? routeState.positions : [vehiclePosition];
         const routeMinutes = getWalkMinutes(displayDistanceMeters);
         const routeDistanceLabel = vehicle.isRideActive || !hasResolvedUserLocation ? "" : formatPickupDistance(displayDistanceMeters);
         const mapKey = `${vehicle.reservationId}-${vehicle.tripId || "reserved"}-${vehicle.vehicleId || vehicle.id || "vehicle"}`;
@@ -1638,10 +1700,12 @@ const Dashboard = ({ onLogout }) => {
           />
           {!vehicle.isRideActive && hasResolvedUserLocation && (
             <>
-              <Polyline
-                positions={routePositions}
-                pathOptions={{ color: "#ef4444", weight: 4, opacity: 0.85 }}
-              />
+              {hasRouteLine && (
+                <Polyline
+                  positions={routePositions}
+                  pathOptions={{ color: "#ef4444", weight: 4, opacity: 0.85 }}
+                />
+              )}
               <Marker position={userLocation} icon={userIcon}>
                 <Popup>You are here</Popup>
               </Marker>
@@ -1747,6 +1811,14 @@ const Dashboard = ({ onLogout }) => {
                           <p className="text-[11px] font-black uppercase tracking-wide text-white/45">Live cost</p>
                           <p className="mt-2 text-sm font-black">{formatMoney(vehicle.rideCost)}</p>
                         </div>
+                        <div className="rounded-2xl bg-white/10 p-4">
+                          <p className="text-[11px] font-black uppercase tracking-wide text-white/45">Battery</p>
+                          <p className="mt-2 text-sm font-black">{vehicle.batteryPercent}%</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/10 p-4">
+                          <p className="text-[11px] font-black uppercase tracking-wide text-white/45">Range</p>
+                          <p className="mt-2 text-sm font-black">{vehicle.rangeKm} km</p>
+                        </div>
                       </div>
                     ) : (
                       <>
@@ -1826,6 +1898,11 @@ const Dashboard = ({ onLogout }) => {
                       <FiMapPin className="text-red-500" />
                       <p className="mt-3 text-xs font-bold text-zinc-400">Pickup</p>
                       <p className="text-sm font-black text-zinc-950">{vehicle.location?.label || "Baku"}</p>
+                    </div>
+                    <div className="rounded-2xl bg-zinc-50 p-4">
+                      <FiNavigation className="text-red-500" />
+                      <p className="mt-3 text-xs font-bold text-zinc-400">Destination</p>
+                      <p className="text-sm font-black text-zinc-950">{vehicle.destinationLabel || "Selected parking zone"}</p>
                     </div>
                     <div className="rounded-2xl bg-zinc-50 p-4">
                       <FiDollarSign className="text-red-500" />
@@ -2745,15 +2822,21 @@ const Dashboard = ({ onLogout }) => {
               </div>
               <div className="space-y-3 border-t border-white/10 pt-4 text-sm font-bold">
                 <div className="flex justify-between text-white/60">
-                  <span>Trip price</span>
-                  <span>{formatMoney(paymentRequest?.baseRideCost || paymentVehicle.baseRideCost || paymentVehicle.rideCost)}</span>
+                  <span>Base fare</span>
+                  <span>{formatMoney(paymentBaseFare)}</span>
                 </div>
+                {paymentDynamicAdjustment > 0 && (
+                  <div className="flex justify-between text-white/60">
+                    <span>Dynamic pricing</span>
+                    <span>+{formatMoney(paymentDynamicAdjustment)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-emerald-300">
                   <span>
                     Promo discount
                     {paymentRequest?.discountPercent ? ` (${paymentRequest.discountPercent}%)` : ""}
                   </span>
-                  <span>-{formatMoney(paymentRequest?.discountAmount || 0)}</span>
+                  <span>-{formatMoney(paymentDiscountAmount)}</span>
                 </div>
                 {(paymentRequest?.holdAmount || paymentVehicle.holdAmount) > 0 && (
                   <div className="flex justify-between text-white/60">
@@ -2893,6 +2976,8 @@ const Dashboard = ({ onLogout }) => {
                 onClick={() =>
                   tripPaymentMethod === "card"
                     ? handlePayTripByCard(paymentVehicle)
+                    : isTripBalanceInsufficient
+                    ? handleOpenTopUpForTrip(paymentVehicle)
                     : handlePayTrip(paymentVehicle)
                 }
                 disabled={isPayingTrip || (tripPaymentMethod === "card" && isTripCardAmountTooSmall)}
@@ -2906,6 +2991,8 @@ const Dashboard = ({ onLogout }) => {
                   ? "Paying..."
                   : tripPaymentMethod === "card"
                     ? "Pay with card"
+                    : isTripBalanceInsufficient
+                    ? "Top up profile balance"
                     : Number(paymentVehicle.debtAmount || paymentRequest?.debtAmount || 0) > 0
                     ? "Pay outstanding balance"
                     : "Pay from profile balance"}

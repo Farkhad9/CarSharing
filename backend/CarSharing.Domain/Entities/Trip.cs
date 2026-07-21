@@ -21,6 +21,9 @@ public class Trip : BaseEntity
     public string? EndLocationLabel { get; private set; }
     public double? EndLatitude { get; private set; }
     public double? EndLongitude { get; private set; }
+    public string DestinationLabel { get; private set; } = null!;
+    public double DestinationLatitude { get; private set; }
+    public double DestinationLongitude { get; private set; }
     public double DistanceKm { get; private set; }
     public int DurationMinutes { get; private set; }
     public decimal BasePricePerMinute { get; private set; }
@@ -34,6 +37,7 @@ public class Trip : BaseEntity
     public decimal TotalPrice { get; private set; }
     public string Currency { get; private set; } = "AZN";
     public string? PromoCode { get; private set; }
+    public int StartBatteryPercent { get; private set; }
 
     public static Trip StartFromReservation(
         Reservation reservation,
@@ -56,6 +60,10 @@ public class Trip : BaseEntity
             StartLocationLabel = vehicle.LocationLabel,
             StartLatitude = vehicle.Latitude,
             StartLongitude = vehicle.Longitude,
+            DestinationLabel = reservation.DestinationLabel,
+            DestinationLatitude = reservation.DestinationLatitude,
+            DestinationLongitude = reservation.DestinationLongitude,
+            StartBatteryPercent = vehicle.BatteryPercent,
             BasePricePerMinute = basePricePerMinute,
             DemandMultiplier = demandMultiplier,
             ZoneMultiplier = zoneMultiplier,
@@ -125,6 +133,13 @@ public class Trip : BaseEntity
 
         Status = TripStatus.Completed;
         EndedAt ??= EndRequestedAt ?? DateTime.UtcNow;
+    }
+
+    public int CalculateBatteryPercentAfterRide(int startBatteryPercent, DateTime utcNow)
+    {
+        var end = EndRequestedAt ?? EndedAt ?? utcNow;
+        var elapsedMinutes = Math.Max(0, (int)Math.Ceiling((end - StartedAt).TotalMinutes));
+        return Math.Max(0, startBatteryPercent - elapsedMinutes);
     }
 
     private static decimal RoundMoney(decimal value)

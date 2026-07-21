@@ -36,10 +36,11 @@ import { chargingApi } from "../../api/chargingApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { authApi } from "../../api/authApi";
 import { adminStatisticsApi } from "../../api/adminStatisticsApi";
+import { adminPricingApi, PRICING_MODES, normalizePricingMode } from "../../api/adminPricingApi";
 import { adminUsersApi, USER_BLOCK_DURATIONS, USER_ROLES, USER_VERIFICATION_STATUSES, normalizeRole } from "../../api/adminUsersApi";
 import { parkingZoneApi } from "../../api/parkingZoneApi";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
-import { adminStaffTasksApi, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES } from "../../api/staffTasksApi";
+import { adminStaffTasksApi, normalizeStaffTask, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES, STAFF_TASK_TYPES } from "../../api/staffTasksApi";
 import {
   SUPPORT_MESSAGE_SENDER_TYPES,
   SUPPORT_REALTIME_EVENTS,
@@ -76,6 +77,8 @@ const STAFF_TASK_STATUS_STYLES = {
   [STAFF_TASK_STATUSES.InProgress]: "border-blue-400/30 bg-blue-500/10 text-blue-200",
   [STAFF_TASK_STATUSES.Done]: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
 };
+
+const isTaskManagerTask = (task) => Number(task?.type ?? STAFF_TASK_TYPES.General) !== STAFF_TASK_TYPES.Charging;
 
 const SUPPORT_STATUS_LABELS = {
   [SUPPORT_TICKET_STATUSES.Open]: "Active",
@@ -150,10 +153,13 @@ const parseBakuDateTimeLocalMs = (value) => {
 const toBakuDeadlineApiValue = (value) => (value ? `${value}:00` : null);
 
 const upsertStaffTask = (items, nextTask) => {
-  const exists = items.some((task) => task.id === nextTask.id);
+  const normalizedTask = normalizeStaffTask(nextTask);
+  if (!normalizedTask) return items;
+
+  const exists = items.some((task) => task.id === normalizedTask.id);
   return exists
-    ? items.map((task) => (task.id === nextTask.id ? nextTask : task))
-    : [nextTask, ...items];
+    ? items.map((task) => (task.id === normalizedTask.id ? normalizedTask : task))
+    : [normalizedTask, ...items];
 };
 
 const upsertAdminUser = (items, nextUser) => {
@@ -228,7 +234,36 @@ const mapBackendStaffKpiRow = (row) => ({
 const LOW_CHARGE_RECOMMENDATION_PERCENT = 30;
 const MIN_CHARGING_COMPLETION_PERCENT = 80;
 const CHARGING_PERCENT_PER_MINUTE = 10;
-const COMPLETED_TASK_VISIBLE_MS = 24 * 60 * 60 * 1000;
+const RANGE_KM_PER_BATTERY_PERCENT = 4;
+const PRICING_MODE_OPTIONS = [
+  {
+    mode: PRICING_MODES.Low,
+    key: "Low",
+    label: "Low",
+    short: "-0.10 AZN/min",
+    adjustment: -0.10,
+    detail: "Lower every vehicle rate by 0.10 AZN per minute. Trips keep the rate locked at start.",
+    className: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
+  },
+  {
+    mode: PRICING_MODES.Standard,
+    key: "Standard",
+    label: "Standard",
+    short: "+0.00 AZN/min",
+    adjustment: 0,
+    detail: "Use regular vehicle rates. Trips keep the rate locked at start.",
+    className: "border-slate-400/30 bg-slate-500/10 text-slate-100",
+  },
+  {
+    mode: PRICING_MODES.High,
+    key: "High",
+    label: "High",
+    short: "+0.20 AZN/min",
+    adjustment: 0.20,
+    detail: "Raise every vehicle rate by 0.20 AZN per minute. Trips keep the rate locked at start.",
+    className: "border-red-400/35 bg-red-500/15 text-red-100",
+  },
+];
 const CHARGING_PORT_OPTIONS = [1, 2, 4, 6, 8];
 const LEGACY_DEVELOPMENT_ADMIN_EMAIL = "admin@carsharing.local";
 const MAINTENANCE_VEHICLE_STATUS = VEHICLE_STATUSES.COMPLETED;
@@ -548,42 +583,6 @@ const getInitialParkingZones = () => {
   }
 };
 
-const pricingRulesSeed = [
-  {
-    id: "rule-friday-center",
-    name: "Friday center rush hour",
-    icon: FiClock,
-    priceLabel: "x1.25",
-    zone: "Central",
-    condition: "Friday 18:00-21:00, fewer than 3 free cars",
-    description: "Raises the city center price during the busiest evening of the week when demand is high and available cars are limited.",
-    multiplier: 1.25,
-    enabled: true,
-  },
-  {
-    id: "rule-low-supply",
-    name: "Low supply near Boulevard",
-    icon: FiTrendingUp,
-    priceLabel: "x1.15",
-    zone: "Seaside",
-    condition: "Available fleet below 20%",
-    description: "Turns on near Boulevard when nearby vehicle supply is low and demand needs balancing.",
-    multiplier: 1.15,
-    enabled: true,
-  },
-  {
-    id: "rule-night",
-    name: "Night comfort",
-    icon: FiNavigation,
-    priceLabel: "x0.92",
-    zone: "All zones",
-    condition: "00:00-06:00",
-    description: "Reduces the night price for quieter rides when demand is lower and cars are idle.",
-    multiplier: 0.92,
-    enabled: false,
-  },
-];
-
 const penaltyReasons = [
   { id: "dirty", label: "Dirty interior", amount: 25 },
   { id: "bad-parking", label: "Improper parking", amount: 40 },
@@ -780,6 +779,7 @@ const sidebarItems = [
   { id: "control", label: "Control Room", icon: FiCommand, filter: "all" },
   { id: "users", label: "Users & KYC", icon: FiUserCheck, filter: "all" },
   { id: "billing", label: "Receipts", icon: FiDollarSign, filter: "all" },
+  { id: "pricing", label: "Pricing", icon: FiTrendingUp, filter: "all" },
   { id: "kpi", label: "Staff Work", icon: FiUsers, filter: "all" },
   { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
   { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "all" },
@@ -947,12 +947,28 @@ const isBakuMapPoint = (point) =>
   Number(point.lng) <= BAKU_MAP_BOUNDS[1][1];
 
 const getChargingSessionProgress = (session, task) => {
-  const startBattery = Number(session.startBatteryPercent || session.currentBatteryPercent || 0);
-  const targetBattery = Number(session.targetBatteryPercent || 100);
-  if (Number(task?.status) !== STAFF_TASK_STATUSES.InProgress) {
+  const startBattery = Number(session.startBatteryPercent ?? session.currentBatteryPercent ?? 0);
+  const targetBattery = Number(session.targetBatteryPercent ?? 100);
+  const apiCurrentBattery = Number(session.currentBatteryPercent ?? 0);
+  if (Number(task?.status) === STAFF_TASK_STATUSES.Done) {
+    const currentBatteryPercent = apiCurrentBattery >= MIN_CHARGING_COMPLETION_PERCENT
+      ? apiCurrentBattery
+      : targetBattery;
+    const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
     return {
-      currentBatteryPercent: startBattery,
-      minutesRemaining: Math.max(0, Math.ceil((targetBattery - startBattery) / CHARGING_PERCENT_PER_MINUTE)),
+      currentBatteryPercent,
+      currentRangeKm,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)),
+    };
+  }
+
+  if (Number(task?.status) !== STAFF_TASK_STATUSES.InProgress) {
+    const currentBatteryPercent = Math.max(apiCurrentBattery, startBattery);
+    const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
+    return {
+      currentBatteryPercent,
+      currentRangeKm,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)),
     };
   }
 
@@ -962,14 +978,15 @@ const getChargingSessionProgress = (session, task) => {
     : 0;
   const currentBatteryPercent = Math.min(
     targetBattery,
-    Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE)
+    Math.max(apiCurrentBattery, Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE))
   );
   const minutesRemaining = Math.max(
     0,
     Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)
   );
+  const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
 
-  return { currentBatteryPercent, minutesRemaining };
+  return { currentBatteryPercent, currentRangeKm, minutesRemaining };
 };
 
 const makeLiveVehicle = (vehicle, index) => ({
@@ -982,7 +999,11 @@ const makeLiveVehicle = (vehicle, index) => ({
 
 const createVehicleIcon = (vehicle, isSelected) => {
   const meta = STATUS_META[vehicle.liveStatus] || STATUS_META.available;
-  const timer = vehicle.liveStatus === "in_use" ? formatDuration(vehicle.activeSeconds) : meta.short;
+  const timer = vehicle.liveStatus === "in_use"
+    ? formatDuration(vehicle.activeSeconds)
+    : vehicle.chargingProgress
+      ? `${vehicle.chargingProgress.currentBatteryPercent}%`
+      : meta.short;
   const image = vehicle.image || "";
 
   return L.divIcon({
@@ -1382,8 +1403,10 @@ const AdminControlRoom = () => {
   const [isDrawingZone, setIsDrawingZone] = useState(false);
   const [draftZoneType, setDraftZoneType] = useState("allowed");
   const [draftZonePoints, setDraftZonePoints] = useState([]);
-  const [pricingRules, setPricingRules] = useState(pricingRulesSeed);
-  const [selectedPricingRuleId, setSelectedPricingRuleId] = useState(null);
+  const [pricingPolicy, setPricingPolicy] = useState(null);
+  const [pricingPolicyError, setPricingPolicyError] = useState("");
+  const [isLoadingPricingPolicy, setIsLoadingPricingPolicy] = useState(false);
+  const [isUpdatingPricingMode, setIsUpdatingPricingMode] = useState(false);
   const [penaltySearchQuery, setPenaltySearchQuery] = useState("");
   const [penaltyTargetId, setPenaltyTargetId] = useState(null);
   const [penaltyReasonId, setPenaltyReasonId] = useState(penaltyReasons[0].id);
@@ -1538,15 +1561,18 @@ const AdminControlRoom = () => {
     return counts;
   }, [staffTasks]);
   const visibleStaffTasks = useMemo(() => {
-    const cutoffMs = Date.now() - COMPLETED_TASK_VISIBLE_MS;
-
-    return staffTasks.filter((task) => {
-      if (Number(task.status) !== STAFF_TASK_STATUSES.Done) return true;
-
-      const completedAtMs = parseApiDateMs(task.updatedAt || task.completedAt || task.createdAt);
-      return Number.isFinite(completedAtMs) && completedAtMs >= cutoffMs;
-    });
+    return staffTasks.filter((task) =>
+      isTaskManagerTask(task) &&
+      Number(task.status) !== STAFF_TASK_STATUSES.Done
+    );
   }, [staffTasks]);
+  const completedStaffTaskCount = useMemo(
+    () => staffTasks.filter((task) =>
+      isTaskManagerTask(task) &&
+      Number(task.status) === STAFF_TASK_STATUSES.Done
+    ).length,
+    [staffTasks]
+  );
   const activeChargingVehicleIds = useMemo(
     () => new Set(activeChargingSessions.map((session) => session.vehicleId)),
     [activeChargingSessions]
@@ -1639,6 +1665,21 @@ const AdminControlRoom = () => {
       );
     } finally {
       setIsLoadingAdminStatistics(false);
+    }
+  }, []);
+
+  const loadPricingPolicy = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingPricingPolicy(true);
+    setPricingPolicyError("");
+
+    try {
+      setPricingPolicy(await adminPricingApi.getCurrent());
+    } catch (error) {
+      setPricingPolicy(null);
+      setPricingPolicyError(error.message || "Pricing policy is unavailable.");
+    } finally {
+      if (!silent) setIsLoadingPricingPolicy(false);
     }
   }, []);
 
@@ -1794,7 +1835,7 @@ const AdminControlRoom = () => {
   useEffect(() => {
     if (!adminSession) return undefined;
 
-    const progressTimer = window.setInterval(() => setChargingProgressTick(Date.now()), 30000);
+    const progressTimer = window.setInterval(() => setChargingProgressTick(Date.now()), 5000);
     return () => window.clearInterval(progressTimer);
   }, [adminSession]);
 
@@ -1809,6 +1850,7 @@ const AdminControlRoom = () => {
     const initialChargingTimer = window.setTimeout(loadChargingStations, 0);
     const initialChargingSessionsTimer = window.setTimeout(loadChargingSessions, 0);
     const initialParkingZonesTimer = window.setTimeout(loadParkingZones, 0);
+    const initialPricingTimer = window.setTimeout(loadPricingPolicy, 0);
     const initialBillingTimer = window.setTimeout(loadBillingInvoices, 0);
     const initialSupportTimer = window.setTimeout(loadSupportTickets, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
@@ -1838,6 +1880,7 @@ const AdminControlRoom = () => {
       window.clearTimeout(initialChargingTimer);
       window.clearTimeout(initialChargingSessionsTimer);
       window.clearTimeout(initialParkingZonesTimer);
+      window.clearTimeout(initialPricingTimer);
       window.clearTimeout(initialBillingTimer);
       window.clearTimeout(initialSupportTimer);
       window.clearInterval(statisticsTimer);
@@ -1846,7 +1889,7 @@ const AdminControlRoom = () => {
       window.clearInterval(vehiclesTimer);
       window.clearInterval(chargingSessionsTimer);
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadStaffKpi, loadBackendVehicles, loadChargingStations, loadChargingSessions, loadParkingZones]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadStaffTasks, loadStaffKpi, loadBackendVehicles, loadChargingStations, loadChargingSessions, loadParkingZones, loadPricingPolicy]);
 
   useEffect(() => {
     if (activeSection !== "superadmin" || !isSuperAdmin) return undefined;
@@ -1900,6 +1943,9 @@ const AdminControlRoom = () => {
         loadStaffKpi({ silent: true });
       } else if (message?.scope === "parkingZones") {
         loadParkingZones({ silent: true });
+      } else if (message?.scope === "pricing") {
+        loadPricingPolicy({ silent: true });
+        loadBackendVehicles({ silent: true });
       } else {
         refreshReceipts();
         loadAdminStatistics();
@@ -1925,7 +1971,7 @@ const AdminControlRoom = () => {
       connection.off(REALTIME_EVENTS.AdminDataChanged, handleAdminDataChange);
       stopConnection(connection).catch(() => {});
     };
-  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadParkingZones, loadStaffTasks, loadStaffKpi]);
+  }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadParkingZones, loadPricingPolicy, loadStaffTasks, loadStaffKpi]);
 
   useEffect(() => {
     if (!adminSession) return undefined;
@@ -1977,10 +2023,43 @@ const AdminControlRoom = () => {
     setStatusFilter("all");
   };
 
+  const chargingProgressByVehicleId = useMemo(() => {
+    void chargingProgressTick;
+
+    const tasksById = new Map(staffTasks.map((task) => [task.id, task]));
+    const progressByVehicleId = new Map();
+
+    activeChargingSessions.forEach((session) => {
+      progressByVehicleId.set(
+        session.vehicleId,
+        getChargingSessionProgress(session, tasksById.get(session.staffTaskId))
+      );
+    });
+
+    return progressByVehicleId;
+  }, [activeChargingSessions, chargingProgressTick, staffTasks]);
+
+  const liveVehiclesWithChargingProgress = useMemo(
+    () =>
+      liveVehicles.map((vehicle) => {
+        const progress = chargingProgressByVehicleId.get(vehicle.id);
+        if (!progress) return vehicle;
+
+        return {
+          ...vehicle,
+          batteryPercent: progress.currentBatteryPercent,
+          rangeKm: progress.currentRangeKm,
+          chargingProgress: progress,
+          liveStatus: "low_charge",
+        };
+      }),
+    [chargingProgressByVehicleId, liveVehicles]
+  );
+
   const filteredVehicles = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    return liveVehicles.filter((vehicle) => {
+    return liveVehiclesWithChargingProgress.filter((vehicle) => {
       const matchesStatus = statusFilter === "all" || vehicle.liveStatus === statusFilter;
       const searchable = [
         vehicle.brand,
@@ -1997,7 +2076,7 @@ const AdminControlRoom = () => {
 
       return matchesStatus && (!query || searchable.includes(query));
     });
-  }, [liveVehicles, searchQuery, statusFilter]);
+  }, [liveVehiclesWithChargingProgress, searchQuery, statusFilter]);
 
   const searchResults = useMemo(() => filteredVehicles.slice(0, 6), [filteredVehicles]);
 
@@ -2009,7 +2088,7 @@ const AdminControlRoom = () => {
   const taskMapVehicles = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    return liveVehicles.filter((vehicle) => {
+    return liveVehiclesWithChargingProgress.filter((vehicle) => {
       if (!taskVehicleIds.has(vehicle.id)) return false;
       if (!query) return true;
 
@@ -2026,15 +2105,15 @@ const AdminControlRoom = () => {
 
       return searchable.includes(query);
     });
-  }, [liveVehicles, searchQuery, taskVehicleIds]);
+  }, [liveVehiclesWithChargingProgress, searchQuery, taskVehicleIds]);
 
   const mapVehicles = activeSection === "tasks" ? taskMapVehicles : filteredVehicles;
 
   const selectedVehicle = useMemo(
     () => mapVehicles.find((vehicle) => vehicle.id === selectedVehicleId)
-      || liveVehicles.find((vehicle) => vehicle.id === selectedVehicleId)
+      || liveVehiclesWithChargingProgress.find((vehicle) => vehicle.id === selectedVehicleId)
       || null,
-    [liveVehicles, mapVehicles, selectedVehicleId]
+    [liveVehiclesWithChargingProgress, mapVehicles, selectedVehicleId]
   );
 
   const selectedVehicleNotification = useMemo(
@@ -2160,7 +2239,7 @@ const AdminControlRoom = () => {
   }, [userTableRows, userTableSearchQuery, userTableSort]);
 
   const fleetStats = useMemo(() => {
-    const statusCounts = liveVehicles.reduce(
+    const statusCounts = liveVehiclesWithChargingProgress.reduce(
       (acc, vehicle) => {
         acc[vehicle.liveStatus] = (acc[vehicle.liveStatus] || 0) + 1;
         return acc;
@@ -2168,13 +2247,13 @@ const AdminControlRoom = () => {
       { available: 0, in_use: 0, low_charge: 0, service: 0, reserved: 0 }
     );
     const averageBattery = Math.round(
-      liveVehicles.reduce((sum, vehicle) => sum + vehicle.batteryPercent, 0) / Math.max(liveVehicles.length, 1)
+      liveVehiclesWithChargingProgress.reduce((sum, vehicle) => sum + vehicle.batteryPercent, 0) / Math.max(liveVehiclesWithChargingProgress.length, 1)
     );
 
     if (adminStatistics?.vehicles) {
       const vehiclesSummary = adminStatistics.vehicles;
       const activeTrips = statusCounts.in_use || adminStatistics.rides?.active || vehiclesSummary.inUse || 0;
-      const total = vehiclesSummary.total || liveVehicles.length || 0;
+      const total = vehiclesSummary.total || liveVehiclesWithChargingProgress.length || 0;
       const utilization = total === 0
         ? 0
         : Math.round(((activeTrips + (vehiclesSummary.reserved || 0)) / total) * 100);
@@ -2195,10 +2274,10 @@ const AdminControlRoom = () => {
     }
 
     const activeTrips = statusCounts.in_use;
-    const utilization = Math.round((activeTrips / Math.max(liveVehicles.length, 1)) * 100);
+    const utilization = Math.round((activeTrips / Math.max(liveVehiclesWithChargingProgress.length, 1)) * 100);
 
     return { ...statusCounts, activeTrips, utilization, averageBattery };
-  }, [adminStatistics, liveVehicles]);
+  }, [adminStatistics, liveVehiclesWithChargingProgress]);
 
   const receiptSummary = useMemo(() => {
     const orderedReceipts = [...billingInvoices].sort(
@@ -2270,7 +2349,7 @@ const AdminControlRoom = () => {
 
   const focusVehicle = (vehicleId) => {
     const vehicle = mapVehicles.find((item) => item.id === vehicleId)
-      || liveVehicles.find((item) => item.id === vehicleId);
+      || liveVehiclesWithChargingProgress.find((item) => item.id === vehicleId);
 
     setSelectedVehicleId(vehicleId);
     if (vehicle?.location) {
@@ -2327,7 +2406,7 @@ const AdminControlRoom = () => {
 
   const visibleSidebarItems = sidebarItems.filter((item) => isSuperAdmin || !item.superOnly);
 
-  const getVehicle = (vehicleId) => liveVehicles.find((vehicle) => vehicle.id === vehicleId) || null;
+  const getVehicle = (vehicleId) => liveVehiclesWithChargingProgress.find((vehicle) => vehicle.id === vehicleId) || null;
   const activeTicket = tickets.find((ticket) => ticket.id === activeTicketId) || tickets[0];
   const showAdminNotice = (message, section = activeSection, tone = "success") => {
     setAdminNotice({ section, message, tone });
@@ -2338,6 +2417,23 @@ const AdminControlRoom = () => {
     }
 
     return error?.message || fallback;
+  };
+  const updatePricingMode = async (mode) => {
+    setIsUpdatingPricingMode(true);
+    setPricingPolicyError("");
+
+    try {
+      const nextPolicy = await adminPricingApi.updateMode(mode);
+      setPricingPolicy(nextPolicy);
+      showAdminNotice(`Pricing mode updated: ${normalizePricingMode(nextPolicy?.mode || mode)}.`, "pricing");
+      await loadBackendVehicles({ silent: true });
+    } catch (error) {
+      const message = getApiErrorMessage(error, "Pricing mode could not be updated.");
+      setPricingPolicyError(message);
+      showAdminNotice(message, "pricing", "error");
+    } finally {
+      setIsUpdatingPricingMode(false);
+    }
   };
   const updateVehicleDraft = (field, value) => {
     setVehicleDraft((draft) => ({ ...draft, [field]: value }));
@@ -2489,33 +2585,14 @@ const AdminControlRoom = () => {
     showAdminNotice(notice.title || "Notification opened", "control");
   };
 
-  const saveDraftZone = () => {
-    if (draftZonePoints.length < 3) {
-      showAdminNotice("Для сохранения зоны включи Draw и поставь минимум 3 точки на карте");
-      return;
-    }
-
-    const nextZone = {
-      id: `zone-${managedZones.length + 1}`,
-      name: `${getParkingZoneMeta(draftZoneType).label} custom zone`,
-      type: getParkingZoneMeta(draftZoneType).id,
-      positions: draftZonePoints,
-    };
-
-    setManagedZones((items) => [...items, nextZone]);
-    setDraftZonePoints([]);
-    setIsDrawingZone(false);
-    showAdminNotice(`Зона сохранена: ${nextZone.name}`);
-  };
-
   const saveParkingZoneDraft = async () => {
     if (!isSuperAdmin) {
-      showAdminNotice("SuperAdmin access is required to manage parking zones.", "control", "error");
+      showAdminNotice("SuperAdmin access is required to manage parking zones.", activeSection, "error");
       return;
     }
 
     if (draftZonePoints.length < 3) {
-      showAdminNotice("Add at least 3 points on the map to save a parking zone.", "control", "error");
+      showAdminNotice("Add at least 3 points on the map to save a parking zone.", activeSection, "error");
       return;
     }
 
@@ -2532,9 +2609,9 @@ const AdminControlRoom = () => {
       setDraftZonePoints([]);
       setIsDrawingZone(false);
       setParkingZonesError("");
-      showAdminNotice(`Parking zone saved: ${savedZone.name}`, "control");
+      showAdminNotice(`Parking zone saved: ${savedZone.name}`, activeSection);
     } catch (error) {
-      showAdminNotice(getApiErrorMessage(error, "Parking zone could not be saved."), "control", "error");
+      showAdminNotice(getApiErrorMessage(error, "Parking zone could not be saved."), activeSection, "error");
     }
   };
 
@@ -2769,6 +2846,7 @@ const AdminControlRoom = () => {
         priority: Number(staffTaskDraft.priority),
         dueAt: dueAtValue,
         vehicleId: staffTaskDraft.vehicleId,
+        type: STAFF_TASK_TYPES.General,
       });
       setStaffTasks((items) => upsertStaffTask(items, createdTask));
       setStaffTaskDraft({
@@ -2859,9 +2937,6 @@ const AdminControlRoom = () => {
 
     try {
       setChargingAssignmentVehicleId(vehicle.id);
-      if (vehicle.status !== VEHICLE_STATUSES.CHARGING) {
-        await vehicleApi.updateVehicleStatus(vehicle.id, VEHICLE_STATUSES.CHARGING);
-      }
       const details = await chargingApi.startSession({
         vehicleId: vehicle.id,
         chargingStationId: stationId,
@@ -2932,6 +3007,48 @@ const AdminControlRoom = () => {
       showAdminNotice(`Charging session completed at ${progress.currentBatteryPercent}%. Vehicle is ready for activation.`, "chargers");
     } catch (error) {
       showAdminNotice(error.message || "Charging session could not be completed.", "chargers", "error");
+    }
+  };
+
+  const completeAndActivateChargingSession = async (session) => {
+    const task = staffTasks.find((item) => item.id === session.staffTaskId);
+    const vehicle = backendVehicles.find((item) => item.id === session.vehicleId);
+    const progress = getChargingSessionProgress(session, task);
+    if (progress.currentBatteryPercent < MIN_CHARGING_COMPLETION_PERCENT) {
+      showAdminNotice(`Charging can be completed only from ${MIN_CHARGING_COMPLETION_PERCENT}%. Current charge is ${progress.currentBatteryPercent}%.`, "chargers", "error");
+      return;
+    }
+
+    if (progress.currentBatteryPercent < 100) {
+      const confirmed = await confirm({
+        title: `Activate at ${progress.currentBatteryPercent}%?`,
+        message: "The vehicle is not fully charged yet. You can activate it now, or keep charging to 100%.",
+        confirmLabel: `Activate at ${progress.currentBatteryPercent}%`,
+        cancelLabel: "Keep charging",
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
+
+    try {
+      const details = await chargingApi.completeSession(session.id, {
+        finalBatteryPercent: progress.currentBatteryPercent,
+        notes: "Charging completed and vehicle activated by administrator.",
+      });
+      await chargingApi.activateVehicle(session.vehicleId);
+      if (details?.staffTask) {
+        setStaffTasks((items) => upsertStaffTask(items, details.staffTask));
+      }
+      setActiveChargingSessions((items) => items.filter((item) => item.id !== session.id));
+      await Promise.all([
+        loadBackendVehicles({ silent: true }),
+        loadChargingStations({ silent: true }),
+        loadChargingSessions({ silent: true }),
+        loadStaffTasks({ silent: true }),
+      ]);
+      showAdminNotice(`Vehicle activated: ${vehicle ? `${vehicle.brand} ${vehicle.model}` : "Vehicle"}.`, "chargers");
+    } catch (error) {
+      showAdminNotice(error.message || "Vehicle could not be activated.", "chargers", "error");
     }
   };
 
@@ -4590,174 +4707,95 @@ const AdminControlRoom = () => {
   };
 
   const renderPricingPanel = () => {
-    const selectedRule = pricingRules.find((rule) => rule.id === selectedPricingRuleId);
-    const SelectedRuleIcon = selectedRule?.icon || FiDollarSign;
+    const currentMode = normalizePricingMode(pricingPolicy?.mode || PRICING_MODES.Standard);
+    const currentOption = PRICING_MODE_OPTIONS.find((option) => normalizePricingMode(option.mode) === currentMode) || PRICING_MODE_OPTIONS[1];
 
     return (
-    <>
-      {renderPanelHeader(
-        "Geofencing",
-        "Тарифы и зоны",
-        <button
-          type="button"
-          onClick={() => setIsDrawingZone((value) => !value)}
-          className={`rounded-xl px-3 py-2 text-xs font-black ${isDrawingZone ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-200"}`}
-        >
-          <FiEdit3 className="inline" /> Draw
-        </button>
-      )}
-      <div className="grid gap-4 overflow-y-auto p-5">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-sm font-black text-white">Polygon editor</p>
-          <p className="mt-2 text-xs font-semibold leading-5 text-slate-400">
-            Цвет выбирает тип новой зоны. Потом нажми Draw, поставь точки на карте и сохрани зону.
-          </p>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {[
-              ["allowed", "Green"],
-              ["restricted", "Red"],
-            ].map(([type, label]) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setDraftZoneType(type)}
-                className={`rounded-xl border px-3 py-2 text-xs font-black ${
-                  draftZoneType === type ? "border-red-300 bg-red-500 text-white" : "border-white/10 text-slate-300"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-3 text-xs font-semibold leading-5 text-slate-400">
-            Включи Draw и кликай по карте. Точек: {draftZonePoints.length}. Минимум 3 для сохранения.
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button type="button" onClick={saveDraftZone} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-white">
-              Сохранить зону
-            </button>
-            <button type="button" onClick={() => setDraftZonePoints([])} className="rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
-              Очистить
-            </button>
-          </div>
-        </div>
-
-        {selectedRule && (
-          <div className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4">
+      <>
+        {renderPanelHeader(
+          "Pricing",
+          "Tariffs and zones",
+          <button
+            type="button"
+            onClick={() => loadPricingPolicy()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.08] px-4 py-3 text-xs font-black text-white transition hover:bg-red-500"
+          >
+            <FiActivity />
+            {isLoadingPricingPolicy ? "Loading..." : "Refresh"}
+          </button>
+        )}
+        <div className="grid gap-4 overflow-y-auto p-5">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-500/20 text-blue-100">
-                  <SelectedRuleIcon />
-                </span>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-base font-black text-white">{selectedRule.name}</p>
-                    <span className="rounded-lg bg-blue-500/20 px-2 py-1 text-[10px] font-black text-blue-100">
-                      {selectedRule.priceLabel}
-                    </span>
-                    <span className={`rounded-lg px-2 py-1 text-[10px] font-black ${selectedRule.enabled ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-500/15 text-slate-300"}`}>
-                      {selectedRule.enabled ? "Активен" : "Отключен"}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm font-semibold leading-6 text-slate-200">{selectedRule.description}</p>
-                </div>
+              <div>
+                <p className="text-sm font-black text-white">Manual pricing mode</p>
+                <p className="mt-2 text-xs font-semibold leading-5 text-slate-400">
+                  Vehicle cards and ride estimates use this backend rate.
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedPricingRuleId(null)}
-                className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200"
-              >
-                Закрыть
-              </button>
+              <span className="rounded-xl border border-red-300/30 bg-red-500/15 px-3 py-2 text-xs font-black text-red-100">
+                {currentOption.label}
+              </span>
+            </div>
+
+            {pricingPolicyError && (
+              <p className="mt-3 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">
+                {pricingPolicyError}
+              </p>
+            )}
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              {PRICING_MODE_OPTIONS.map((option) => {
+                const isActive = normalizePricingMode(option.mode) === currentMode;
+
+                return (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    onClick={() => updatePricingMode(option.mode)}
+                    disabled={isUpdatingPricingMode || isLoadingPricingPolicy}
+                    className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      isActive ? option.className : "border-white/10 bg-[#111a2b] text-slate-300 hover:border-white/20 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <span className="block text-base font-black text-white">
+                      {option.label}
+                      <span className="block text-sm text-slate-200">({option.short})</span>
+                    </span>
+                    <span className="mt-3 block text-xs font-semibold leading-5 text-slate-400">
+                      {option.detail}
+                    </span>
+                    {isActive && (
+                      <span className="mt-3 inline-flex rounded-lg bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-200">
+                        Active
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               <div className="rounded-xl bg-white/[0.06] p-3">
-                <p className="text-[10px] font-black uppercase text-slate-500">Условия</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{selectedRule.condition}</p>
+                <p className="text-[10px] font-black uppercase text-slate-500">Adjustment</p>
+                <p className="mt-1 text-sm font-black text-white">
+                  {Number(pricingPolicy?.adjustmentAmount ?? currentOption.adjustment ?? 0).toFixed(2)} AZN/min
+                </p>
               </div>
               <div className="rounded-xl bg-white/[0.06] p-3">
-                <p className="text-[10px] font-black uppercase text-slate-500">Зона действия</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{selectedRule.zone}</p>
+                <p className="text-[10px] font-black uppercase text-slate-500">Active mode</p>
+                <p className="mt-1 text-sm font-black text-white">{currentOption.label}</p>
               </div>
               <div className="rounded-xl bg-white/[0.06] p-3">
-                <p className="text-[10px] font-black uppercase text-slate-500">Цена</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">Коэффициент тарифа {selectedRule.priceLabel}</p>
+                <p className="text-[10px] font-black uppercase text-slate-500">Updated</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">
+                  {pricingPolicy?.updatedAt ? formatBakuDate(pricingPolicy.updatedAt) : "Not loaded"}
+                </p>
               </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => showAdminNotice(`${selectedRule.name}: режим редактирования открыт`)}
-                className="rounded-xl bg-blue-500 px-3 py-3 text-xs font-black text-white"
-              >
-                <FiEdit3 className="inline" /> Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPricingRules((items) =>
-                    items.map((item) =>
-                      item.id === selectedRule.id ? { ...item, enabled: !item.enabled } : item
-                    )
-                  );
-                  showAdminNotice(`${selectedRule.name}: ${selectedRule.enabled ? "деактивирован" : "активирован"} · тариф ${selectedRule.priceLabel}`);
-                }}
-                className={`rounded-xl px-3 py-3 text-xs font-black ${selectedRule.enabled ? "bg-red-500 text-white" : "bg-emerald-500 text-white"}`}
-              >
-                {selectedRule.enabled ? "Деактивировать" : "Активировать"}
-              </button>
             </div>
           </div>
-        )}
-
-        <div className="grid gap-3">
-          {pricingRules.map((rule) => {
-            const RuleIcon = rule.icon || FiDollarSign;
-
-            return (
-              <button
-                key={rule.id}
-                type="button"
-                onClick={() => setSelectedPricingRuleId(rule.id)}
-                className={`rounded-2xl border p-4 text-left hover:bg-white/[0.06] ${
-                  selectedPricingRuleId === rule.id ? "border-blue-400/60 bg-blue-500/10" : "border-white/10 bg-white/[0.035]"
-                }`}
-              >
-                <span className="flex items-start justify-between gap-3">
-                  <span className="flex min-w-0 items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-200">
-                      <RuleIcon />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-black text-white">{rule.name}</span>
-                        <span className="rounded-lg bg-blue-500/15 px-2 py-1 text-[10px] font-black text-blue-200">
-                          {rule.priceLabel}
-                        </span>
-                      </span>
-                      <span className="mt-2 block text-xs font-semibold leading-5 text-slate-300">{rule.description}</span>
-                    </span>
-                  </span>
-                  <span className={`mt-1 h-6 w-11 shrink-0 rounded-full p-1 ${rule.enabled ? "bg-emerald-500" : "bg-slate-700"}`}>
-                    <span className={`block h-4 w-4 rounded-full bg-white transition ${rule.enabled ? "translate-x-5" : ""}`} />
-                  </span>
-                </span>
-                <span className="mt-3 flex flex-wrap gap-2">
-                  <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-black text-slate-300">
-                    {rule.zone}
-                  </span>
-                  <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-black text-slate-300">
-                    {rule.condition}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
         </div>
-      </div>
-    </>
+      </>
     );
   };
 
@@ -5707,7 +5745,7 @@ const AdminControlRoom = () => {
                   onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, dueAt: event.target.value }))}
                   className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f1728] px-3 py-3 text-sm font-black text-white outline-none [color-scheme:dark] focus:border-red-300"
                 />
-                <span className="mt-2 block text-[11px] font-bold leading-4 text-red-100/80">Past dates are disabled.</span>
+                <span className="mt-2 block text-[11px] font-bold leading-4 text-red-100/80">Choose a future date and time.</span>
               </label>
             </div>
             <div className="grid gap-2">
@@ -5846,6 +5884,16 @@ const AdminControlRoom = () => {
               </article>
             );
           })}
+          {!isLoadingStaffTasks && !staffTasksError && visibleStaffTasks.length === 0 && (
+            <p className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm font-bold text-slate-300">
+              No active staff tasks.
+            </p>
+          )}
+          {completedStaffTaskCount > 0 && (
+            <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-xs font-bold text-emerald-100">
+              {completedStaffTaskCount} completed {completedStaffTaskCount === 1 ? "task is" : "tasks are"} hidden from this work queue.
+            </p>
+          )}
         </div>
 
       </div>
@@ -6001,6 +6049,7 @@ const AdminControlRoom = () => {
               const selectedAssigneeId = draft.assigneeId || staffMembers[0]?.id || "";
               const isAssigning = chargingAssignmentVehicleId === vehicle.id;
               const canAssign = Boolean(selectedStationId && selectedAssigneeId && !isAssigning);
+              const rangeKm = Math.round(Number(vehicle.rangeKm ?? vehicle.batteryPercent * RANGE_KM_PER_BATTERY_PERCENT));
 
               return (
                 <article key={vehicle.id} className="rounded-xl border border-white/10 bg-[#111a2b] p-3">
@@ -6009,7 +6058,7 @@ const AdminControlRoom = () => {
                       <p className="truncate text-sm font-black text-white">{vehicle.brand} {vehicle.model}</p>
                       <p className="mt-1 text-xs font-semibold text-slate-400">{vehicle.plateNumber} - {vehicle.connectorType || "Connector unknown"}</p>
                     </div>
-                    <span className="rounded-lg bg-amber-400/15 px-2 py-1 text-xs font-black text-amber-100">{vehicle.batteryPercent}%</span>
+                    <span className="rounded-lg bg-amber-400/15 px-2 py-1 text-xs font-black text-amber-100">{vehicle.batteryPercent}% · {rangeKm} km</span>
                   </div>
                   <div className="mt-3 grid gap-2">
                     <select
@@ -6069,7 +6118,7 @@ const AdminControlRoom = () => {
 
                 return (
                   <div key={session.id} className="rounded-xl bg-white/[0.04] p-3">
-                    <p className="truncate text-xs font-black text-white">{vehicle ? `${vehicle.brand} ${vehicle.model}` : "Vehicle"} - {progress.currentBatteryPercent}% / {session.targetBatteryPercent}%</p>
+                    <p className="truncate text-xs font-black text-white">{vehicle ? `${vehicle.brand} ${vehicle.model}` : "Vehicle"} - {progress.currentBatteryPercent}% · {progress.currentRangeKm} km / {session.targetBatteryPercent}%</p>
                     <p className="mt-1 text-[11px] font-semibold text-slate-400">
                       {station?.name || "Station"} - {assignee?.name || "Inactive or removed staff"}
                     </p>
@@ -6100,14 +6149,24 @@ const AdminControlRoom = () => {
                         })}
                       </select>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => completeChargingSession(session)}
-                      disabled={!canComplete}
-                      className="mt-3 inline-flex min-h-9 w-full items-center justify-center rounded-lg bg-emerald-500 px-3 py-2 text-[10px] font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                    >
-                      Complete session
-                    </button>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => completeChargingSession(session)}
+                        disabled={!canComplete}
+                        className="inline-flex min-h-9 w-full items-center justify-center rounded-lg bg-emerald-500 px-3 py-2 text-[10px] font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                      >
+                        Complete session
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => completeAndActivateChargingSession(session)}
+                        disabled={!canComplete}
+                        className="inline-flex min-h-9 w-full items-center justify-center rounded-lg bg-red-500 px-3 py-2 text-[10px] font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                      >
+                        Complete & activate
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -6118,9 +6177,12 @@ const AdminControlRoom = () => {
           <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
             <p className="text-sm font-black text-white">Ready to activate</p>
             <div className="mt-3 grid gap-2">
-              {readyChargingVehicles.map((vehicle) => (
+              {readyChargingVehicles.map((vehicle) => {
+                const rangeKm = Math.round(Number(vehicle.rangeKm ?? vehicle.batteryPercent * RANGE_KM_PER_BATTERY_PERCENT));
+
+                return (
                 <div key={vehicle.id} className="rounded-xl bg-white/[0.04] p-3">
-                  <p className="truncate text-xs font-black text-white">{vehicle.brand} {vehicle.model} - {vehicle.batteryPercent}%</p>
+                  <p className="truncate text-xs font-black text-white">{vehicle.brand} {vehicle.model} - {vehicle.batteryPercent}% · {rangeKm} km</p>
                   <p className="mt-1 text-[11px] font-semibold text-slate-400">{vehicle.plateNumber} - charging complete</p>
                   <button
                     type="button"
@@ -6130,7 +6192,8 @@ const AdminControlRoom = () => {
                     Activate vehicle
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -6703,7 +6766,7 @@ const AdminControlRoom = () => {
     ? [["Stations", managedChargingStations.length, FiZap, "text-cyan-200"], ["Online", stationStats.onlineStations, FiActivity, "text-emerald-200"], ["Ports", `${stationStats.availablePorts}/${stationStats.totalPorts}`, FiMap, "text-blue-200"], ["Max kW", stationStats.maxPower, FiTool, "text-amber-200"]]
     : isServicePointsMap
       ? [["Service points", managedServicePoints.length, FiTool, "text-cyan-200"], ["Active", managedServicePoints.length, FiActivity, "text-emerald-200"], ["Map", "Service", FiMap, "text-blue-200"], ["Tasks", serviceTasks.length, FiShield, "text-amber-200"]]
-      : [["Online", fleetStats.total || liveVehicles.length, FiZap, "text-cyan-200"], ["Available", fleetStats.available, FiMap, "text-emerald-200"], ["In use", fleetStats.activeTrips, FiNavigation, "text-blue-200"], ["Need charge", fleetStats.low_charge, FiActivity, "text-amber-200"]];
+      : [["Online", fleetStats.total || liveVehiclesWithChargingProgress.length, FiZap, "text-cyan-200"], ["Available", fleetStats.available, FiMap, "text-emerald-200"], ["In use", fleetStats.activeTrips, FiNavigation, "text-blue-200"], ["Need charge", fleetStats.low_charge, FiActivity, "text-amber-200"]];
   const isFullWidthPanel =
     activeSection === "users" ||
     activeSection === "billing" ||
@@ -7350,8 +7413,13 @@ const AdminControlRoom = () => {
                               <span className="rounded-full px-3 py-1 text-xs font-black text-white" style={{ backgroundColor: meta.color }}>
                                 {STATUS_LABELS[vehicle.liveStatus] || meta.short}
                               </span>
-                              <span className="text-xs font-black text-slate-700">{Math.round(vehicle.batteryPercent)}%</span>
+                              <span className="text-xs font-black text-slate-700">{Math.round(vehicle.batteryPercent)}% - {Math.round(vehicle.rangeKm)} km</span>
                             </div>
+                            {vehicle.chargingProgress && (
+                              <p className="mt-2 text-xs font-black text-emerald-700">
+                                {vehicle.chargingProgress.minutesRemaining > 0 ? `${vehicle.chargingProgress.minutesRemaining} min to full` : "Fully charged"}
+                              </p>
+                            )}
                           </div>
                         </Popup>
                       </Marker>
@@ -7393,7 +7461,7 @@ const AdminControlRoom = () => {
                 </MapContainer>
               </div>
 
-              {!isOperationsMap && (isLoadingBackendVehicles || backendVehiclesError || !liveVehicles.length) && (
+              {!isOperationsMap && (isLoadingBackendVehicles || backendVehiclesError || !liveVehiclesWithChargingProgress.length) && (
                 <div className="pointer-events-none absolute left-1/2 top-1/2 z-[505] w-[min(420px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-[#0b1424]/90 p-5 text-center shadow-2xl shadow-black/30 backdrop-blur-xl">
                   <p className="text-xs font-black uppercase tracking-[0.2em] text-red-300">Fleet data</p>
                   <p className="mt-2 text-lg font-black text-white">
@@ -7441,16 +7509,26 @@ const AdminControlRoom = () => {
                   </span>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="mt-4 grid grid-cols-3 gap-2">
                   <div className="rounded-xl bg-white/[0.05] p-3">
                     <p className="text-[10px] font-black uppercase text-slate-500">Battery</p>
                     <p className="mt-1 text-lg font-black text-white">{Math.round(selectedVehicle.batteryPercent)}%</p>
                   </div>
                   <div className="rounded-xl bg-white/[0.05] p-3">
+                    <p className="text-[10px] font-black uppercase text-slate-500">Range</p>
+                    <p className="mt-1 text-lg font-black text-white">{Math.round(selectedVehicle.rangeKm)} km</p>
+                  </div>
+                  <div className="rounded-xl bg-white/[0.05] p-3">
                     <p className="text-[10px] font-black uppercase text-slate-500">Speed</p>
-                    <p className="mt-1 text-lg font-black text-white">{selectedVehicle.speedKmh}</p>
+                    <p className="mt-1 text-lg font-black text-white">{selectedVehicle.speedKmh} km/h</p>
                   </div>
                 </div>
+
+                {selectedVehicle.chargingProgress && (
+                  <p className="mt-3 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-100">
+                    Charging: {selectedVehicle.chargingProgress.minutesRemaining > 0 ? `${selectedVehicle.chargingProgress.minutesRemaining} min to full` : "ready"}
+                  </p>
+                )}
 
                 {selectedVehicleNotification && (
                   <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 p-3">
@@ -7626,3 +7704,4 @@ const AdminControlRoom = () => {
 };
 
 export default AdminControlRoom;
+

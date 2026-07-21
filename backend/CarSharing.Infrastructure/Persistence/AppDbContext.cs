@@ -29,6 +29,7 @@ public class AppDbContext : DbContext
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
+    public DbSet<PricingPolicy> PricingPolicies => Set<PricingPolicy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

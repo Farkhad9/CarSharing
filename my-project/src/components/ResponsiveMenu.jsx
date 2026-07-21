@@ -32,7 +32,7 @@ const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) 
                 </span>
                 <div>
                   <p className="text-sm font-extrabold text-gray-900">
-                    {user ? `Привет, ${user.name || "Farhad"}!` : "ElectroStreet Rider"}
+                    {user ? `Hi, ${user.name || "Farhad"}!` : "ElectroStreet Rider"}
                   </p>
                   <p className="text-xs font-semibold text-gray-400">
                     {user ? `${(user.balance || 0).toFixed(2)} AZN` : "Baku electric fleet"}
@@ -42,7 +42,7 @@ const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) 
 
               <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-green-500"></span>
-                <span className="text-xs font-bold text-gray-500">6 EVs online</span>
+                <span className="text-xs font-bold text-gray-500">6 cars online</span>
               </div>
             </div>
 
@@ -74,21 +74,21 @@ const ResponsiveMenu = ({ open, menuItems = [], user, onLoginClick, onLogout }) 
                   className="flex w-full items-center justify-center gap-2 rounded-md bg-red-500 px-6 py-3 font-extrabold text-white duration-200 hover:bg-red-600"
                 >
                   <FiUser />
-                  <span>Личный кабинет</span>
+                  <span>Profile</span>
                 </a>
                 <a
                   href="/dashboard?tab=payments"
                   className="flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 px-6 py-3 font-extrabold text-gray-700 duration-200 hover:border-red-200 hover:text-red-500"
                 >
                   <FiCreditCard />
-                  <span>Способы оплаты</span>
+                  <span>Payment methods</span>
                 </a>
                 <button
                   onClick={onLogout}
                   className="flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 px-6 py-3 font-extrabold text-gray-700 duration-200 hover:border-red-200 hover:text-red-500"
                 >
                   <FiLogOut />
-                  <span>Выйти</span>
+                  <span>Sign out</span>
                 </button>
               </div>
             ) : (

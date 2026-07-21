@@ -24,7 +24,7 @@ const operatingLayers = [
     icon: FiCpu,
     title: "Fleet intelligence",
     label: "Live balancing",
-    text: "Every vehicle is monitored by battery, reservation state, parking zone, and demand pressure so the closest useful EV stays visible to riders.",
+    text: "Every vehicle is monitored by battery, reservation state, parking zone, and demand pressure so the closest useful car stays visible to riders.",
     details: ["Battery thresholds", "Demand heat", "Availability signals"],
   },
   {
@@ -201,7 +201,7 @@ const AboutPage = () => {
               Electric mobility built for the rhythm of Baku.
             </h1>
             <p className="mt-7 max-w-2xl text-lg font-semibold leading-8 text-white/72">
-              We combine EV sharing, live fleet intelligence, charging operations, and instant support into one city-scale mobility service.
+              We combine car sharing, live fleet intelligence, charging operations, and instant support into one city-scale mobility service.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <a
@@ -222,7 +222,7 @@ const AboutPage = () => {
           </motion.div>
 
           <div className="mt-14 grid gap-4 sm:grid-cols-3">
-            <StatTile value={`${vehicles.length} EVs`} label="connected to the city map" Icon={FaCar} accent="bg-red-500" />
+            <StatTile value={`${vehicles.length} cars`} label="connected to the city map" Icon={FaCar} accent="bg-red-500" />
             <StatTile value={`${averageBattery}%`} label="average fleet battery" Icon={FiBatteryCharging} accent="bg-emerald-500" />
             <StatTile value={`${availableVehicles}`} label="ready to reserve now" Icon={FiCheckCircle} accent="bg-sky-500" />
           </div>
@@ -325,7 +325,7 @@ const AboutPage = () => {
 
               <div className="mt-5 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
                 <div className="rounded-2xl border border-white/10 bg-white p-5 text-zinc-950">
-                  <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Spotlight EV</p>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Spotlight car</p>
                   <AnimatePresence mode="wait">
                     <motion.div
                       key={spotlightVehicle.id}

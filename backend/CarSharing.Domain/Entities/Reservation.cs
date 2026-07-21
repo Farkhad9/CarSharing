@@ -18,6 +18,9 @@ public class Reservation : BaseEntity
     public decimal HoldAmount { get; private set; }
     public string Currency { get; private set; } = "AZN";
     public string? CancelReason { get; private set; }
+    public string DestinationLabel { get; private set; } = null!;
+    public double DestinationLatitude { get; private set; }
+    public double DestinationLongitude { get; private set; }
     public ReservationStatus Status { get; private set; } = ReservationStatus.Active;
 
     public static Reservation Create(
@@ -25,6 +28,9 @@ public class Reservation : BaseEntity
         Guid vehicleId,
         DateTime reservedAt,
         DateTime expiresAt,
+        string destinationLabel,
+        double destinationLatitude,
+        double destinationLongitude,
         decimal holdAmount = 0,
         string currency = "AZN")
     {
@@ -37,6 +43,9 @@ public class Reservation : BaseEntity
             ExpiresAt = expiresAt,
             HoldAmount = holdAmount,
             Currency = currency.Trim().ToUpperInvariant(),
+            DestinationLabel = destinationLabel.Trim(),
+            DestinationLatitude = destinationLatitude,
+            DestinationLongitude = destinationLongitude,
             Status = ReservationStatus.Active
         };
     }

@@ -64,9 +64,11 @@ export const normalizeChargingSession = (session) => {
     assignedStaffId: session.assignedStaffId,
     staffTaskId: session.staffTaskId,
     status: sessionStatusByValue[session.status] || session.status || "active",
-    startBatteryPercent: Number(session.startBatteryPercent || 0),
-    targetBatteryPercent: Number(session.targetBatteryPercent || 100),
-    currentBatteryPercent: Number(session.currentBatteryPercent || 0),
+    startBatteryPercent: Number(session.startBatteryPercent ?? 0),
+    targetBatteryPercent: Number(session.targetBatteryPercent ?? 100),
+    currentBatteryPercent: Number(session.currentBatteryPercent ?? 0),
+    currentRangeKm: Number(session.currentRangeKm ?? Number(session.currentBatteryPercent ?? 0) * 4),
+    minutesRemaining: Number(session.minutesRemaining ?? 0),
   };
 };
 
@@ -97,9 +99,9 @@ export const normalizeChargingStation = (station) => {
       lat: location.lat,
       lng: location.lng,
     },
-    powerKw: Number(station.powerKw || 0),
-    totalPorts: Number(station.totalPorts || 0),
-    availablePorts: Number(station.availablePorts || 0),
+    powerKw: Number(station.powerKw ?? 0),
+    totalPorts: Number(station.totalPorts ?? 0),
+    availablePorts: Number(station.availablePorts ?? 0),
     connectorTypes: Array.isArray(station.connectorTypes) ? station.connectorTypes : [],
   };
 };

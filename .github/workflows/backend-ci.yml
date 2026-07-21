@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
 concurrency:
   group: backend-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -36,7 +40,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-          dotnet-quality: "preview"
 
       - name: Restore
         run: dotnet restore backend/CarSharing.WebApi/CarSharing.WebApi.csproj

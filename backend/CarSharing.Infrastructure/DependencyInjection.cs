@@ -41,6 +41,7 @@ public static class DependencyInjection
         services.AddScoped<IParkingZoneRepository, ParkingZoneRepository>();
         services.AddScoped<IPasswordResetTokenRepository, PasswordResetTokenRepository>();
         services.AddScoped<ISupportTicketRepository, SupportTicketRepository>();
+        services.AddScoped<IPricingPolicyRepository, PricingPolicyRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();

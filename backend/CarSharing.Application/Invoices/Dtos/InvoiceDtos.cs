@@ -12,6 +12,7 @@ public sealed record InvoiceDto(
     InvoiceType Type,
     InvoiceStatus Status,
     InvoiceDeliveryStatus DeliveryStatus,
+    string PaymentMethod,
     decimal Amount,
     string Currency,
     string PdfUrl,

@@ -10,6 +10,8 @@ namespace CarSharing.Application.Payments.Services;
 
 public sealed class PaymentService : IPaymentService
 {
+    private const int LowBatteryChargingThresholdPercent = 30;
+
     private static readonly Error Unauthenticated = new("Payment.Unauthenticated", "User must be authenticated.");
     private static readonly Error UserNotFound = new("Payment.UserNotFound", "User was not found.");
     private static readonly Error TripNotFound = new("Payment.TripNotFound", "Trip was not found.");
@@ -130,8 +132,10 @@ public sealed class PaymentService : IPaymentService
             var vehicle = await _vehicleRepository.GetByIdAsync(trip.VehicleId, cancellationToken);
             if (vehicle is null) return Result<bool>.Failure(VehicleNotFound);
 
+            var finalBatteryPercent = trip.CalculateBatteryPercentAfterRide(trip.StartBatteryPercent, DateTime.UtcNow);
+            vehicle.UpdateBattery(finalBatteryPercent);
             trip.CompletePayment();
-            vehicle.ChangeStatus(vehicle.BatteryPercent < 40 ? VehicleStatus.Charging : VehicleStatus.Available);
+            vehicle.ChangeStatus(GetPostTripVehicleStatus(finalBatteryPercent));
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             await _invoiceService.CreateForCompletedPaymentAsync(transaction, user, trip, cancellationToken);
             return Result<bool>.Success(true);
@@ -214,8 +218,10 @@ public sealed class PaymentService : IPaymentService
         if (vehicle is null) return Result<TripPaymentDto>.Failure(VehicleNotFound);
 
         transaction.Complete(now);
+        var finalBatteryPercent = trip.CalculateBatteryPercentAfterRide(trip.StartBatteryPercent, now);
+        vehicle.UpdateBattery(finalBatteryPercent);
         trip.CompletePayment();
-        vehicle.ChangeStatus(vehicle.BatteryPercent < 40 ? VehicleStatus.Charging : VehicleStatus.Available);
+        vehicle.ChangeStatus(GetPostTripVehicleStatus(finalBatteryPercent));
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         await _invoiceService.CreateForCompletedPaymentAsync(transaction, userResult.User, trip, cancellationToken);
 
@@ -239,4 +245,9 @@ public sealed class PaymentService : IPaymentService
 
     private static PaymentTransactionDto Map(PaymentTransaction x) => new(x.Id, x.UserId, x.TripId, x.Type,
         x.Status, x.Amount, x.Currency, x.PaymentMethod, x.CardBrand, x.CardLast4, x.FailureReason, x.CreatedAt, x.CompletedAt);
+
+    private static VehicleStatus GetPostTripVehicleStatus(int finalBatteryPercent) =>
+        finalBatteryPercent <= LowBatteryChargingThresholdPercent
+            ? VehicleStatus.Charging
+            : VehicleStatus.Available;
 }

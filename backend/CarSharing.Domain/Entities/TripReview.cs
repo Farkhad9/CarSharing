@@ -36,4 +36,30 @@ public class TripReview : BaseEntity
             IsPublished = true
         };
     }
+
+    public void UpdateContent(int rating, string comment)
+    {
+        if (rating is < 1 or > 5)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rating), "Rating must be between 1 and 5.");
+        }
+
+        if (string.IsNullOrWhiteSpace(comment))
+        {
+            throw new ArgumentException("Comment is required.", nameof(comment));
+        }
+
+        Rating = rating;
+        Comment = comment.Trim();
+    }
+
+    public void Publish()
+    {
+        IsPublished = true;
+    }
+
+    public void Hide()
+    {
+        IsPublished = false;
+    }
 }

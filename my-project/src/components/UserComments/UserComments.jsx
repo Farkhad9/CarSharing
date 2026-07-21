@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { FiMessageCircle, FiStar } from "react-icons/fi";
+import { FiCheckCircle, FiMessageCircle, FiStar } from "react-icons/fi";
 import { tripReviewsApi } from "../../api/tripReviewsApi";
 
 const getInitials = (name) =>
@@ -71,7 +71,7 @@ const UserComments = () => {
         )}
 
         {reviews.length > 0 && (
-          <div className="mt-12 grid gap-5 lg:grid-cols-3">
+          <div className="mt-12 grid gap-6 lg:grid-cols-3">
             {reviews.map((review, index) => (
               <motion.article
                 key={review.id}
@@ -79,24 +79,30 @@ const UserComments = () => {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-80px" }}
                 transition={{ delay: index * 0.08, duration: 0.45 }}
-                className="rounded-2xl border border-zinc-200 bg-zinc-50 p-6 shadow-sm transition duration-300 hover:-translate-y-1 hover:bg-white hover:shadow-xl hover:shadow-zinc-950/10"
+                className="group relative min-h-[310px] overflow-hidden rounded-[28px] border border-zinc-200 bg-white p-7 shadow-[0_18px_60px_rgba(15,23,42,0.055)] transition duration-300 hover:-translate-y-1 hover:border-zinc-300 hover:shadow-[0_28px_90px_rgba(15,23,42,0.1)]"
               >
-                <div className="flex items-center justify-between gap-4">
+                <div className="absolute inset-x-0 top-0 h-1 bg-red-500 opacity-0 transition duration-300 group-hover:opacity-100" />
+                <div className="flex items-start justify-between gap-5">
                   <div className="flex min-w-0 items-center gap-4">
-                    <div className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-white bg-red-50 text-lg font-black text-red-600 shadow-md">
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border-4 border-white bg-red-50 text-xl font-black text-red-600 shadow-lg shadow-zinc-950/10">
                       {getInitials(review.name)}
                     </div>
                     <div className="min-w-0">
-                      <h3 className="truncate text-base font-black">{review.name || "ElectroStreet rider"}</h3>
-                      <p className="text-sm font-bold text-zinc-500">{review.role || "ElectroStreet rider"}</p>
+                      <h3 className="truncate text-lg font-black text-zinc-950">{review.name || "ElectroStreet rider"}</h3>
+                      <p className="mt-1 text-sm font-bold text-zinc-500">{review.role || "ElectroStreet rider"}</p>
+                      <span className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-600">
+                        <FiCheckCircle />
+                        Verified ride
+                      </span>
                     </div>
                   </div>
-                  <span className="rounded-full bg-red-50 px-3 py-1 text-sm font-black text-red-600">
-                    {Number(review.rating || 0).toFixed(1)}
-                  </span>
+                  <div className="shrink-0 rounded-2xl bg-red-50 px-4 py-3 text-center">
+                    <p className="text-lg font-black text-red-600">{Number(review.rating || 0).toFixed(1)}</p>
+                    <p className="text-[10px] font-black uppercase tracking-wide text-red-300">rating</p>
+                  </div>
                 </div>
 
-                <div className="mt-6 flex gap-1 text-red-500">
+                <div className="mt-8 flex gap-1.5 text-red-500">
                   {Array.from({ length: 5 }).map((_, starIndex) => (
                     <FiStar
                       key={starIndex}
@@ -104,7 +110,15 @@ const UserComments = () => {
                     />
                   ))}
                 </div>
-                <p className="mt-6 text-sm font-semibold leading-7 text-zinc-600">"{review.comment}"</p>
+                <p className="mt-6 text-lg font-black leading-8 text-zinc-800">
+                  "{review.comment}"
+                </p>
+                <div className="mt-8 flex items-center justify-between border-t border-zinc-100 pt-5">
+                  <span className="text-xs font-black uppercase tracking-[0.18em] text-zinc-300">
+                    Rider feedback
+                  </span>
+                  <FiMessageCircle className="text-xl text-red-400" />
+                </div>
               </motion.article>
             ))}
           </div>

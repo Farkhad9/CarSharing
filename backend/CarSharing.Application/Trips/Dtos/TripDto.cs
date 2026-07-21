@@ -27,6 +27,19 @@ public class TripDto
     public string StartLocationLabel { get; set; } = string.Empty;
     public double StartLatitude { get; set; }
     public double StartLongitude { get; set; }
+    public string DestinationLabel { get; set; } = string.Empty;
+    public double DestinationLatitude { get; set; }
+    public double DestinationLongitude { get; set; }
+    public int StartBatteryPercent { get; set; }
+    public int CurrentBatteryPercent { get; set; }
+    public int CurrentRangeKm { get; set; }
+    public string Brand { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string PlateNumber { get; set; } = string.Empty;
+    public string? MainImageUrl { get; set; }
+    public string? GalleryImageUrl1 { get; set; }
+    public string? GalleryImageUrl2 { get; set; }
+    public string? GalleryImageUrl3 { get; set; }
     public PricingBreakdownDto PricingBreakdown { get; set; } = null!;
     public TripCompletionRequestDto? LatestCompletionRequest { get; set; }
 }

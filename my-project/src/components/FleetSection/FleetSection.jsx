@@ -17,6 +17,13 @@ const FILTERS = [
   { label: "Reserved", value: VEHICLE_STATUSES.RESERVED },
 ];
 
+const PRICE_FILTERS = [
+  { label: "All prices", value: "all", matches: () => true },
+  { label: "Under 0.50", value: "under_050", matches: (price) => price < 0.5 },
+  { label: "0.50 - 0.80", value: "050_080", matches: (price) => price >= 0.5 && price <= 0.8 },
+  { label: "0.80+", value: "over_080", matches: (price) => price > 0.8 },
+];
+
 const STATUS_STYLES = {
   [VEHICLE_STATUSES.AVAILABLE]: {
     label: "Available",
@@ -72,6 +79,7 @@ const getDisplayStatus = (vehicle) => {
 const FleetSection = ({ onVehicleSelect, onUserChange }) => {
   const [activeFilter, setActiveFilter] = useState("all");
   const [activeBrandFilter, setActiveBrandFilter] = useState("all");
+  const [activePriceFilter, setActivePriceFilter] = useState("all");
   const [authVehicle, setAuthVehicle] = useState(null);
   const [reservationsRevision, setReservationsRevision] = useState(0);
   const { vehicles: backendVehicles, isLoading: isLoadingVehicles, error: vehicleError } = useVehicles();
@@ -102,14 +110,19 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
+  const visibleVehicles = useMemo(
+    () => backendVehicles.filter((vehicle) => vehicle.status !== VEHICLE_STATUSES.COMPLETED),
+    [backendVehicles]
+  );
+
   const brandFilters = useMemo(
     () => [
       { label: "All Cars", value: "all" },
-      ...[...new Set(backendVehicles.map((vehicle) => vehicle.brand).filter(Boolean))]
+      ...[...new Set(visibleVehicles.map((vehicle) => vehicle.brand).filter(Boolean))]
         .sort((first, second) => first.localeCompare(second))
         .map((brand) => ({ label: brand, value: brand })),
     ],
-    [backendVehicles]
+    [visibleVehicles]
   );
 
   useEffect(() => {
@@ -162,8 +175,9 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
     const effectiveBrandFilter = brandFilters.some((filter) => filter.value === activeBrandFilter)
       ? activeBrandFilter
       : "all";
+    const priceFilter = PRICE_FILTERS.find((filter) => filter.value === activePriceFilter) || PRICE_FILTERS[0];
 
-    return backendVehicles
+    return visibleVehicles
       .map((vehicle) => {
         const vehicleLocation = [vehicle.location?.lat, vehicle.location?.lng];
         const distanceMeters = hasResolvedUserLocation
@@ -178,12 +192,14 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
       })
       .filter((vehicle) => {
         const displayStatus = getDisplayStatus(vehicle);
+        const pricePerMinute = Number(vehicle.pricePerMinute || 0);
         const matchesStatus = activeFilter === "all" || displayStatus === activeFilter;
         const matchesBrand = effectiveBrandFilter === "all" || vehicle.brand === effectiveBrandFilter;
-        return matchesStatus && matchesBrand;
+        const matchesPrice = priceFilter.matches(pricePerMinute);
+        return matchesStatus && matchesBrand && matchesPrice;
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [activeFilter, activeBrandFilter, backendVehicles, brandFilters, hasResolvedUserLocation, reservationsRevision, userLocation]);
+  }, [activeFilter, activeBrandFilter, activePriceFilter, brandFilters, hasResolvedUserLocation, reservationsRevision, userLocation, visibleVehicles]);
 
   return (
     <section id="fleet" className="scroll-mt-24 bg-white py-16 md:py-24 border-b border-gray-100">
@@ -236,6 +252,26 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
               }`}
             >
               {brand.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 mb-10 -mt-6 overflow-x-auto pb-2 no-scrollbar">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-2 whitespace-nowrap flex items-center gap-1">
+            <FiSliders /> Filter by Price:
+          </span>
+          {PRICE_FILTERS.map((priceFilter) => (
+            <button
+              key={priceFilter.value}
+              type="button"
+              onClick={() => setActivePriceFilter(priceFilter.value)}
+              className={`px-4 py-1.5 text-xs font-bold rounded-full border transition-all duration-200 ${
+                activePriceFilter === priceFilter.value
+                  ? "border-zinc-900 bg-zinc-900 text-white"
+                  : "border-gray-200 text-gray-500 hover:border-gray-400 bg-white"
+              }`}
+            >
+              {priceFilter.label}
             </button>
           ))}
         </div>

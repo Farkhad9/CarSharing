@@ -291,7 +291,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
               />
             </div>
             {resetNotice && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-green-600">{resetNotice}</p>}
-            {authError && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-red-600">{authError}</p>}
+            {authError && <p className="mx-auto mt-4 max-w-md whitespace-pre-line text-sm font-bold text-red-600">{authError}</p>}
             <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
               <button type="submit" className={primaryButtonClass}>
                 {isSubmitting ? "Sending..." : "Send reset link"}
@@ -373,7 +373,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
               />
             </div>
             {resetNotice && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-green-600">{resetNotice}</p>}
-            {authError && <p className="mx-auto mt-4 max-w-md text-sm font-bold text-red-600">{authError}</p>}
+            {authError && <p className="mx-auto mt-4 max-w-md whitespace-pre-line text-sm font-bold text-red-600">{authError}</p>}
             <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
               <button type="submit" className={primaryButtonClass}>
                 {isSubmitting ? "Saving..." : "Reset password"}
@@ -878,7 +878,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 >
                   {isSubmitting ? "Creating account..." : "Sign Up"}
                 </button>
-                {authError && <p className="mt-4 text-center text-sm font-bold text-red-600">{authError}</p>}
+                {authError && <p className="mt-4 whitespace-pre-line text-center text-sm font-bold text-red-600">{authError}</p>}
 
                 <button
                   type="button"
@@ -991,7 +991,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 >
                   {isSubmitting ? "Signing in..." : "Sign In"}
                 </button>
-                {authError && <p className="mt-4 text-center text-sm font-bold text-red-600">{authError}</p>}
+                {authError && <p className="mt-4 whitespace-pre-line text-center text-sm font-bold text-red-600">{authError}</p>}
 
                 <button
                   type="button"

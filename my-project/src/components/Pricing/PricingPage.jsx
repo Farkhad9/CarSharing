@@ -55,14 +55,15 @@ const PricingPage = ({ user, onVehicleSelect }) => {
   const selectableVehicles = bookableVehicles;
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [minutes, setMinutes] = useState(25);
-  const [comfortMode, setComfortMode] = useState(false);
 
   const selectedVehicle = useMemo(
     () => selectableVehicles.find((vehicle) => vehicle.id === selectedVehicleId) || selectableVehicles[0],
     [selectableVehicles, selectedVehicleId]
   );
-  const baseRate = Number(selectedVehicle?.pricePerMinute || 0);
-  const finalRate = Number((baseRate + (comfortMode ? 0.05 : 0)).toFixed(2));
+  const baseRate = Number(selectedVehicle?.basePricePerMinute ?? selectedVehicle?.pricePerMinute ?? 0);
+  const finalRate = Number((selectedVehicle?.activePricePerMinute ?? selectedVehicle?.pricePerMinute ?? baseRate).toFixed(2));
+  const pricingAdjustment = Number(selectedVehicle?.pricingAdjustmentAmount || 0);
+  const pricingMode = selectedVehicle?.pricingMode || "Standard";
   const estimate = Number((finalRate * minutes).toFixed(2));
   const cabinetHref = user ? "/dashboard" : "/auth";
   const cabinetLabel = user ? "Payment cabinet" : "Create account";
@@ -128,7 +129,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
           <div>
             <p className="text-xs font-black uppercase tracking-[0.24em] text-red-300">ElectroStreet pricing</p>
             <h1 className="mt-4 max-w-3xl text-4xl font-black tracking-tight sm:text-5xl lg:text-6xl">
-              Choose an EV, see the minute rate, start the ride.
+              Choose a car, see the minute rate, start the ride.
             </h1>
             <p className="mt-5 max-w-2xl text-base font-semibold leading-7 text-white/60 sm:text-lg">
               Pricing now follows the real project flow: every car has its own per-minute rate, reservation is limited
@@ -142,7 +143,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-red-500 px-6 py-3 text-sm font-black text-white shadow-lg shadow-red-500/25 transition hover:-translate-y-0.5 hover:bg-red-600"
               >
                 <FiZap />
-                Reserve selected EV
+                Reserve selected car
               </button>
               <a
                 href={cabinetHref}
@@ -168,9 +169,9 @@ const PricingPage = ({ user, onVehicleSelect }) => {
               <div className="flex min-h-[320px] flex-col justify-between bg-[linear-gradient(180deg,#fafafa,#eef1f5)] p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-xs font-black uppercase tracking-[0.2em] text-red-500">Selected EV</p>
+                    <p className="text-xs font-black uppercase tracking-[0.2em] text-red-500">Selected car</p>
                     <h2 className="mt-2 text-3xl font-black">
-                      {selectedVehicle.brand} {selectedVehicle.model || "EV"}
+                      {selectedVehicle.brand} {selectedVehicle.model || "car"}
                     </h2>
                   </div>
                   <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase text-emerald-700">
@@ -185,7 +186,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                 <div className="grid grid-cols-3 gap-2">
                   <div className="rounded-xl bg-white p-3 shadow-sm">
                     <p className="text-[10px] font-black uppercase tracking-wide text-zinc-400">Rate</p>
-                    <p className="mt-1 text-sm font-black">{formatMoney(baseRate)}/min</p>
+                    <p className="mt-1 text-sm font-black">{formatMoney(finalRate)}/min</p>
                   </div>
                   <div className="rounded-xl bg-white p-3 shadow-sm">
                     <p className="text-[10px] font-black uppercase tracking-wide text-zinc-400">Battery</p>
@@ -218,7 +219,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                 >
                   {selectableVehicles.map((vehicle) => (
                     <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.brand} {vehicle.model || "EV"} - {formatMoney(vehicle.pricePerMinute)}/min
+                      {vehicle.brand} {vehicle.model || "car"} - {formatMoney(vehicle.pricePerMinute)}/min
                     </option>
                   ))}
                 </select>
@@ -242,23 +243,28 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                   />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setComfortMode((value) => !value)}
-                  className={`mt-6 flex w-full items-center justify-between rounded-xl border p-4 text-left transition ${
-                    comfortMode ? "border-red-200 bg-red-50" : "border-zinc-200 bg-zinc-50 hover:border-zinc-300"
-                  }`}
-                >
+                <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
                   <span>
-                    <span className="block text-sm font-black">Comfort climate mode</span>
+                    <span className="block text-sm font-black">Live pricing mode</span>
                     <span className="mt-1 block text-xs font-semibold text-zinc-500">
-                      Optional +0.05 AZN/min, same logic as reservation settings.
+                      {pricingMode} mode {pricingAdjustment === 0 ? "keeps the regular rate." : `${pricingAdjustment > 0 ? "adds" : "subtracts"} ${formatMoney(Math.abs(pricingAdjustment))}/min.`}
                     </span>
                   </span>
-                  <span className={`h-6 w-11 rounded-full p-1 transition ${comfortMode ? "bg-red-500" : "bg-zinc-300"}`}>
-                    <span className={`block h-4 w-4 rounded-full bg-white transition ${comfortMode ? "translate-x-5" : ""}`} />
+                  <span className="mt-4 grid grid-cols-3 gap-2">
+                    <span className="rounded-lg bg-white px-3 py-2">
+                      <span className="block text-[10px] font-black uppercase text-zinc-400">Base</span>
+                      <span className="text-xs font-black">{formatMoney(baseRate)}</span>
+                    </span>
+                    <span className="rounded-lg bg-white px-3 py-2">
+                      <span className="block text-[10px] font-black uppercase text-zinc-400">Mode</span>
+                      <span className="text-xs font-black">{pricingMode}</span>
+                    </span>
+                    <span className="rounded-lg bg-zinc-950 px-3 py-2 text-white">
+                      <span className="block text-[10px] font-black uppercase text-white/45">Active</span>
+                      <span className="text-xs font-black">{formatMoney(finalRate)}</span>
+                    </span>
                   </span>
-                </button>
+                </div>
 
                 <div className="mt-6 rounded-xl bg-zinc-950 p-5 text-white">
                   <div className="flex justify-between text-sm font-bold text-white/55">
@@ -318,7 +324,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
               <h2 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Available cars and minute prices.</h2>
             </div>
             <span className="rounded-full bg-zinc-100 px-4 py-2 text-sm font-black text-zinc-600">
-              {bookableVehicles.length} EVs ready
+              {bookableVehicles.length} cars ready
             </span>
           </div>
 
@@ -340,7 +346,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-xl font-black">
-                          {vehicle.brand} {vehicle.model || "EV"}
+                          {vehicle.brand} {vehicle.model || "car"}
                         </h3>
                         <p className="mt-1 flex items-center gap-1 text-xs font-bold text-zinc-400">
                           <FiMapPin /> {vehicle.location.label}
@@ -373,7 +379,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                       onClick={() => handleReserve(vehicle)}
                       className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-5 py-3 text-sm font-black text-white transition hover:bg-red-500"
                     >
-                      Reserve this EV
+                      Reserve this car
                       <FiArrowRight />
                     </button>
                   </div>
@@ -401,7 +407,7 @@ const PricingPage = ({ user, onVehicleSelect }) => {
                   onClick={() => handleReserve()}
                   className="inline-flex items-center justify-center gap-2 rounded-md bg-red-500 px-5 py-3 text-sm font-black text-white transition hover:bg-red-600"
                 >
-                  Reserve selected EV
+                  Reserve selected car
                   <FiArrowRight />
                 </button>
                 <a

@@ -13,6 +13,12 @@ public class VehicleDto
     public int BatteryPercent { get; set; }
     public int RangeKm { get; set; }
     public decimal PricePerMinute { get; set; }
+    public decimal ActivePricePerMinute { get; set; }
+    public decimal DemandMultiplier { get; set; }
+    public decimal ZoneMultiplier { get; set; }
+    public decimal BatteryMultiplier { get; set; }
+    public decimal PricingAdjustmentAmount { get; set; }
+    public string PricingMode { get; set; } = "Standard";
     public string Currency { get; set; } = null!;
     public VehicleStatus Status { get; set; }
     public int Seats { get; set; }

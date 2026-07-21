@@ -251,7 +251,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                                         {user.avatarInitial || user.name?.charAt(0) || "F"}
                                     </span>
                                     <span className="text-sm font-black text-gray-800">
-                                        Привет, {user.name || "Farhad"}!
+                                        Hi, {user.name || "Farhad"}!
                                     </span>
                                 </button>
 
@@ -261,7 +261,7 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                                             href="/dashboard"
                                             className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-bold text-gray-700 transition hover:bg-red-50 hover:text-red-600"
                                         >
-                                            <FiUser /> Личный кабинет
+                                            <FiUser /> Profile
                                         </a>
                                         <button
                                             type="button"
@@ -271,14 +271,14 @@ const Navbar = ({ user, onLogout, onVehicleSelect }) => {
                                             }}
                                             className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-bold text-gray-700 transition hover:bg-red-50 hover:text-red-600"
                                         >
-                                            <FiCreditCard /> Способы оплаты
+                                            <FiCreditCard /> Payment methods
                                         </button>
                                         <button
                                             type="button"
                                             onClick={onLogout}
                                             className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-bold text-gray-700 transition hover:bg-red-50 hover:text-red-600"
                                         >
-                                            <FiLogOut /> Выйти
+                                            <FiLogOut /> Sign out
                                         </button>
                                     </div>
                                 )}

@@ -1,16 +1,20 @@
 using CarSharing.Application.Common.Interfaces;
 using CarSharing.Domain.Entities;
+using CarSharing.Domain.Enums;
 
 namespace CarSharing.Application.Pricing.Services;
 
 public sealed class DynamicPricingService : IDynamicPricingService
 {
-    private const int LowAvailableVehiclesInZone = 3;
-    private readonly IVehicleRepository _vehicleRepository;
+    private const decimal MinimumPricePerMinute = 0.05m;
+    private readonly IPricingPolicyRepository? _pricingPolicyRepository;
 
-    public DynamicPricingService(IVehicleRepository vehicleRepository)
+    public DynamicPricingService(
+        IVehicleRepository vehicleRepository,
+        IPricingPolicyRepository? pricingPolicyRepository = null)
     {
-        _vehicleRepository = vehicleRepository;
+        _ = vehicleRepository;
+        _pricingPolicyRepository = pricingPolicyRepository;
     }
 
     public async Task<DynamicPricingResult> CalculateAsync(
@@ -18,60 +22,24 @@ public sealed class DynamicPricingService : IDynamicPricingService
         DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
-        var availableInZone = await _vehicleRepository.CountAvailableByZoneAsync(vehicle.Zone, cancellationToken);
-        var demandMultiplier = CalculateDemandMultiplier(utcNow, availableInZone);
-        var zoneMultiplier = CalculateZoneMultiplier(vehicle.Zone);
-        var batteryMultiplier = CalculateBatteryMultiplier(vehicle.BatteryPercent);
+        var policy = _pricingPolicyRepository is null
+            ? null
+            : await _pricingPolicyRepository.GetCurrentAsync(cancellationToken);
+        var pricingMode = policy?.Mode ?? PricingMode.Standard;
+        var manualAdjustmentAmount = policy?.AdjustmentAmount ?? PricingPolicy.GetAdjustmentAmount(pricingMode);
         var finalPricePerMinute = RoundMoney(
-            vehicle.PricePerMinute * demandMultiplier * zoneMultiplier * batteryMultiplier);
+            Math.Max(
+                MinimumPricePerMinute,
+                vehicle.PricePerMinute + manualAdjustmentAmount));
 
         return new DynamicPricingResult(
             vehicle.PricePerMinute,
-            demandMultiplier,
-            zoneMultiplier,
-            batteryMultiplier,
+            1.00m,
+            1.00m,
+            1.00m,
+            manualAdjustmentAmount,
+            pricingMode.ToString(),
             finalPricePerMinute);
-    }
-
-    public static decimal CalculateDemandMultiplier(DateTime utcNow, int availableVehiclesInZone)
-    {
-        if (IsPeakHour(utcNow) && availableVehiclesInZone < LowAvailableVehiclesInZone)
-        {
-            return 1.25m;
-        }
-
-        return IsPeakHour(utcNow) ? 1.15m : 1.00m;
-    }
-
-    public static decimal CalculateZoneMultiplier(string zone)
-    {
-        var normalizedZone = zone.Trim().ToUpperInvariant();
-
-        return normalizedZone switch
-        {
-            "CENTER" or "CENTRAL" => 1.10m,
-            "SEASIDE" => 1.05m,
-            "AIRPORT" => 1.20m,
-            _ => 1.00m
-        };
-    }
-
-    public static decimal CalculateBatteryMultiplier(int batteryPercent)
-    {
-        return batteryPercent switch
-        {
-            >= 85 => 1.03m,
-            >= 65 => 1.00m,
-            >= 45 => 0.97m,
-            _ => 0.95m
-        };
-    }
-
-    private static bool IsPeakHour(DateTime utcNow)
-    {
-        var bakuTime = utcNow.AddHours(4);
-        var hour = bakuTime.Hour;
-        return hour is >= 8 and < 10 or >= 18 and < 21;
     }
 
     private static decimal RoundMoney(decimal value)

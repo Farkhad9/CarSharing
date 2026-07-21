@@ -91,14 +91,17 @@ public class ReservationService : IReservationService
             userId.Value,
             vehicle.Id,
             now,
-            now.AddMinutes(ReservationDurationMinutes));
+            now.AddMinutes(ReservationDurationMinutes),
+            request.DestinationLabel,
+            request.DestinationLatitude,
+            request.DestinationLongitude);
 
         vehicle.ChangeStatus(VehicleStatus.Reserved);
 
         await _reservationRepository.AddAsync(reservation, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<ReservationDto>.Success(_mapper.Map<ReservationDto>(reservation));
+        return Result<ReservationDto>.Success(MapReservation(reservation, vehicle));
     }
 
     public async Task<Result<IReadOnlyList<ReservationDto>>> GetMyActiveAsync(CancellationToken cancellationToken = default)
@@ -110,7 +113,15 @@ public class ReservationService : IReservationService
         }
 
         var reservations = await _reservationRepository.GetActiveByUserIdAsync(userId.Value, cancellationToken);
-        return Result<IReadOnlyList<ReservationDto>>.Success(_mapper.Map<IReadOnlyList<ReservationDto>>(reservations));
+        var items = new List<ReservationDto>();
+        foreach (var reservation in reservations)
+        {
+            items.Add(MapReservation(
+                reservation,
+                await _vehicleRepository.GetByIdAsync(reservation.VehicleId, cancellationToken)));
+        }
+
+        return Result<IReadOnlyList<ReservationDto>>.Success(items);
     }
 
     public async Task<Result<ReservationDto>> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -126,7 +137,9 @@ public class ReservationService : IReservationService
             return Result<ReservationDto>.Failure(Forbidden);
         }
 
-        return Result<ReservationDto>.Success(_mapper.Map<ReservationDto>(reservation));
+        return Result<ReservationDto>.Success(MapReservation(
+            reservation,
+            await _vehicleRepository.GetByIdAsync(reservation.VehicleId, cancellationToken)));
     }
 
     public async Task<Result<ReservationDto>> CancelAsync(
@@ -171,7 +184,7 @@ public class ReservationService : IReservationService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<ReservationDto>.Success(_mapper.Map<ReservationDto>(reservation));
+        return Result<ReservationDto>.Success(MapReservation(reservation, vehicle));
     }
 
     public async Task<Result<int>> ExpireActiveReservationsAsync(CancellationToken cancellationToken = default)
@@ -206,6 +219,29 @@ public class ReservationService : IReservationService
         }
 
         return _currentUserService.Role is UserRole.Admin or UserRole.SuperAdmin or UserRole.Staff;
+    }
+
+    private ReservationDto MapReservation(Reservation reservation, Vehicle? vehicle)
+    {
+        var dto = _mapper.Map<ReservationDto>(reservation);
+        if (vehicle is null)
+        {
+            return dto;
+        }
+
+        dto.Brand = vehicle.Brand;
+        dto.Model = vehicle.Model;
+        dto.PlateNumber = vehicle.PlateNumber;
+        dto.MainImageUrl = vehicle.MainImageUrl;
+        dto.GalleryImageUrl1 = vehicle.GalleryImageUrl1;
+        dto.GalleryImageUrl2 = vehicle.GalleryImageUrl2;
+        dto.GalleryImageUrl3 = vehicle.GalleryImageUrl3;
+        dto.LocationLabel = vehicle.LocationLabel;
+        dto.Zone = vehicle.Zone;
+        dto.Latitude = vehicle.Latitude;
+        dto.Longitude = vehicle.Longitude;
+        dto.PricePerMinute = vehicle.PricePerMinute;
+        return dto;
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)
