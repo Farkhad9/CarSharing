@@ -59,7 +59,8 @@ public sealed class VehicleManagementTests
     {
         var fixture = CreateFixture(UserRole.Admin);
         fixture.Vehicle.UpdateBattery(100);
-        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, DateTime.UtcNow.AddMinutes(-90)));
+        var startedAt = DateTime.UtcNow.AddMinutes(-90);
+        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, startedAt));
 
         var result = await fixture.Service.GetAllAsync();
 
@@ -68,6 +69,7 @@ public sealed class VehicleManagementTests
         Assert.Equal(VehicleStatus.Available, vehicle.Status);
         Assert.Equal(100, vehicle.BatteryPercent);
         Assert.Equal(400, vehicle.RangeKm);
+        Assert.Null(vehicle.ActiveTripStartedAt);
     }
 
     [Fact]
@@ -76,13 +78,15 @@ public sealed class VehicleManagementTests
         var fixture = CreateFixture(UserRole.Admin);
         fixture.Vehicle.UpdateBattery(80);
         fixture.Vehicle.ChangeStatus(VehicleStatus.InUse);
-        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, DateTime.UtcNow.AddMinutes(-50)));
+        var startedAt = DateTime.UtcNow.AddMinutes(-50);
+        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, startedAt));
 
         var result = await fixture.Service.GetAllAsync();
 
         Assert.True(result.IsSuccess);
         var vehicle = Assert.Single(result.Value!);
         Assert.Equal(VehicleStatus.InUse, vehicle.Status);
+        Assert.Equal(startedAt, vehicle.ActiveTripStartedAt);
         Assert.InRange(vehicle.BatteryPercent, 29, 30);
         Assert.Equal(vehicle.BatteryPercent * 4, vehicle.RangeKm);
     }

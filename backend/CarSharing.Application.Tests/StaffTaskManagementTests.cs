@@ -328,6 +328,9 @@ public sealed class StaffTaskManagementTests
 
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+
+        public Task DeleteAsync(User user, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class CurrentUser(Guid userId, UserRole role) : ICurrentUserService

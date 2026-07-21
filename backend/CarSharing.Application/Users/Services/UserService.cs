@@ -85,33 +85,39 @@ public class UserService : IUserService
     public async Task<Result<UserDto>> RegisterAsync(RegisterUserRequest request, CancellationToken cancellationToken = default)
     {
         var validationResult = await _registerUserValidator.ValidateAsync(request, cancellationToken);
-        if (!validationResult.IsValid)
+        var registrationErrors = validationResult.IsValid
+            ? new List<Error>()
+            : ToValidationErrors(validationResult).ToList();
+
+        var normalizedEmail = request.Email?.Trim().ToLowerInvariant() ?? string.Empty;
+        var normalizedPhone = string.IsNullOrWhiteSpace(request.Phone)
+            ? string.Empty
+            : NormalizeAzerbaijanPhone(request.Phone);
+        var normalizedDriverLicenseNumber = string.IsNullOrWhiteSpace(request.DriverLicenseNumber)
+            ? string.Empty
+            : NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
+
+        if (!string.IsNullOrWhiteSpace(normalizedEmail) &&
+            await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
         {
-            return Result<UserDto>.Failure(ToValidationErrors(validationResult));
+            registrationErrors.Add(EmailNotUnique);
         }
 
-        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
-        var normalizedPhone = NormalizeAzerbaijanPhone(request.Phone);
-        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
-        var uniquenessErrors = new List<Error>();
-        if (await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
+        if (!string.IsNullOrWhiteSpace(normalizedPhone) &&
+            await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
         {
-            uniquenessErrors.Add(EmailNotUnique);
+            registrationErrors.Add(PhoneNotUnique);
         }
 
-        if (await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
+        if (!string.IsNullOrWhiteSpace(normalizedDriverLicenseNumber) &&
+            await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
         {
-            uniquenessErrors.Add(PhoneNotUnique);
+            registrationErrors.Add(DriverLicenseNotUnique);
         }
 
-        if (await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
+        if (registrationErrors.Count > 0)
         {
-            uniquenessErrors.Add(DriverLicenseNotUnique);
-        }
-
-        if (uniquenessErrors.Count > 0)
-        {
-            return Result<UserDto>.Failure(uniquenessErrors);
+            return Result<UserDto>.Failure(registrationErrors);
         }
 
         var user = User.CreateRider(

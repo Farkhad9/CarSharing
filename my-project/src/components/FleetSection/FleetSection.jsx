@@ -161,7 +161,7 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
     if (storedUser?.emailVerified === false) {
       window.dispatchEvent(
         new CustomEvent("electrostreet:email-gate", {
-          detail: "Подтвердите email, чтобы забронировать автомобиль.",
+          detail: "Confirm your email to reserve a car.",
         })
       );
       return;
@@ -387,13 +387,13 @@ const FleetSection = ({ onVehicleSelect, onUserChange }) => {
         <div className="fixed inset-0 z-[120] overflow-y-auto bg-zinc-950/70 backdrop-blur-md">
           <AuthModal
             onClose={() => setAuthVehicle(null)}
-            reservationNotice="Для резервации автомобиля необходимо войти или зарегистрироваться"
+            reservationNotice="Sign in or create an account to reserve a car."
             onAuthSuccess={(nextUser) => {
               onUserChange?.(nextUser);
               if (nextUser.emailVerified === false) {
                 window.dispatchEvent(
                   new CustomEvent("electrostreet:email-gate", {
-                    detail: "Сначала подтвердите email по ссылке из письма.",
+                    detail: "Confirm your email with the link we sent before reserving a car.",
                   })
                 );
                 setAuthVehicle(null);

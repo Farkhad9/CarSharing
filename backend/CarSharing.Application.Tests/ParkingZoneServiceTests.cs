@@ -38,6 +38,25 @@ public sealed class ParkingZoneServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithEastAbsheronBoundary_IsAccepted()
+    {
+        var fixture = CreateFixture();
+        var request = CreateRequest(ParkingZoneType.Parking);
+        request.Boundary =
+        [
+            new ParkingZonePointDto(40.3615, 50.2510),
+            new ParkingZonePointDto(40.3744, 50.2986),
+            new ParkingZonePointDto(40.3387, 50.3220),
+            new ParkingZonePointDto(40.3228, 50.2671)
+        ];
+
+        var result = await fixture.Service.CreateAsync(request);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(fixture.Repository.Zones);
+    }
+
+    [Fact]
     public async Task DeactivateAsync_ForExistingZone_MarksInactive()
     {
         var fixture = CreateFixture();

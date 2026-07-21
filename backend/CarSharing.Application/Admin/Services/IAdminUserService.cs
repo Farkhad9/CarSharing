@@ -40,4 +40,6 @@ public interface IAdminUserService
         Guid id,
         UpdateUserVerificationRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<Result<AdminUserDto>> DeleteUserAsync(Guid id, CancellationToken cancellationToken = default);
 }

@@ -226,6 +226,9 @@ public sealed class AdminStatisticsTests
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+
+        public Task DeleteAsync(User user, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class StaffTaskRepo(IReadOnlyList<StaffTask> tasks) : IStaffTaskRepository

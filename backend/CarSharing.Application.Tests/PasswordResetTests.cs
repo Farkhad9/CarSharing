@@ -186,6 +186,29 @@ public sealed class PasswordResetTests
     }
 
     [Fact]
+    public async Task RegisterAsync_WithDuplicateFields_ReturnsAllUniquenessErrors()
+    {
+        var existingUser = CreateUser();
+        var fixture = CreateFixture(existingUser);
+
+        var result = await fixture.Service.RegisterAsync(new RegisterUserRequest
+        {
+            FirstName = "New",
+            LastName = "Rider",
+            Email = existingUser.Email,
+            Phone = existingUser.Phone,
+            Age = 25,
+            Password = "Password123!",
+            DriverLicenseNumber = existingUser.DriverLicenseNumber
+        });
+
+        Assert.True(result.IsFailure);
+        Assert.Contains(result.Errors, error => error.Code == "User.EmailNotUnique");
+        Assert.Contains(result.Errors, error => error.Code == "User.PhoneNotUnique");
+        Assert.Contains(result.Errors, error => error.Code == "User.DriverLicenseNotUnique");
+    }
+
+    [Fact]
     public async Task SetPasswordAsync_ForExternalOnlyUser_SetsPassword()
     {
         var fixture = CreateFixture();
@@ -337,6 +360,12 @@ public sealed class PasswordResetTests
         public Task AddAsync(User user, CancellationToken cancellationToken = default)
         {
             Items.Add(user);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(User user, CancellationToken cancellationToken = default)
+        {
+            Items.Remove(user);
             return Task.CompletedTask;
         }
     }

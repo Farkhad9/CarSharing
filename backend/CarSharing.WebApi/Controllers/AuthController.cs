@@ -55,7 +55,6 @@ public class AuthController : ControllerBase
         var verificationUrl = BuildEmailVerificationUrl(user.Id);
         var smtpEnabled = _configuration.GetValue<bool>("Smtp:Enabled");
         var emailSent = false;
-        var exposeDevelopmentVerificationLink = _configuration.GetValue<bool>("Smtp:ExposeDevelopmentVerificationLink");
         string? emailDeliveryError = null;
 
         try
@@ -70,17 +69,14 @@ public class AuthController : ControllerBase
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _logger.LogWarning(exception, "Email verification delivery failed for {Email}.", user.Email);
-            emailDeliveryError = "Verification email could not be delivered. Please try again later.";
+            emailDeliveryError = BuildEmailDeliveryError(exception);
         }
 
         return Created(string.Empty, new
         {
             user,
             emailSent,
-            emailDeliveryError,
-            emailVerificationUrl = !_environment.IsDevelopment() || !exposeDevelopmentVerificationLink
-                ? null
-                : verificationUrl
+            emailDeliveryError
         });
     }
 
@@ -221,7 +217,7 @@ public class AuthController : ControllerBase
             _logger.LogWarning(exception, "Password reset request could not be completed.");
             return StatusCode(
                 StatusCodes.Status503ServiceUnavailable,
-                new { errors = new[] { new Error("Email.DeliveryFailed", "Reset email could not be sent. Please try again later.") } });
+                new { errors = new[] { new Error("Email.DeliveryFailed", BuildPasswordResetDeliveryError(exception)) } });
         }
 
         return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
@@ -285,6 +281,34 @@ public class AuthController : ControllerBase
             : origin.TrimEnd('/');
 
         return $"{frontendBaseUrl}/?verifyEmail={userId}";
+    }
+
+    private string BuildEmailDeliveryError(Exception exception)
+    {
+        const string genericMessage = "Verification email could not be delivered. Please try again later.";
+        if (!_environment.IsDevelopment())
+        {
+            return genericMessage;
+        }
+
+        var detail = exception.GetBaseException().Message;
+        return string.IsNullOrWhiteSpace(detail)
+            ? genericMessage
+            : $"{genericMessage} SMTP detail: {detail}";
+    }
+
+    private string BuildPasswordResetDeliveryError(Exception exception)
+    {
+        const string genericMessage = "Reset email could not be sent. Please try again later.";
+        if (!_environment.IsDevelopment())
+        {
+            return genericMessage;
+        }
+
+        var detail = exception.GetBaseException().Message;
+        return string.IsNullOrWhiteSpace(detail)
+            ? genericMessage
+            : $"{genericMessage} SMTP detail: {detail}";
     }
 
     private string BuildPasswordResetBaseUrl()

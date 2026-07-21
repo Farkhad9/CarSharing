@@ -34,7 +34,6 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
   const [licenseNumber, setLicenseNumber] = useState("AZE1234567");
   const [age, setAge] = useState("25");
   const [email, setEmail] = useState(initialAuthMode === "forgot" ? "" : "farhad@electrostreet.az");
-  const [verificationLink, setVerificationLink] = useState("");
   const [verificationNotice, setVerificationNotice] = useState("");
   const [resetToken] = useState(() => initialParams.get("token") || "");
   const [resetCode, setResetCode] = useState("");
@@ -101,14 +100,19 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
     event.preventDefault();
     setAuthError("");
     setVerificationNotice("");
-    if (isRegister && password !== confirmPassword) {
-      setAuthError("Passwords do not match.");
-      return;
-    }
     const parsedAge = Number(age);
-    if (isRegister && (!Number.isInteger(parsedAge) || parsedAge < 18 || parsedAge > 65)) {
-      setAuthError("Age must be between 18 and 65.");
-      return;
+    if (isRegister) {
+      const localErrors = [];
+      if (password !== confirmPassword) {
+        localErrors.push("Passwords do not match.");
+      }
+      if (!Number.isInteger(parsedAge) || parsedAge < 18 || parsedAge > 65) {
+        localErrors.push("Age must be between 18 and 65.");
+      }
+      if (localErrors.length > 0) {
+        setAuthError(localErrors.join("\n"));
+        return;
+      }
     }
     setIsSubmitting(true);
     try {
@@ -122,16 +126,11 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
           password,
           driverLicenseNumber: licenseNumber.replace(/[^a-zA-Z0-9]/g, ""),
         });
-        if (registration?.emailVerificationUrl) {
-          setVerificationLink("");
-          setVerificationNotice(
-            registration.emailSent
-              ? "We sent a verification email. Open the link in your inbox to activate booking and payments."
-              : registration.emailDeliveryError || "We could not send the verification email right now. Please try again later."
-          );
-          return;
-        }
-        setVerificationNotice("We sent a verification email. Please confirm it before signing in.");
+        setVerificationNotice(
+          registration?.emailSent
+            ? "We sent a verification email. Please confirm it before signing in."
+            : registration?.emailDeliveryError || "We could not send the verification email right now. Please try again later."
+        );
         return;
       }
       const user = await authApi.login(email, password);
@@ -231,24 +230,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
             <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-zinc-500">
               {verificationNotice || `We sent a verification email to ${email}. Booking and payments stay locked until email is confirmed.`}
             </p>
-            <div className="hidden">
-              <p className="text-xs font-black uppercase tracking-wide text-red-500">
-                Demo email link
-              </p>
-              <a
-                href={verificationLink}
-                className="mt-2 block break-all text-sm font-bold text-zinc-900 underline decoration-red-300 underline-offset-4"
-              >
-                {verificationLink}
-              </a>
-            </div>
             <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
-              <a
-                href={verificationLink}
-                className="hidden"
-              >
-                <span className="text-white">Confirm email</span>
-              </a>
               <button
                 type="button"
                 onClick={goHome}
@@ -758,7 +740,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
 
         <section className="flex flex-1 items-center justify-center py-8">
           <div
-            className={`auth-card relative min-h-[620px] w-full max-w-[940px] overflow-hidden rounded-[28px] bg-white shadow-2xl shadow-red-950/10 ring-1 ring-zinc-200/70 ${
+            className={`auth-card relative min-h-[700px] w-full max-w-[1040px] overflow-hidden rounded-[28px] bg-white shadow-2xl shadow-red-950/10 ring-1 ring-zinc-200/70 ${
               isRegister ? "auth-register-active" : ""
             }`}
           >
@@ -770,7 +752,7 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
             <div className="auth-form-panel auth-sign-up flex items-center justify-center px-7 py-10 sm:px-10">
               <form
                 onSubmit={handleAuthSubmit}
-                className="flex w-full max-w-[340px] flex-col items-center"
+                className="flex w-full max-w-[390px] flex-col items-center"
               >
                 <h1 className="text-center text-3xl font-black leading-tight">
                   Create Account
@@ -878,7 +860,13 @@ const AuthModal = ({ isOpen = true, onClose, onAuthSuccess, reservationNotice })
                 >
                   {isSubmitting ? "Creating account..." : "Sign Up"}
                 </button>
-                {authError && <p className="mt-4 whitespace-pre-line text-center text-sm font-bold text-red-600">{authError}</p>}
+                {authError && (
+                  <div className="mt-4 w-full rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-center text-xs font-bold leading-5 text-red-600">
+                    {authError.split("\n").map((message) => (
+                      <p key={message}>{message}</p>
+                    ))}
+                  </div>
+                )}
 
                 <button
                   type="button"

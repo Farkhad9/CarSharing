@@ -68,4 +68,7 @@ export const adminUsersApi = {
     method: "PATCH",
     body: JSON.stringify({ status }),
   }),
+  deleteUser: (id) => apiRequest(`/api/admin/users/${id}`, {
+    method: "DELETE",
+  }),
 };

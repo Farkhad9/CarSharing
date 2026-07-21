@@ -6,6 +6,7 @@ using CarSharing.WebApi.Hubs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace CarSharing.WebApi.Controllers;
 
@@ -16,13 +17,16 @@ public sealed class AdminUsersController : ControllerBase
 {
     private readonly IAdminUserService _adminUserService;
     private readonly IHubContext<OperationsHub> _operationsHub;
+    private readonly ILogger<AdminUsersController> _logger;
 
     public AdminUsersController(
         IAdminUserService adminUserService,
-        IHubContext<OperationsHub> operationsHub)
+        IHubContext<OperationsHub> operationsHub,
+        ILogger<AdminUsersController> logger)
     {
         _adminUserService = adminUserService;
         _operationsHub = operationsHub;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -46,7 +50,17 @@ public sealed class AdminUsersController : ControllerBase
         CreateStaffUserRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _adminUserService.CreateStaffAsync(request, cancellationToken);
+        Result<AdminUserDto> result;
+        try
+        {
+            result = await _adminUserService.CreateStaffAsync(request, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (TryMapUniqueUserConflict(exception, out var conflictError))
+        {
+            _logger.LogWarning(exception, "Staff creation hit a user uniqueness conflict.");
+            return Conflict(new { errors = new[] { conflictError } });
+        }
+
         if (result.IsFailure)
         {
             return ToErrorResponse(result.Errors);
@@ -63,7 +77,17 @@ public sealed class AdminUsersController : ControllerBase
         CreateAdminUserRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _adminUserService.CreateAdminAsync(request, cancellationToken);
+        Result<AdminUserDto> result;
+        try
+        {
+            result = await _adminUserService.CreateAdminAsync(request, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (TryMapUniqueUserConflict(exception, out var conflictError))
+        {
+            _logger.LogWarning(exception, "Admin creation hit a user uniqueness conflict.");
+            return Conflict(new { errors = new[] { conflictError } });
+        }
+
         if (result.IsFailure)
         {
             return ToErrorResponse(result.Errors);
@@ -122,6 +146,20 @@ public sealed class AdminUsersController : ControllerBase
         return await ToUserChangeResponseAsync(result, cancellationToken);
     }
 
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.SuperAdminOnly)]
+    public async Task<IActionResult> DeleteUser(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _adminUserService.DeleteUserAsync(id, cancellationToken);
+        if (result.IsFailure)
+        {
+            return ToErrorResponse(result.Errors);
+        }
+
+        await BroadcastUsersChangedAsync(cancellationToken);
+        return NoContent();
+    }
+
     private async Task<IActionResult> ToUserChangeResponseAsync(
         Result<AdminUserDto> result,
         CancellationToken cancellationToken)
@@ -140,6 +178,11 @@ public sealed class AdminUsersController : ControllerBase
     {
         await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
             .SendAsync("AdminUserChanged", user, cancellationToken);
+        await BroadcastUsersChangedAsync(cancellationToken);
+    }
+
+    private async Task BroadcastUsersChangedAsync(CancellationToken cancellationToken)
+    {
         await _operationsHub.Clients.Group(OperationsHub.AdminsGroup)
             .SendAsync("AdminDataChanged", new { scope = "users" }, cancellationToken);
     }
@@ -156,7 +199,7 @@ public sealed class AdminUsersController : ControllerBase
             return NotFound(new { errors });
         }
 
-        if (errors.Any(error => error.Code == "AdminUsers.EmailNotUnique"))
+        if (errors.Any(error => error.Code is "AdminUsers.EmailNotUnique" or "AdminUsers.PhoneNotUnique" or "AdminUsers.DriverLicenseNotUnique"))
         {
             return Conflict(new { errors });
         }
@@ -172,5 +215,30 @@ public sealed class AdminUsersController : ControllerBase
         }
 
         return BadRequest(new { errors });
+    }
+
+    private static bool TryMapUniqueUserConflict(DbUpdateException exception, out Error error)
+    {
+        var message = exception.GetBaseException().Message;
+        if (message.Contains("IX_Users_Email", StringComparison.OrdinalIgnoreCase))
+        {
+            error = new Error("AdminUsers.EmailNotUnique", "User with this email already exists.");
+            return true;
+        }
+
+        if (message.Contains("IX_Users_Phone", StringComparison.OrdinalIgnoreCase))
+        {
+            error = new Error("AdminUsers.PhoneNotUnique", "User with this phone number already exists.");
+            return true;
+        }
+
+        if (message.Contains("IX_Users_DriverLicenseNumber", StringComparison.OrdinalIgnoreCase))
+        {
+            error = new Error("AdminUsers.DriverLicenseNotUnique", "User with this driver license number already exists.");
+            return true;
+        }
+
+        error = new Error("AdminUsers.NotUnique", "User already exists.");
+        return false;
     }
 }

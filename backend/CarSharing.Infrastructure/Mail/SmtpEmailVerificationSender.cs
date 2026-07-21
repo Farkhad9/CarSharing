@@ -78,7 +78,7 @@ public sealed class SmtpEmailVerificationSender : IEmailVerificationSender
                         <tr>
                           <td align="center" style="padding:22px 28px 10px;">
                             <a href="{{safeUrl}}" style="display:inline-block;width:100%;max-width:260px;border-radius:12px;background:#ef4444;color:#ffffff;text-decoration:none;text-align:center;padding:14px 18px;font-size:14px;font-weight:800;">
-                              Нажмите для подтверждения
+                              Confirm email
                             </a>
                           </td>
                         </tr>

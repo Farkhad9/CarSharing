@@ -29,6 +29,7 @@ public class VehicleDto
     public string? GalleryImageUrl2 { get; set; }
     public string? GalleryImageUrl3 { get; set; }
     public Guid? ChargingStationId { get; set; }
+    public DateTime? ActiveTripStartedAt { get; set; }
     public string LocationLabel { get; set; } = null!;
     public string Zone { get; set; } = null!;
     public double Latitude { get; set; }

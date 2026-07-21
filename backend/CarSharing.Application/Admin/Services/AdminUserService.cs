@@ -18,6 +18,8 @@ public sealed class AdminUserService : IAdminUserService
     private static readonly Error DriverLicenseNotUnique = new("AdminUsers.DriverLicenseNotUnique", "User with this driver license number already exists.");
     private static readonly Error CannotDisableSelf = new("AdminUsers.CannotDisableSelf", "You cannot disable your own account.");
     private static readonly Error CannotChangeOwnRole = new("AdminUsers.CannotChangeOwnRole", "You cannot change your own role.");
+    private static readonly Error CannotDeleteSelf = new("AdminUsers.CannotDeleteSelf", "You cannot permanently delete your own account.");
+    private static readonly Error CannotDeleteAdminAccount = new("AdminUsers.CannotDeleteAdminAccount", "Only Rider and Staff accounts can be permanently deleted.");
     private static readonly Error CannotManageSuperAdmin = new("AdminUsers.CannotManageSuperAdmin", "Only SuperAdmin can manage a SuperAdmin account.");
     private static readonly Error CannotManageAdminAccount = new("AdminUsers.CannotManageAdminAccount", "Only SuperAdmin can manage admin accounts.");
     private static readonly Error CannotVerifyInternalUser = new("AdminUsers.CannotVerifyInternalUser", "Internal users do not use rider verification.");
@@ -394,6 +396,37 @@ public sealed class AdminUserService : IAdminUserService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<AdminUserDto>.Success(ToDto(user));
+    }
+
+    public async Task<Result<AdminUserDto>> DeleteUserAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var access = RequireSuperAdmin();
+        if (access is not null)
+        {
+            return Result<AdminUserDto>.Failure(access);
+        }
+
+        var user = await _userRepository.GetByIdAsync(id, cancellationToken);
+        if (user is null)
+        {
+            return Result<AdminUserDto>.Failure(NotFound);
+        }
+
+        if (user.Id == _currentUser.UserId)
+        {
+            return Result<AdminUserDto>.Failure(CannotDeleteSelf);
+        }
+
+        if (user.Role is not (UserRole.Rider or UserRole.Staff))
+        {
+            return Result<AdminUserDto>.Failure(CannotDeleteAdminAccount);
+        }
+
+        var deletedUser = ToDto(user);
+        await _userRepository.DeleteAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return Result<AdminUserDto>.Success(deletedUser);
     }
 
     private Error? RequireAdmin()
