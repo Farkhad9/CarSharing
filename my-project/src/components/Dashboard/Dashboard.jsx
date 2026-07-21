@@ -35,6 +35,17 @@ import { useConfirmDialog } from "../ui/useConfirmDialog";
 import { paymentApi } from "../../api/paymentApi";
 import { invoiceApi } from "../../api/invoiceApi";
 import { reservationApi } from "../../api/reservationApi";
+import {
+  SUPPORT_MESSAGE_SENDER_TYPES,
+  SUPPORT_TICKET_CATEGORIES,
+  SUPPORT_TICKET_PRIORITIES,
+  SUPPORT_TICKET_STATUSES,
+  SUPPORT_REALTIME_EVENTS,
+  createSupportConnection,
+  startSupportConnection,
+  stopSupportConnection,
+  supportApi,
+} from "../../api/supportApi";
 import { tripApi } from "../../api/tripApi";
 import { tripReviewsApi } from "../../api/tripReviewsApi";
 import { userApi } from "../../api/userApi";
@@ -148,16 +159,22 @@ const supportQuickActions = [
     id: "unlock",
     title: "Car will not unlock",
     draft: "I am next to the car and I need help unlocking it.",
+    category: SUPPORT_TICKET_CATEGORIES.VehicleAccess,
+    priority: SUPPORT_TICKET_PRIORITIES.Urgent,
   },
   {
     id: "billing",
     title: "Payment question",
     draft: "I need help with a charge, hold, or trip price.",
+    category: SUPPORT_TICKET_CATEGORIES.Billing,
+    priority: SUPPORT_TICKET_PRIORITIES.High,
   },
   {
     id: "vehicle",
     title: "Problem with the car",
     draft: "I found a problem with the car and want support to check it.",
+    category: SUPPORT_TICKET_CATEGORIES.VehicleCondition,
+    priority: SUPPORT_TICKET_PRIORITIES.High,
   },
 ];
 
@@ -239,13 +256,23 @@ const formatSupportTime = (value) =>
     minute: "2-digit",
   });
 
-const createSupportMessage = (body, sender = "user", author = "You") => ({
-  id: `support-message-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-  body,
-  sender,
-  author,
-  createdAt: new Date().toISOString(),
-});
+const supportStatusMeta = {
+  [SUPPORT_TICKET_STATUSES.Open]: { label: "active", className: "bg-emerald-100 text-emerald-700" },
+  [SUPPORT_TICKET_STATUSES.WaitingForStaff]: { label: "waiting", className: "bg-amber-100 text-amber-700" },
+  [SUPPORT_TICKET_STATUSES.WaitingForRider]: { label: "reply", className: "bg-blue-100 text-blue-700" },
+  [SUPPORT_TICKET_STATUSES.EscalatedToAdmin]: { label: "admin", className: "bg-red-100 text-red-700" },
+  [SUPPORT_TICKET_STATUSES.Resolved]: { label: "resolved", className: "bg-zinc-100 text-zinc-600" },
+  [SUPPORT_TICKET_STATUSES.Closed]: { label: "closed", className: "bg-zinc-100 text-zinc-600" },
+};
+
+const upsertSupportTicket = (items, nextTicket) => {
+  const exists = items.some((ticket) => ticket.id === nextTicket.id);
+  const nextItems = exists
+    ? items.map((ticket) => (ticket.id === nextTicket.id ? nextTicket : ticket))
+    : [nextTicket, ...items];
+
+  return [...nextItems].sort((first, second) => getBackendTime(second.lastMessageAt) - getBackendTime(first.lastMessageAt));
+};
 
 const prepareTripPhoto = (file) =>
   new Promise((resolve, reject) => {
@@ -283,24 +310,6 @@ const prepareTripPhoto = (file) =>
     };
     reader.readAsDataURL(file);
   });
-
-const getSupportReply = (text) => {
-  const normalizedText = text.toLowerCase();
-
-  if (normalizedText.includes("unlock") || normalizedText.includes("door")) {
-    return "We can see your unlock request. Please try the unlock action again in the cabinet. If it still fails, an operator can remotely open the car.";
-  }
-
-  if (normalizedText.includes("battery") || normalizedText.includes("charge")) {
-    return "We are checking the battery status and nearby charging options. Support can also suggest the closest available EV.";
-  }
-
-  if (normalizedText.includes("charge") || normalizedText.includes("hold") || normalizedText.includes("price")) {
-    return "Your billing request was forwarded. We will answer in this chat after checking the payment details.";
-  }
-
-  return "Your message was received. A support operator will continue the conversation in this chat.";
-};
 
 const getReservationVehicle = (reservation, backendVehicles = []) => {
   if (!reservation) return null;
@@ -462,30 +471,14 @@ const Dashboard = ({ onLogout }) => {
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
-  const [supportTickets, setSupportTickets] = useState(() =>
-    getStoredJson("electroStreetSupportTickets", [
-      {
-        id: "support-ticket-welcome",
-        subject: "General support chat",
-        status: "open",
-        updatedAt: new Date().toISOString(),
-        messages: [
-          {
-            id: "support-message-welcome",
-            sender: "support",
-            author: "ElectroStreet Support",
-            body: "Hello. If you have a problem with a car, payment, or booking, write here and support will help.",
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      },
-    ])
-  );
-  const [activeSupportTicketId, setActiveSupportTicketId] = useState(() => {
-    const storedTickets = getStoredJson("electroStreetSupportTickets", null);
-    return storedTickets?.[0]?.id || "support-ticket-welcome";
-  });
+  const [supportTickets, setSupportTickets] = useState([]);
+  const [activeSupportTicketId, setActiveSupportTicketId] = useState(null);
   const [supportDraft, setSupportDraft] = useState("");
+  const [supportError, setSupportError] = useState("");
+  const [supportNotice, setSupportNotice] = useState("");
+  const [isLoadingSupport, setIsLoadingSupport] = useState(false);
+  const [isSendingSupportMessage, setIsSendingSupportMessage] = useState(false);
+  const [supportDraftMeta, setSupportDraftMeta] = useState(null);
   const [tripNotice, setTripNotice] = useState("");
   const [timerNow, setTimerNow] = useState(() => Date.now());
   const [userLocation, setUserLocation] = useState(DEFAULT_USER_LOCATION);
@@ -519,8 +512,8 @@ const Dashboard = ({ onLogout }) => {
 
   const licenseInputRef = useRef(null);
   const passportInputRef = useRef(null);
-  const supportReplyTimersRef = useRef([]);
   const autoPayInFlightRef = useRef(false);
+  const supportMessagesRef = useRef(null);
 
   const activeReservations = useMemo(() => {
     return reservations.map((reservation) => {
@@ -592,6 +585,7 @@ const Dashboard = ({ onLogout }) => {
     () => supportTickets.find((ticket) => ticket.id === activeSupportTicketId) || supportTickets[0] || null,
     [activeSupportTicketId, supportTickets]
   );
+  const displayedSupportTicket = supportDraftMeta ? null : activeSupportTicket;
   const profileBalance = Number(paymentBalance?.balance ?? user.balance ?? 0);
   const profilePendingHold = Number(user.pendingHold ?? 0);
   const accountVerificationDisplay = useMemo(() => getAccountVerificationDisplay(user), [user]);
@@ -699,9 +693,26 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const persistSupportTickets = (nextTickets) => {
-    setSupportTickets(nextTickets);
-    localStorage.setItem("electroStreetSupportTickets", JSON.stringify(nextTickets));
+  const loadSupportTickets = async (options = {}) => {
+    if (!localStorage.getItem("electroStreetAccessToken")) return;
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingSupport(true);
+    setSupportError("");
+
+    try {
+      const tickets = await supportApi.getMyTickets();
+      const normalizedTickets = Array.isArray(tickets) ? tickets : [];
+      setSupportTickets(normalizedTickets);
+      setActiveSupportTicketId((currentId) =>
+        normalizedTickets.some((ticket) => ticket.id === currentId)
+          ? currentId
+          : normalizedTickets[0]?.id || null
+      );
+    } catch (error) {
+      setSupportError(error.message || "Support tickets could not be loaded.");
+    } finally {
+      if (!silent) setIsLoadingSupport(false);
+    }
   };
 
   const loadPayments = async () => {
@@ -822,6 +833,7 @@ const Dashboard = ({ onLogout }) => {
       loadUserProfile();
       loadRideState({ silent: true });
       loadPayments();
+      loadSupportTickets();
       const stripeResult = new URLSearchParams(window.location.search).get("stripe");
       if (stripeResult === "success") {
         const pendingReview = readPendingTripReview();
@@ -859,6 +871,7 @@ const Dashboard = ({ onLogout }) => {
       loadUserProfile();
       loadRideState({ silent: true });
       loadPayments();
+      loadSupportTickets({ silent: true });
     }, 15000);
 
     return () => window.clearInterval(timer);
@@ -999,20 +1012,53 @@ const Dashboard = ({ onLogout }) => {
   }, [activeReservations, hasResolvedUserLocation, userLocation]);
 
   useEffect(() => {
+    if (supportDraftMeta) return undefined;
+
     if (!supportTickets.some((ticket) => ticket.id === activeSupportTicketId) && supportTickets[0]) {
       const selectTicketTimer = window.setTimeout(() => setActiveSupportTicketId(supportTickets[0].id), 0);
       return () => window.clearTimeout(selectTicketTimer);
     }
 
-    return undefined;
-  }, [activeSupportTicketId, supportTickets]);
+    if (!supportTickets.length && activeSupportTicketId) {
+      const clearTicketTimer = window.setTimeout(() => setActiveSupportTicketId(null), 0);
+      return () => window.clearTimeout(clearTicketTimer);
+    }
 
-  useEffect(
-    () => () => {
-      supportReplyTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
-    },
-    []
-  );
+    return undefined;
+  }, [activeSupportTicketId, supportDraftMeta, supportTickets]);
+
+  useEffect(() => {
+    const container = supportMessagesRef.current;
+    if (!container) return;
+
+    container.scrollTop = container.scrollHeight;
+  }, [displayedSupportTicket?.id, displayedSupportTicket?.messages.length, supportDraftMeta]);
+
+  useEffect(() => {
+    if (!localStorage.getItem("electroStreetAccessToken")) return undefined;
+
+    const connection = createSupportConnection();
+    const handleTicketUpdate = (ticket) => {
+      setSupportTickets((items) => upsertSupportTicket(items, ticket));
+      setActiveSupportTicketId((currentId) => currentId || ticket.id);
+      setSupportNotice("");
+      setSupportError("");
+    };
+
+    connection.on(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+    connection.onreconnecting(() => setSupportNotice("Loading support updates..."));
+    connection.onreconnected(() => setSupportNotice(""));
+    connection.onclose(() => setSupportNotice(""));
+
+    startSupportConnection(connection).catch(() => {
+      setSupportNotice("");
+    });
+
+    return () => {
+      connection.off(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+      stopSupportConnection(connection).catch(() => {});
+    };
+  }, []);
 
   const cancelReservation = async (reservationId) => {
     const reservationToCancel = reservations.find(
@@ -1489,52 +1535,69 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const handleQuickSupportAction = (action) => {
-    setActiveTab("support");
-    setSupportDraft(action.draft);
+  const getSupportContext = () => {
+    const vehicle = activeTrip || activeReservations[0] || null;
+    if (!vehicle) return {};
+
+    return {
+      contextType: vehicle.tripId ? "trip" : "reservation",
+      contextId: vehicle.tripId || vehicle.reservationId || vehicle.id || null,
+      vehicleId: vehicle.vehicleId || null,
+      reservationId: vehicle.reservationId || vehicle.id || null,
+      tripId: vehicle.tripId || null,
+    };
   };
 
-  const handleSendSupportMessage = () => {
+  const getDraftCategory = () => {
+    if (supportDraftMeta?.category) return supportDraftMeta.category;
+    const text = supportDraft.toLowerCase();
+    if (text.includes("payment") || text.includes("charge") || text.includes("price") || text.includes("hold")) {
+      return SUPPORT_TICKET_CATEGORIES.Billing;
+    }
+    if (text.includes("unlock") || text.includes("door")) return SUPPORT_TICKET_CATEGORIES.VehicleAccess;
+    if (text.includes("finish") || text.includes("completion")) return SUPPORT_TICKET_CATEGORIES.TripCompletion;
+    if (text.includes("car") || text.includes("battery") || text.includes("damage")) return SUPPORT_TICKET_CATEGORIES.VehicleCondition;
+    return SUPPORT_TICKET_CATEGORIES.General;
+  };
+
+  const handleQuickSupportAction = (action) => {
+    setActiveTab("support");
+    setActiveSupportTicketId(null);
+    setSupportDraft(action.draft);
+    setSupportDraftMeta(action);
+    setSupportError("");
+    setSupportNotice("");
+  };
+
+  const handleSendSupportMessage = async () => {
     const body = supportDraft.trim();
-    if (!body || !activeSupportTicket) return;
+    if (!body || isSendingSupportMessage) return;
 
-    const nextMessage = createSupportMessage(body);
-    const nextTickets = supportTickets.map((ticket) =>
-      ticket.id === activeSupportTicket.id
-        ? {
-            ...ticket,
-            status: "waiting",
-            updatedAt: nextMessage.createdAt,
-            messages: [...ticket.messages, nextMessage],
-          }
-        : ticket
-    );
+    setIsSendingSupportMessage(true);
+    setSupportError("");
+    setSupportNotice("");
 
-    persistSupportTickets(nextTickets);
-    setSupportDraft("");
+    try {
+      const shouldCreateTicket = Boolean(supportDraftMeta) || !activeSupportTicket;
+      const ticket = shouldCreateTicket
+        ? await supportApi.createTicket({
+            category: getDraftCategory(),
+            priority: supportDraftMeta?.priority || SUPPORT_TICKET_PRIORITIES.Normal,
+            subject: supportDraftMeta?.title || "Support request",
+            initialMessage: body,
+            ...getSupportContext(),
+          })
+        : await supportApi.sendMessage(activeSupportTicket.id, { body });
 
-    const timerId = window.setTimeout(() => {
-      setSupportTickets((currentTickets) => {
-        const updatedTickets = currentTickets.map((ticket) =>
-          ticket.id === activeSupportTicket.id
-            ? {
-                ...ticket,
-                status: "open",
-                updatedAt: new Date().toISOString(),
-                messages: [
-                  ...ticket.messages,
-                  createSupportMessage(getSupportReply(body), "support", "ElectroStreet Support"),
-                ],
-              }
-            : ticket
-        );
-
-        localStorage.setItem("electroStreetSupportTickets", JSON.stringify(updatedTickets));
-        return updatedTickets;
-      });
-    }, 1200);
-
-    supportReplyTimersRef.current.push(timerId);
+      setSupportTickets((items) => upsertSupportTicket(items, ticket));
+      setActiveSupportTicketId(ticket.id);
+      setSupportDraft("");
+      setSupportDraftMeta(null);
+    } catch (error) {
+      setSupportError(error.message || "Support message could not be sent.");
+    } finally {
+      setIsSendingSupportMessage(false);
+    }
   };
 
   const renderReservationMap = (vehicle) => (
@@ -2323,44 +2386,85 @@ const Dashboard = ({ onLogout }) => {
         </div>
 
         <div className="mt-6 grid gap-3">
+          {supportError && (
+            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+              {supportError}
+            </p>
+          )}
+
+          {supportNotice && (
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+              {supportNotice}
+            </p>
+          )}
+
+          {isLoadingSupport && !supportTickets.length && (
+            <p className="rounded-2xl border border-zinc-100 bg-white px-4 py-3 text-sm font-bold text-zinc-500">
+              Loading support tickets...
+            </p>
+          )}
+
           {supportTickets.map((ticket) => {
-            const isActive = ticket.id === activeSupportTicket?.id;
+            const isActive = !supportDraftMeta && ticket.id === activeSupportTicket?.id;
             const lastMessage = ticket.messages[ticket.messages.length - 1];
+            const status = supportStatusMeta[ticket.status] || supportStatusMeta[SUPPORT_TICKET_STATUSES.Open];
 
             return (
               <button
                 key={ticket.id}
                 type="button"
-                onClick={() => setActiveSupportTicketId(ticket.id)}
+                onClick={() => {
+                  setActiveSupportTicketId(ticket.id);
+                  setSupportDraftMeta(null);
+                  setSupportDraft("");
+                }}
                 className={`rounded-2xl border p-4 text-left transition ${isActive ? "border-red-200 bg-red-50" : "border-zinc-100 bg-white hover:border-zinc-200 hover:bg-zinc-50"}`}
               >
                 <div className="flex items-center justify-between gap-4">
                   <p className="truncate text-sm font-black text-zinc-950">{ticket.subject}</p>
-                  <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wide ${ticket.status === "waiting" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                    {ticket.status === "waiting" ? "waiting" : "active"}
+                  <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wide ${status.className}`}>
+                    {status.label}
                   </span>
                 </div>
                 <p className="mt-2 truncate text-xs font-semibold text-zinc-500">{lastMessage?.body}</p>
               </button>
             );
           })}
+
+          {!isLoadingSupport && !supportTickets.length && (
+            <div className="rounded-2xl border border-dashed border-zinc-200 bg-white p-5 text-sm font-semibold leading-6 text-zinc-500">
+              No support tickets yet. Choose a quick action or write a message to start a chat.
+            </div>
+          )}
         </div>
       </section>
 
-      <section className="flex min-h-[640px] flex-col overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+      <section className="grid h-[min(720px,calc(100vh-220px))] min-h-[520px] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
         <div className="border-b border-zinc-100 p-6">
           <p className="text-xs font-black uppercase tracking-[0.22em] text-zinc-400">Live chat</p>
-          <h3 className="mt-2 text-2xl font-black text-zinc-950">{activeSupportTicket?.subject || "Support chat"}</h3>
+          <h3 className="mt-2 text-2xl font-black text-zinc-950">
+            {supportDraftMeta?.title || displayedSupportTicket?.subject || "New support request"}
+          </h3>
+          {supportDraftMeta && (
+            <p className="mt-2 text-sm font-semibold text-zinc-500">
+              This message will start a separate support ticket.
+            </p>
+          )}
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto bg-zinc-50 p-6">
-          {activeSupportTicket?.messages.map((message) => {
-            const isUserMessage = message.sender === "user";
+        <div ref={supportMessagesRef} className="min-h-0 space-y-4 overflow-y-auto bg-zinc-50 p-6">
+          {supportDraftMeta && (
+            <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-5 py-4 text-sm font-semibold text-zinc-500">
+              Send the prepared message to open this request.
+            </div>
+          )}
+          {displayedSupportTicket?.messages.map((message) => {
+            const isUserMessage = message.senderType === SUPPORT_MESSAGE_SENDER_TYPES.Rider;
 
             return (
               <div key={message.id} className={`flex ${isUserMessage ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-3xl px-4 py-3 shadow-sm ${isUserMessage ? "bg-red-500 text-white" : "border border-zinc-200 bg-white text-zinc-900"}`}>
-                  <p className="text-xs font-black uppercase tracking-wide opacity-70">{message.author}</p>
+                  <p className="text-xs font-black uppercase tracking-wide opacity-70">{message.senderName}</p>
                   <p className="mt-2 text-sm font-semibold leading-6">{message.body}</p>
                   <p className={`mt-3 text-[11px] font-bold ${isUserMessage ? "text-white/75" : "text-zinc-400"}`}>{formatSupportTime(message.createdAt)}</p>
                 </div>
@@ -2373,14 +2477,23 @@ const Dashboard = ({ onLogout }) => {
           <div className="flex gap-3">
             <input
               value={supportDraft}
-              onChange={(event) => setSupportDraft(event.target.value)}
+              onChange={(event) => {
+                setSupportDraft(event.target.value);
+                setSupportError("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  handleSendSupportMessage();
+                }
+              }}
               placeholder="Describe the problem and support will answer here"
               className="min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4 text-sm font-bold text-zinc-900 outline-none transition focus:border-red-300 focus:bg-white"
             />
             <button
               type="button"
               onClick={handleSendSupportMessage}
-              disabled={!supportDraft.trim()}
+              disabled={!supportDraft.trim() || isSendingSupportMessage}
               className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-950 text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-zinc-200"
               aria-label="Send support message"
             >

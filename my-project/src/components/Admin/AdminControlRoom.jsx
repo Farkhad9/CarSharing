@@ -40,6 +40,16 @@ import { adminUsersApi, USER_BLOCK_DURATIONS, USER_ROLES, USER_VERIFICATION_STAT
 import { parkingZoneApi } from "../../api/parkingZoneApi";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { adminStaffTasksApi, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES } from "../../api/staffTasksApi";
+import {
+  SUPPORT_MESSAGE_SENDER_TYPES,
+  SUPPORT_REALTIME_EVENTS,
+  SUPPORT_TICKET_PRIORITIES,
+  SUPPORT_TICKET_STATUSES,
+  adminSupportApi,
+  createSupportConnection,
+  startSupportConnection,
+  stopSupportConnection,
+} from "../../api/supportApi";
 import { vehicleApi } from "../../api/vehicleApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
 
@@ -65,6 +75,31 @@ const STAFF_TASK_STATUS_STYLES = {
   [STAFF_TASK_STATUSES.Waiting]: "border-slate-400/25 bg-slate-500/10 text-slate-200",
   [STAFF_TASK_STATUSES.InProgress]: "border-blue-400/30 bg-blue-500/10 text-blue-200",
   [STAFF_TASK_STATUSES.Done]: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
+};
+
+const SUPPORT_STATUS_LABELS = {
+  [SUPPORT_TICKET_STATUSES.Open]: "Active",
+  [SUPPORT_TICKET_STATUSES.WaitingForStaff]: "Waiting staff",
+  [SUPPORT_TICKET_STATUSES.WaitingForRider]: "Waiting rider",
+  [SUPPORT_TICKET_STATUSES.EscalatedToAdmin]: "Admin review",
+  [SUPPORT_TICKET_STATUSES.Resolved]: "Resolved",
+  [SUPPORT_TICKET_STATUSES.Closed]: "Closed",
+};
+
+const SUPPORT_PRIORITY_LABELS = {
+  [SUPPORT_TICKET_PRIORITIES.Low]: "Low",
+  [SUPPORT_TICKET_PRIORITIES.Normal]: "Normal",
+  [SUPPORT_TICKET_PRIORITIES.High]: "High",
+  [SUPPORT_TICKET_PRIORITIES.Urgent]: "Urgent",
+};
+
+const upsertSupportTicket = (items, nextTicket) => {
+  const exists = items.some((ticket) => ticket.id === nextTicket.id);
+  const nextItems = exists
+    ? items.map((ticket) => (ticket.id === nextTicket.id ? nextTicket : ticket))
+    : [nextTicket, ...items];
+
+  return [...nextItems].sort((first, second) => new Date(second.lastMessageAt || 0) - new Date(first.lastMessageAt || 0));
 };
 
 const KPI_COLUMN_LABELS = {
@@ -747,55 +782,10 @@ const sidebarItems = [
   { id: "billing", label: "Receipts", icon: FiDollarSign, filter: "all" },
   { id: "kpi", label: "Staff Work", icon: FiUsers, filter: "all" },
   { id: "tasks", label: "Task Manager", icon: FiTool, filter: "low_charge" },
+  { id: "helpdesk", label: "Helpdesk", icon: FiMessageSquare, filter: "all" },
   { id: "chargers", label: "Charging Map", icon: FiZap, filter: "all" },
   { id: "superadmin", label: "SuperAdmin", icon: FiShield, filter: "all", superOnly: true },
 ];
-
-const formatSenderTitle = ({ senderRole, senderName }) => {
-  const profile = adminProfiles[senderRole];
-
-  if (profile) {
-    return `${profile.roleLabel} ${senderName || profile.name}`;
-  }
-
-  if (senderRole === "system") return senderName || "System";
-  if (senderRole === "rider") return `Rider ${senderName || ""}`.trim();
-
-  return senderName || "Unknown";
-};
-
-const createTicketMessage = (body, senderRole, senderName) => ({
-  id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  body,
-  senderRole,
-  senderName,
-});
-
-const normalizeTicketMessage = (message, ticket) => {
-  if (typeof message !== "string") return message;
-
-  if (message.startsWith("Admin: ")) {
-    return {
-      body: message.replace("Admin: ", ""),
-      senderRole: "admin",
-      senderName: adminProfiles.admin.name,
-    };
-  }
-
-  if (message.startsWith("System: ")) {
-    return {
-      body: message.replace("System: ", ""),
-      senderRole: "system",
-      senderName: "System",
-    };
-  }
-
-  return {
-    body: message,
-    senderRole: "rider",
-    senderName: ticket.userName || "Customer",
-  };
-};
 
 const incidentSeed = [
   {
@@ -831,27 +821,6 @@ const techniciansSeed = [
 const tasksSeed = [
   { id: "task-001", vehicleId: "ev-004", technicianId: "tech-003", chargingStationId: "station-004", type: "Charging", status: "Technician on the way" },
   { id: "task-002", vehicleId: "ev-005", technicianId: "tech-001", type: "Cleaning", status: "Vehicle is being serviced" },
-];
-
-const ticketsSeed = [
-  {
-    id: "ticket-001",
-    userId: "user-002",
-    vehicleId: "ev-002",
-    status: "open",
-    updatedAt: "2026-06-16T10:28:00+04:00",
-    subject: "Trunk will not open",
-    messages: ["I am trying to open it from the app, but the trunk is not responding.", "Please check it remotely."],
-  },
-  {
-    id: "ticket-002",
-    userId: "user-003",
-    vehicleId: "ev-003",
-    status: "waiting",
-    updatedAt: "2026-06-16T09:55:00+04:00",
-    subject: "Charging cable will not connect",
-    messages: ["The cable is locked in the station and the rental is active."],
-  },
 ];
 
 const maintenanceSeed = [
@@ -1487,11 +1456,14 @@ const AdminControlRoom = () => {
     priority: STAFF_TASK_PRIORITIES.Medium,
     dueAt: "",
   });
-  const [tickets, setTickets] = useState(ticketsSeed);
-  const [activeTicketId, setActiveTicketId] = useState(ticketsSeed[0].id);
+  const [tickets, setTickets] = useState([]);
+  const [activeTicketId, setActiveTicketId] = useState(null);
   const [ticketSearchQuery, setTicketSearchQuery] = useState("");
   const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
   const [chatDraft, setChatDraft] = useState("");
+  const [ticketAssigneeDrafts, setTicketAssigneeDrafts] = useState({});
+  const [ticketsError, setTicketsError] = useState("");
+  const [isLoadingTickets, setIsLoadingTickets] = useState(false);
   const [adminNotice, setAdminNotice] = useState({ section: null, message: "", tone: "success" });
   const { confirm, dialog } = useConfirmDialog();
   const [riderNotifications] = useState([]);
@@ -1517,6 +1489,29 @@ const AdminControlRoom = () => {
   const [events, setEvents] = useState([]);
   const [alertsEnabled, setAlertsEnabled] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  useEffect(() => {
+    const handleSessionRefreshed = (event) => {
+      const user = event.detail;
+      if (!isAdminUser(user)) return;
+
+      const session = createAdminSession(user);
+      localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(session));
+      setAdminSession(session);
+    };
+    const handleSessionExpired = () => {
+      localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      setAdminSession(null);
+    };
+
+    window.addEventListener("electrostreet:session-refreshed", handleSessionRefreshed);
+    window.addEventListener("electrostreet:session-expired", handleSessionExpired);
+    return () => {
+      window.removeEventListener("electrostreet:session-refreshed", handleSessionRefreshed);
+      window.removeEventListener("electrostreet:session-expired", handleSessionExpired);
+    };
+  }, []);
+
   const staffMembers = useMemo(
     () => backendUsers
       .filter((user) =>
@@ -1815,6 +1810,7 @@ const AdminControlRoom = () => {
     const initialChargingSessionsTimer = window.setTimeout(loadChargingSessions, 0);
     const initialParkingZonesTimer = window.setTimeout(loadParkingZones, 0);
     const initialBillingTimer = window.setTimeout(loadBillingInvoices, 0);
+    const initialSupportTimer = window.setTimeout(loadSupportTickets, 0);
     const statisticsTimer = window.setInterval(loadAdminStatistics, 30000);
     const billingTimer = window.setInterval(async () => {
       try {
@@ -1825,6 +1821,7 @@ const AdminControlRoom = () => {
         setBillingInvoiceError(error.status === 404 ? "" : error.message || "Receipts could not be loaded.");
       }
     }, 10000);
+    const supportTimer = window.setInterval(loadSupportTickets, 10000);
     const vehiclesTimer = window.setInterval(() => loadBackendVehicles({ silent: true }), 5000);
     const chargingSessionsTimer = window.setInterval(() => {
       loadChargingSessions({ silent: true });
@@ -1842,8 +1839,10 @@ const AdminControlRoom = () => {
       window.clearTimeout(initialChargingSessionsTimer);
       window.clearTimeout(initialParkingZonesTimer);
       window.clearTimeout(initialBillingTimer);
+      window.clearTimeout(initialSupportTimer);
       window.clearInterval(statisticsTimer);
       window.clearInterval(billingTimer);
+      window.clearInterval(supportTimer);
       window.clearInterval(vehiclesTimer);
       window.clearInterval(chargingSessionsTimer);
     };
@@ -1927,6 +1926,30 @@ const AdminControlRoom = () => {
       stopConnection(connection).catch(() => {});
     };
   }, [adminSession, loadAdminStatistics, loadBackendUsers, loadBackendVehicles, loadChargingSessions, loadChargingStations, loadParkingZones, loadStaffTasks, loadStaffKpi]);
+
+  useEffect(() => {
+    if (!adminSession) return undefined;
+
+    const connection = createSupportConnection();
+    const handleTicketUpdate = (ticket) => {
+      setTickets((items) => upsertSupportTicket(items, ticket));
+      setActiveTicketId((currentId) => currentId || ticket.id);
+      setTicketsError("");
+    };
+
+    connection.on(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+    connection.on(SUPPORT_REALTIME_EVENTS.SupportTicketEscalated, handleTicketUpdate);
+
+    startSupportConnection(connection).catch(() => {
+      setTicketsError("");
+    });
+
+    return () => {
+      connection.off(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+      connection.off(SUPPORT_REALTIME_EVENTS.SupportTicketEscalated, handleTicketUpdate);
+      stopSupportConnection(connection).catch(() => {});
+    };
+  }, [adminSession]);
 
   useEffect(() => {
     if (activeSection === "billing" || activeSection === "control") {
@@ -2661,6 +2684,27 @@ const AdminControlRoom = () => {
     }
   }
 
+  async function loadSupportTickets(options = {}) {
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingTickets(true);
+    setTicketsError("");
+
+    try {
+      const nextTickets = await adminSupportApi.getTickets();
+      const normalizedTickets = Array.isArray(nextTickets) ? nextTickets : [];
+      setTickets(normalizedTickets);
+      setActiveTicketId((currentId) =>
+        normalizedTickets.some((ticket) => ticket.id === currentId)
+          ? currentId
+          : normalizedTickets[0]?.id || null
+      );
+    } catch (error) {
+      setTicketsError(error.message || "Support tickets could not be loaded.");
+    } finally {
+      if (!silent) setIsLoadingTickets(false);
+    }
+  }
+
   const downloadAdminReceipt = async (invoice) => {
     if (!invoice?.id) return;
 
@@ -3047,52 +3091,63 @@ const AdminControlRoom = () => {
     showAdminNotice(`Сервисная точка удалена: ${point.name}`, "service-points");
   };
 
-  const sendChatMessage = () => {
+  const sendChatMessage = async () => {
     if (!chatDraft.trim() || !activeTicket) return;
 
-    const message = createTicketMessage(chatDraft.trim(), adminRole, currentAdminProfile.name);
-
-    setTickets((items) =>
-      items.map((ticket) =>
-        ticket.id === activeTicket.id
-          ? { ...ticket, status: "waiting", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
-          : ticket
-      )
-    );
-    showAdminNotice("Сообщение отправлено пользователю");
-    setChatDraft("");
+    try {
+      const ticket = await adminSupportApi.sendMessage(activeTicket.id, {
+        body: chatDraft.trim(),
+      });
+      setTickets((items) => upsertSupportTicket(items, ticket));
+      showAdminNotice("Support reply sent.", "helpdesk");
+      setChatDraft("");
+    } catch (error) {
+      showAdminNotice(error.message || "Support reply could not be sent.", "helpdesk", "error");
+    }
   };
 
-  const appendTicketMessage = (body) => {
+  const closeActiveTicket = async () => {
     if (!activeTicket) return;
 
-    const message = createTicketMessage(body, "system", "System");
-
-    setTickets((items) =>
-      items.map((ticket) =>
-        ticket.id === activeTicket.id
-          ? { ...ticket, status: "waiting", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
-        : ticket
-      )
-    );
-    showAdminNotice(body);
+    try {
+      const ticket = activeTicket.status === SUPPORT_TICKET_STATUSES.Closed
+        ? await adminSupportApi.reopenTicket(activeTicket.id)
+        : await adminSupportApi.closeTicket(activeTicket.id);
+      setTickets((items) => upsertSupportTicket(items, ticket));
+      showAdminNotice(activeTicket.status === SUPPORT_TICKET_STATUSES.Closed ? "Ticket reopened." : `Ticket closed: ${activeTicket.subject}`, "helpdesk");
+    } catch (error) {
+      showAdminNotice(error.message || "Ticket status could not be changed.", "helpdesk", "error");
+    }
   };
 
-  const closeActiveTicket = () => {
+  const assignTicketToStaff = async (staffId) => {
+    if (!activeTicket || !staffId) return;
+
+    try {
+      const ticket = await adminSupportApi.assignStaff(activeTicket.id, staffId);
+      setTickets((items) => upsertSupportTicket(items, ticket));
+      setTicketAssigneeDrafts((items) => {
+        const nextItems = { ...items };
+        delete nextItems[activeTicket.id];
+        return nextItems;
+      });
+      showAdminNotice("Ticket assigned to staff.", "helpdesk");
+    } catch (error) {
+      showAdminNotice(error.message || "Ticket could not be assigned.", "helpdesk", "error");
+    }
+  };
+
+  const updateTicketPriority = async (priority) => {
     if (!activeTicket) return;
 
-    const message = createTicketMessage("тикет закрыт оператором поддержки.", "system", "System");
-
-    setTickets((items) =>
-      items.map((ticket) =>
-        ticket.id === activeTicket.id
-          ? { ...ticket, status: "closed", updatedAt: new Date().toISOString(), messages: [...ticket.messages, message] }
-          : ticket
-      )
-    );
-    showAdminNotice(`Тикет закрыт: ${activeTicket.subject}`);
+    try {
+      const ticket = await adminSupportApi.updatePriority(activeTicket.id, Number(priority));
+      setTickets((items) => upsertSupportTicket(items, ticket));
+      showAdminNotice("Ticket priority updated.", "helpdesk");
+    } catch (error) {
+      showAdminNotice(error.message || "Ticket priority could not be updated.", "helpdesk", "error");
+    }
   };
-
   const renderPanelHeader = (eyebrow, title, action = null) => {
     const visibleAdminNotice = adminNotice.section === activeSection ? adminNotice.message : "";
     const noticeClassName = adminNotice.tone === "error"
@@ -6226,72 +6281,97 @@ const AdminControlRoom = () => {
 
   const renderHelpdeskPanel = () => {
     const ticketStatusMeta = {
-      open: { label: "Открыт", className: "bg-emerald-500/15 text-emerald-200" },
-      waiting: { label: "Ожидает", className: "bg-amber-500/15 text-amber-200" },
-      closed: { label: "Закрыт", className: "bg-slate-500/20 text-slate-300" },
+      [SUPPORT_TICKET_STATUSES.Open]: { label: "Active", className: "bg-emerald-500/15 text-emerald-200" },
+      [SUPPORT_TICKET_STATUSES.WaitingForStaff]: { label: "Waiting staff", className: "bg-amber-500/15 text-amber-200" },
+      [SUPPORT_TICKET_STATUSES.WaitingForRider]: { label: "Waiting rider", className: "bg-blue-500/15 text-blue-200" },
+      [SUPPORT_TICKET_STATUSES.EscalatedToAdmin]: { label: "Admin review", className: "bg-red-500/15 text-red-200" },
+      [SUPPORT_TICKET_STATUSES.Resolved]: { label: "Resolved", className: "bg-slate-500/20 text-slate-300" },
+      [SUPPORT_TICKET_STATUSES.Closed]: { label: "Closed", className: "bg-slate-500/20 text-slate-300" },
     };
+    const statusFilters = [
+      ["all", "All"],
+      [SUPPORT_TICKET_STATUSES.WaitingForStaff, "Waiting"],
+      [SUPPORT_TICKET_STATUSES.EscalatedToAdmin, "Admin"],
+      [SUPPORT_TICKET_STATUSES.Closed, "Closed"],
+    ];
+    const staffUsers = backendUsers.filter((user) => user.role === USER_ROLES.Staff && user.isActive);
+    const activeTicketAssigneeDraft = activeTicket
+      ? ticketAssigneeDrafts[activeTicket.id] ?? activeTicket.assignedStaffId ?? ""
+      : "";
+    const canAssignActiveTicket = Boolean(
+      activeTicket &&
+      activeTicketAssigneeDraft &&
+      activeTicketAssigneeDraft !== (activeTicket.assignedStaffId || "")
+    );
     const sortedTickets = [...tickets]
       .filter((ticket) => {
-        const rider = backendUsers.find((user) => user.id === ticket.userId);
-        const vehicle = getVehicle(ticket.vehicleId);
         const searchable = [
           ticket.subject,
-          ticket.status,
-          rider?.fullName,
-          vehicle?.brand,
-          vehicle?.model,
-          vehicle?.plateNumber,
-          ...ticket.messages.map((message) => (typeof message === "string" ? message : message.body)),
+          SUPPORT_STATUS_LABELS[ticket.status],
+          ticket.riderName,
+          ticket.riderEmail,
+          ticket.assignedStaffName,
+          ...ticket.messages.map((message) => message.body),
         ]
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
 
         const matchesSearch = !ticketSearchQuery.trim() || searchable.includes(ticketSearchQuery.trim().toLowerCase());
-        const matchesStatus = ticketStatusFilter === "all" || ticket.status === ticketStatusFilter;
+        const matchesStatus = ticketStatusFilter === "all" || Number(ticketStatusFilter) === ticket.status;
 
         return matchesSearch && matchesStatus;
       })
-      .sort((first, second) => new Date(second.updatedAt || 0) - new Date(first.updatedAt || 0));
+      .sort((first, second) => new Date(second.lastMessageAt || 0) - new Date(first.lastMessageAt || 0));
 
     return (
     <>
-      {renderPanelHeader("Helpdesk", "Чат поддержки")}
-      <div className="grid min-h-0 flex-1 gap-0 overflow-hidden p-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+      {renderPanelHeader("Helpdesk", "Support chats")}
+      <div className="grid min-h-0 flex-1 gap-0 overflow-hidden p-5 xl:grid-cols-[380px_minmax(0,1fr)]">
         <div className="min-h-0 overflow-y-auto rounded-l-2xl border border-white/10 bg-white/[0.035]">
           <div className="border-b border-white/10 p-4">
-            <p className="text-sm font-black text-white">Диалоги</p>
-            <p className="mt-1 text-xs font-semibold text-slate-500">Сортировка по времени последнего сообщения</p>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-white">Conversations</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Sorted by latest activity</p>
+              </div>
+              <button type="button" onClick={() => loadSupportTickets()} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200">
+                Refresh
+              </button>
+            </div>
             <label className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-sm text-slate-400">
               <FiSearch className="shrink-0 text-slate-500" />
               <input
                 value={ticketSearchQuery}
                 onChange={(event) => setTicketSearchQuery(event.target.value)}
-                placeholder="Поиск по чатам"
+                placeholder="Search chats"
                 className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
               />
             </label>
             <div className="mt-3 grid grid-cols-4 gap-1">
-              {["all", "open", "waiting", "closed"].map((status) => (
+              {statusFilters.map(([status, label]) => (
                 <button
                   key={status}
                   type="button"
                   onClick={() => setTicketStatusFilter(status)}
                   className={`rounded-lg px-2 py-2 text-[10px] font-black ${
-                    ticketStatusFilter === status ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"
+                    String(ticketStatusFilter) === String(status) ? "bg-red-500 text-white" : "bg-white/[0.06] text-slate-300"
                   }`}
                 >
-                  {status === "all" ? "Все" : ticketStatusMeta[status].label}
+                  {label}
                 </button>
               ))}
             </div>
+            {(ticketsError || isLoadingTickets) && (
+              <p className={`mt-3 rounded-xl border px-3 py-2 text-xs font-bold ${ticketsError ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-blue-400/30 bg-blue-500/10 text-blue-100"}`}>
+                {ticketsError || "Loading support tickets..."}
+              </p>
+            )}
           </div>
           {sortedTickets.map((ticket) => {
-            const vehicle = getVehicle(ticket.vehicleId);
-            const rider = backendUsers.find((user) => user.id === ticket.userId);
             const active = activeTicketId === ticket.id;
-            const lastMessage = normalizeTicketMessage(ticket.messages[ticket.messages.length - 1], ticket);
-            const status = ticketStatusMeta[ticket.status] || ticketStatusMeta.open;
+            const lastMessage = ticket.messages[ticket.messages.length - 1];
+            const status = ticketStatusMeta[ticket.status] || ticketStatusMeta[SUPPORT_TICKET_STATUSES.Open];
 
             return (
               <button
@@ -6304,7 +6384,7 @@ const AdminControlRoom = () => {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-black text-white">{ticket.subject}</span>
                     <span className="mt-1 block truncate text-xs font-semibold text-slate-400">
-                      {rider?.fullName} · {vehicle?.plateNumber}
+                      {ticket.riderName} - {ticket.riderEmail || "no email"}
                     </span>
                   </span>
                   <span className={`rounded-lg px-2 py-1 text-[10px] font-black ${status.className}`}>
@@ -6315,50 +6395,95 @@ const AdminControlRoom = () => {
               </button>
             );
           })}
+          {!sortedTickets.length && (
+            <div className="p-5 text-sm font-bold text-slate-500">No support chats match this view.</div>
+          )}
         </div>
 
         <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-r-2xl border border-l-0 border-white/10 bg-white/[0.025]">
           <div className="border-b border-white/10 p-4">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
-                <p className="text-sm font-black text-white">{activeTicket?.subject}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">Переписка с клиентом и системные действия</p>
+                <p className="text-sm font-black text-white">{activeTicket?.subject || "Select a support chat"}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {activeTicket ? `${activeTicket.riderName} - ${activeTicket.assignedStaffName || "unassigned"}` : "Rider, staff assignment, and admin actions appear here."}
+                </p>
               </div>
-              <button type="button" onClick={closeActiveTicket} className="rounded-xl bg-red-500/15 px-3 py-2 text-xs font-black text-red-200">
-                Закрыть тикет
-              </button>
+              {activeTicket && (
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    value={activeTicketAssigneeDraft}
+                    onChange={(event) => {
+                      const staffId = event.target.value;
+                      setTicketAssigneeDrafts((items) => ({
+                        ...items,
+                        [activeTicket.id]: staffId,
+                      }));
+                    }}
+                    className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-xs font-black text-white outline-none"
+                  >
+                    <option value="">Assign staff</option>
+                    {staffUsers.map((staff) => (
+                      <option key={staff.id} value={staff.id}>{`${staff.firstName} ${staff.lastName}`.trim() || staff.email}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => assignTicketToStaff(activeTicketAssigneeDraft)}
+                    disabled={!canAssignActiveTicket}
+                    className="rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-white/[0.14] disabled:cursor-not-allowed disabled:bg-white/[0.03] disabled:text-slate-600"
+                  >
+                    Assign
+                  </button>
+                  <select
+                    value={activeTicket.priority}
+                    onChange={(event) => updateTicketPriority(event.target.value)}
+                    className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-2 text-xs font-black text-white outline-none"
+                  >
+                    {Object.entries(SUPPORT_PRIORITY_LABELS).map(([priority, label]) => (
+                      <option key={priority} value={priority}>{label}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={closeActiveTicket} className="rounded-xl bg-red-500/15 px-3 py-2 text-xs font-black text-red-200">
+                    {activeTicket.status === SUPPORT_TICKET_STATUSES.Closed ? "Reopen" : "Close"}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
           <div className="min-h-0 overflow-y-auto p-4">
-            {activeTicket?.messages.map((message, index) => {
-              const normalizedMessage = normalizeTicketMessage(message, activeTicket);
-              const fromAdmin = normalizedMessage.senderRole !== "rider";
+            {activeTicket?.messages.map((message) => {
+              const fromRider = message.senderType === SUPPORT_MESSAGE_SENDER_TYPES.Rider;
+              const fromSystem = message.senderType === SUPPORT_MESSAGE_SENDER_TYPES.System;
 
               return (
                 <article
-                  key={normalizedMessage.id || `${activeTicket.id}-${index}`}
-                  className={`mb-3 max-w-[78%] rounded-2xl px-4 py-3 ${fromAdmin ? "ml-auto bg-red-500/15" : "bg-white/[0.06]"}`}
+                  key={message.id}
+                  className={`mb-3 max-w-[78%] rounded-2xl px-4 py-3 ${fromRider ? "bg-white/[0.06]" : fromSystem ? "mx-auto bg-blue-500/10" : "ml-auto bg-red-500/15"}`}
                 >
                   <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-200">
-                    {formatSenderTitle(normalizedMessage)}
+                    {message.isInternalNote ? "Internal note - " : ""}{message.senderName}
                   </p>
-                  <p className="mt-1 text-sm font-semibold leading-5 text-slate-200">{normalizedMessage.body}</p>
+                  <p className="mt-1 text-sm font-semibold leading-5 text-slate-200">{message.body}</p>
                 </article>
               );
             })}
           </div>
           <div className="border-t border-white/10 p-4">
-            <div className="mb-3 grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => appendTicketMessage("добавлено +5 бесплатных минут компенсации.")} className="rounded-xl bg-blue-500/15 px-3 py-2 text-xs font-black text-blue-200">
-                +5 бесплатных минут
-              </button>
-              <button type="button" onClick={() => appendTicketMessage("аренда завершена удаленно без штрафа.")} className="rounded-xl bg-emerald-500/15 px-3 py-2 text-xs font-black text-emerald-200">
-                Завершить без штрафа
-              </button>
-            </div>
             <div className="flex gap-2">
-              <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ответ админа..." className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none" />
-              <button type="button" onClick={sendChatMessage} className="rounded-xl bg-red-500 px-4 text-white"><FiSend /></button>
+              <input
+                value={chatDraft}
+                onChange={(event) => setChatDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendChatMessage();
+                  }
+                }}
+                placeholder="Reply to rider"
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
+              />
+              <button type="button" onClick={sendChatMessage} disabled={!chatDraft.trim() || !activeTicket} className="rounded-xl bg-red-500 px-4 text-white disabled:bg-slate-700"><FiSend /></button>
             </div>
           </div>
         </div>
@@ -6366,7 +6491,6 @@ const AdminControlRoom = () => {
     </>
     );
   };
-
   const renderAnalyticsPanel = () => {
     const plannedMaintenanceVehicles = plannedMaintenance
       .map((vehicleId) => getVehicle(vehicleId))

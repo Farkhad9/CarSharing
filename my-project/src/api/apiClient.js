@@ -5,10 +5,46 @@ export const getAccessToken = () => localStorage.getItem("electroStreetAccessTok
 let refreshTokenPromise = null;
 
 const normalizeRoleKey = (role) => {
-  if (role === 4 || role === "SuperAdmin" || role === "super-admin") return "super-admin";
-  if (role === 3 || role === "Admin" || role === "admin") return "admin";
-  if (role === 2 || role === "Staff" || role === "staff") return "staff";
+  const normalized = String(role ?? "").toLowerCase();
+  if (role === 4 || normalized === "4" || normalized === "superadmin" || normalized === "super-admin") return "super-admin";
+  if (role === 3 || normalized === "3" || normalized === "admin") return "admin";
+  if (role === 2 || normalized === "2" || normalized === "staff") return "staff";
   return "rider";
+};
+
+const createPanelSession = (user, roleKey) => ({
+  id: user.id,
+  role: roleKey,
+  email: user.email,
+  name: user.name || `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
+  signedInAt: new Date().toISOString(),
+});
+
+const syncPanelSessions = (user) => {
+  const roleKey = normalizeRoleKey(user.roleKey || user.role);
+
+  if (roleKey === "staff") {
+    localStorage.setItem("electroStreetStaffSession", JSON.stringify(createPanelSession(user, roleKey)));
+    localStorage.removeItem("electroStreetAdminSession");
+    return;
+  }
+
+  if (roleKey === "admin" || roleKey === "super-admin") {
+    localStorage.setItem("electroStreetAdminSession", JSON.stringify(createPanelSession(user, roleKey)));
+    localStorage.removeItem("electroStreetStaffSession");
+    return;
+  }
+
+  localStorage.removeItem("electroStreetAdminSession");
+  localStorage.removeItem("electroStreetStaffSession");
+};
+
+const clearStoredSession = (reason = "Your session expired. Please sign in again.") => {
+  localStorage.removeItem("electroStreetAccessToken");
+  localStorage.removeItem("electroStreetUser");
+  localStorage.removeItem("electroStreetAdminSession");
+  localStorage.removeItem("electroStreetStaffSession");
+  window.dispatchEvent(new CustomEvent("electrostreet:session-expired", { detail: reason }));
 };
 
 const persistRefreshedSession = (response) => {
@@ -23,6 +59,7 @@ const persistRefreshedSession = (response) => {
 
   localStorage.setItem("electroStreetAccessToken", response.accessToken);
   localStorage.setItem("electroStreetUser", JSON.stringify(user));
+  syncPanelSessions(user);
   window.dispatchEvent(new CustomEvent("electrostreet:session-refreshed", { detail: user }));
   return user;
 };
@@ -117,8 +154,7 @@ export const apiRequest = async (path, options = {}) => {
         await refreshAccessToken();
         return apiRequest(path, { ...options, skipAuthRefresh: true });
       } catch {
-        localStorage.removeItem("electroStreetAccessToken");
-        localStorage.removeItem("electroStreetUser");
+        clearStoredSession();
       }
     }
 
@@ -140,13 +176,22 @@ export const apiRequest = async (path, options = {}) => {
   return data;
 };
 
-export const apiDownload = async (path, fileName = "download.pdf") => {
+export const apiDownload = async (path, fileName = "download.pdf", options = {}) => {
   const response = await fetch(`${API_URL}${path}`, {
     credentials: "include",
     headers: getAuthHeaders(),
   });
 
   if (!response.ok) {
+    if (response.status === 401 && options.skipAuthRefresh !== true) {
+      try {
+        await refreshAccessToken();
+        return apiDownload(path, fileName, { skipAuthRefresh: true });
+      } catch {
+        clearStoredSession();
+      }
+    }
+
     const data = await response.json().catch(() => null);
     const error = new Error(data?.errors?.[0]?.message || data?.error || "File download failed.");
     error.code = data?.errors?.[0]?.code;
@@ -167,7 +212,7 @@ export const apiDownload = async (path, fileName = "download.pdf") => {
   window.URL.revokeObjectURL(url);
 };
 
-export const apiOpenPdf = async (path) => {
+export const apiOpenPdf = async (path, options = {}) => {
   const popup = window.open("about:blank", "_blank");
   if (popup) {
     popup.document.title = "Opening receipt...";
@@ -187,10 +232,22 @@ export const apiOpenPdf = async (path) => {
   };
 
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    let response = await fetch(`${API_URL}${path}`, {
       credentials: "include",
       headers: getAuthHeaders(),
     });
+
+    if (!response.ok && response.status === 401 && options.skipAuthRefresh !== true) {
+      try {
+        await refreshAccessToken();
+        response = await fetch(`${API_URL}${path}`, {
+          credentials: "include",
+          headers: getAuthHeaders(),
+        });
+      } catch {
+        clearStoredSession();
+      }
+    }
 
     if (!response.ok) {
       const responseText = await response.text();
