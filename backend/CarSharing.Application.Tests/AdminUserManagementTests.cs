@@ -53,6 +53,33 @@ public sealed class AdminUserManagementTests
     }
 
     [Fact]
+    public async Task CreateAdminAsync_WithInvalidFields_ReturnsAllValidationErrorsAndDoesNotCreateUser()
+    {
+        var fixture = CreateFixture(UserRole.SuperAdmin);
+
+        var result = await fixture.Service.CreateAdminAsync(new CreateAdminUserRequest(
+            "1",
+            "2",
+            "bad-email",
+            "12345",
+            "password",
+            "letters",
+            UserRole.Admin));
+
+        Assert.True(result.IsFailure);
+        var messages = result.Errors.Select(error => error.Message).ToList();
+        Assert.Contains("First name can contain only letters.", messages);
+        Assert.Contains("Last name can contain only letters.", messages);
+        Assert.Contains("Email is not valid.", messages);
+        Assert.Contains("Phone number must be a valid Azerbaijan number.", messages);
+        Assert.Contains("Password must contain at least one uppercase letter.", messages);
+        Assert.Contains("Password must contain at least one digit.", messages);
+        Assert.Contains("Password must contain at least one special character.", messages);
+        Assert.Contains("Driver license number must contain letters and digits.", messages);
+        Assert.Empty(fixture.Users.Items);
+    }
+
+    [Fact]
     public async Task UpdateStatusAsync_CannotDisableCurrentUser()
     {
         var currentUser = User.CreateAdmin("Root", "Admin", "root@test.local", "+994501111111", "hash", "ROOT1");
@@ -63,6 +90,58 @@ public sealed class AdminUserManagementTests
         Assert.True(result.IsFailure);
         Assert.Equal("AdminUsers.CannotDisableSelf", result.Errors.Single().Code);
         Assert.True(currentUser.IsActive);
+    }
+
+    [Fact]
+    public async Task DeleteUserAsync_ForSuperAdmin_RemovesRiderAccount()
+    {
+        var rider = User.CreateRider("Delete", "Rider", "delete-rider@test.local", "+994501111112", "hash", "DEL1");
+        var fixture = CreateFixture(UserRole.SuperAdmin, seedUsers: rider);
+
+        var result = await fixture.Service.DeleteUserAsync(rider.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(rider.Id, result.Value!.Id);
+        Assert.Empty(fixture.Users.Items);
+    }
+
+    [Fact]
+    public async Task DeleteUserAsync_ForAdmin_IsForbidden()
+    {
+        var rider = User.CreateRider("Delete", "Rider", "delete-rider-admin@test.local", "+994501111113", "hash", "DEL2");
+        var fixture = CreateFixture(UserRole.Admin, seedUsers: rider);
+
+        var result = await fixture.Service.DeleteUserAsync(rider.Id);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.SuperAdminRequired", result.Errors.Single().Code);
+        Assert.Single(fixture.Users.Items);
+    }
+
+    [Fact]
+    public async Task DeleteUserAsync_ForCurrentUser_IsRejected()
+    {
+        var staff = User.CreateStaff("Self", "Delete", "self-delete@test.local", "+994501111114", "hash", "DEL3");
+        var fixture = CreateFixture(UserRole.SuperAdmin, staff.Id, staff);
+
+        var result = await fixture.Service.DeleteUserAsync(staff.Id);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotDeleteSelf", result.Errors.Single().Code);
+        Assert.Single(fixture.Users.Items);
+    }
+
+    [Fact]
+    public async Task DeleteUserAsync_ForAdminAccount_IsRejected()
+    {
+        var admin = User.CreateAdmin("Target", "Admin", "delete-admin@test.local", "+994501111115", "hash", "DEL4");
+        var fixture = CreateFixture(UserRole.SuperAdmin, seedUsers: admin);
+
+        var result = await fixture.Service.DeleteUserAsync(admin.Id);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("AdminUsers.CannotDeleteAdminAccount", result.Errors.Single().Code);
+        Assert.Single(fixture.Users.Items);
     }
 
     [Fact]
@@ -434,6 +513,12 @@ public sealed class AdminUserManagementTests
         public Task AddAsync(User user, CancellationToken cancellationToken = default)
         {
             Items.Add(user);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(User user, CancellationToken cancellationToken = default)
+        {
+            Items.Remove(user);
             return Task.CompletedTask;
         }
     }

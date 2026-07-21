@@ -270,6 +270,7 @@ public class VehicleService : IVehicleService
         }
         else if (openTrip is not null && ShouldApplyOpenTripBattery(vehicle))
         {
+            dto.ActiveTripStartedAt = openTrip.StartedAt;
             dto.BatteryPercent = openTrip.CalculateBatteryPercentAfterRide(openTrip.StartBatteryPercent, DateTime.UtcNow);
         }
 

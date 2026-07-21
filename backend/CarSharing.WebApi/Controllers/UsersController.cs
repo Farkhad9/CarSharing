@@ -1,3 +1,4 @@
+using CarSharing.Application.Common.Interfaces;
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.Users.Dtos;
 using CarSharing.Application.Users.Services;
@@ -20,12 +21,20 @@ public sealed class UsersController : ControllerBase
     };
 
     private readonly IUserService _userService;
+    private readonly IEmailVerificationSender _emailVerificationSender;
     private readonly IWebHostEnvironment _environment;
+    private readonly ILogger<UsersController> _logger;
 
-    public UsersController(IUserService userService, IWebHostEnvironment environment)
+    public UsersController(
+        IUserService userService,
+        IEmailVerificationSender emailVerificationSender,
+        IWebHostEnvironment environment,
+        ILogger<UsersController> logger)
     {
         _userService = userService;
+        _emailVerificationSender = emailVerificationSender;
         _environment = environment;
+        _logger = logger;
     }
 
     [HttpGet("me")]
@@ -38,6 +47,60 @@ public sealed class UsersController : ControllerBase
 
         var result = await _userService.GetByIdAsync(userId, cancellationToken);
         return result.IsFailure ? ToErrorResponse(result.Errors) : Ok(result.Value);
+    }
+
+    [HttpPost("me/email-verification/resend")]
+    public async Task<IActionResult> ResendEmailVerification(CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out var userId))
+        {
+            return Unauthorized(new { errors = new[] { new Error("User.Unauthenticated", "User must be authenticated.") } });
+        }
+
+        var result = await _userService.GetByIdAsync(userId, cancellationToken);
+        if (result.IsFailure)
+        {
+            return ToErrorResponse(result.Errors);
+        }
+
+        var user = result.Value!;
+        if (user.EmailVerified)
+        {
+            return Ok(new
+            {
+                message = "Your email is already verified.",
+                emailSent = false,
+                emailDeliveryError = (string?)null
+            });
+        }
+
+        var verificationUrl = BuildEmailVerificationUrl(user.Id);
+        var emailSent = false;
+        string? emailDeliveryError = null;
+
+        try
+        {
+            await _emailVerificationSender.SendVerificationAsync(
+                user.Email,
+                $"{user.FirstName} {user.LastName}".Trim(),
+                verificationUrl,
+                cancellationToken);
+            emailSent = true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(exception, "Email verification resend failed for {Email}.", user.Email);
+            emailDeliveryError = BuildEmailDeliveryError(exception);
+        }
+
+        return Ok(new
+        {
+            message = emailSent
+                ? "Verification email was sent. Check your inbox."
+                : emailDeliveryError,
+            emailSent,
+            emailDeliveryError
+        });
     }
 
     [HttpPost("me/identity-documents")]
@@ -98,6 +161,30 @@ public sealed class UsersController : ControllerBase
         var value = User.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? User.FindFirstValue("sub");
         return Guid.TryParse(value, out userId);
+    }
+
+    private string BuildEmailVerificationUrl(Guid userId)
+    {
+        var origin = Request.Headers.Origin.FirstOrDefault();
+        var frontendBaseUrl = string.IsNullOrWhiteSpace(origin)
+            ? "http://localhost:5173"
+            : origin.TrimEnd('/');
+
+        return $"{frontendBaseUrl}/?verifyEmail={userId}";
+    }
+
+    private string BuildEmailDeliveryError(Exception exception)
+    {
+        const string genericMessage = "Verification email could not be delivered. Please try again later.";
+        if (!_environment.IsDevelopment())
+        {
+            return genericMessage;
+        }
+
+        var detail = exception.GetBaseException().Message;
+        return string.IsNullOrWhiteSpace(detail)
+            ? genericMessage
+            : $"{genericMessage} SMTP detail: {detail}";
     }
 
     private static Error? ValidateDocument(IFormFile? file, string label)

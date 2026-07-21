@@ -19,4 +19,5 @@ public interface IUserRepository
     Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default);
     Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default);
     Task AddAsync(User user, CancellationToken cancellationToken = default);
+    Task DeleteAsync(User user, CancellationToken cancellationToken = default);
 }

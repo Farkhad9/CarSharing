@@ -88,6 +88,8 @@ const AUTO_PAY_TRIP_STORAGE_KEY = "electroStreetAutoPayTripId";
 const PENDING_TRIP_REVIEW_STORAGE_KEY = "electroStreetPendingTripReview";
 const LEGACY_DOCUMENTS_STORAGE_KEY = "electroStreetDocuments";
 const getDocumentsStorageKey = (userId) => `${LEGACY_DOCUMENTS_STORAGE_KEY}:${userId || "anonymous"}`;
+const LEGACY_CARDS_STORAGE_KEY = "electroStreetCards";
+const getCardsStorageKey = (userId) => `${LEGACY_CARDS_STORAGE_KEY}:${userId || "anonymous"}`;
 const EMPTY_DOCUMENTS = {
   license: { status: "Upload required", fileName: "", url: "" },
   passport: { status: "Upload required", fileName: "", url: "" },
@@ -487,7 +489,7 @@ const Dashboard = ({ onLogout }) => {
   const [topUpAmount, setTopUpAmount] = useState("50");
   const [cardForm, setCardForm] = useState({ number: "", holder: user.name || "Farhad" });
   const [paymentCards, setPaymentCards] = useState(() =>
-    getStoredJson("electroStreetCards", [])
+    getStoredJson(getCardsStorageKey(user.id), [])
   );
   const [documents, setDocuments] = useState(() =>
     getStoredJson(getDocumentsStorageKey(user.id), EMPTY_DOCUMENTS)
@@ -498,6 +500,9 @@ const Dashboard = ({ onLogout }) => {
   });
   const [isSubmittingDocuments, setIsSubmittingDocuments] = useState(false);
   const [documentsError, setDocumentsError] = useState("");
+  const [emailVerificationMessage, setEmailVerificationMessage] = useState("");
+  const [emailVerificationError, setEmailVerificationError] = useState("");
+  const [isResendingEmailVerification, setIsResendingEmailVerification] = useState(false);
   const [blockedNotice, setBlockedNotice] = useState("");
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -654,13 +659,16 @@ const Dashboard = ({ onLogout }) => {
   const recentTrips = useMemo(() => [], []);
 
   const persistUser = (nextUser) => {
+    if (nextUser?.id !== user.id) {
+      setPaymentCards(getStoredJson(getCardsStorageKey(nextUser?.id), []));
+    }
     setUser(nextUser);
     localStorage.setItem("electroStreetUser", JSON.stringify(nextUser));
   };
 
   const persistCards = (nextCards) => {
     setPaymentCards(nextCards);
-    localStorage.setItem("electroStreetCards", JSON.stringify(nextCards));
+    localStorage.setItem(getCardsStorageKey(user.id), JSON.stringify(nextCards));
   };
 
   const persistDocuments = (nextDocuments, userId = user.id) => {
@@ -1596,6 +1604,22 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
+  const resendEmailVerification = async () => {
+    setEmailVerificationMessage("");
+    setEmailVerificationError("");
+    setIsResendingEmailVerification(true);
+
+    try {
+      const response = await userApi.resendEmailVerification();
+      setEmailVerificationMessage(response?.message || "Verification email was sent. Check your inbox.");
+      await loadUserProfile();
+    } catch (error) {
+      setEmailVerificationError(error.message || "Verification email could not be sent.");
+    } finally {
+      setIsResendingEmailVerification(false);
+    }
+  };
+
   const getSupportContext = () => {
     const vehicle = activeTrip || activeReservations[0] || null;
     if (!vehicle) return {};
@@ -2310,6 +2334,32 @@ const Dashboard = ({ onLogout }) => {
               </div>
             ))}
           </div>
+          {user.emailVerified === false && (
+            <div className="mt-5 rounded-2xl bg-white/12 p-4">
+              <p className="text-sm font-bold leading-6 text-white/75">
+                Email confirmation is required for payments and reservations.
+              </p>
+              <button
+                type="button"
+                onClick={resendEmailVerification}
+                disabled={isResendingEmailVerification}
+                className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:bg-white/40 disabled:text-white/70"
+              >
+                <FiSend />
+                {isResendingEmailVerification ? "Sending..." : "Resend verification email"}
+              </button>
+              {emailVerificationMessage && (
+                <p className="mt-3 text-xs font-bold leading-5 text-white">
+                  {emailVerificationMessage}
+                </p>
+              )}
+              {emailVerificationError && (
+                <p className="mt-3 rounded-xl bg-red-950/25 px-3 py-2 text-xs font-bold leading-5 text-white">
+                  {emailVerificationError}
+                </p>
+              )}
+            </div>
+          )}
         </aside>
       </motion.div>
     );
@@ -2668,6 +2718,29 @@ const Dashboard = ({ onLogout }) => {
             <FiCheckCircle className={`text-2xl ${accountVerificationDisplay.iconClassName}`} />
             <p className="mt-6 text-xs font-black uppercase tracking-wide text-zinc-400">Account status</p>
             <p className="mt-1 text-xl font-black">{accountVerificationDisplay.label}</p>
+            {user.emailVerified === false && (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={resendEmailVerification}
+                  disabled={isResendingEmailVerification}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-500 px-4 py-3 text-xs font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500"
+                >
+                  <FiSend />
+                  {isResendingEmailVerification ? "Sending..." : "Resend verification email"}
+                </button>
+                {emailVerificationMessage && (
+                  <p className="mt-3 text-xs font-bold leading-5 text-emerald-600">
+                    {emailVerificationMessage}
+                  </p>
+                )}
+                {emailVerificationError && (
+                  <p className="mt-3 text-xs font-bold leading-5 text-red-600">
+                    {emailVerificationError}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </section>
 

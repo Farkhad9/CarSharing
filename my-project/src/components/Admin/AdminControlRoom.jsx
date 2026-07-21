@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, Pane, Polygon, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -39,6 +39,7 @@ import { adminStatisticsApi } from "../../api/adminStatisticsApi";
 import { adminPricingApi, PRICING_MODES, normalizePricingMode } from "../../api/adminPricingApi";
 import { adminUsersApi, USER_BLOCK_DURATIONS, USER_ROLES, USER_VERIFICATION_STATUSES, normalizeRole } from "../../api/adminUsersApi";
 import { parkingZoneApi } from "../../api/parkingZoneApi";
+import { tripReviewsApi } from "../../api/tripReviewsApi";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { adminStaffTasksApi, normalizeStaffTask, STAFF_TASK_PRIORITIES, STAFF_TASK_STATUSES, STAFF_TASK_TYPES } from "../../api/staffTasksApi";
 import {
@@ -120,8 +121,8 @@ const BAKU_TIME_ZONE = "Asia/Baku";
 const BAKU_UTC_OFFSET = "+04:00";
 const BAKU_CENTER = [40.3777, 49.8499];
 const BAKU_MAP_BOUNDS = [
-  [40.2, 49.55],
-  [40.6, 50.25],
+  [40.05, 49.2],
+  [40.85, 50.85],
 ];
 
 const getBakuDateParts = (date = new Date()) =>
@@ -167,6 +168,15 @@ const upsertAdminUser = (items, nextUser) => {
   return exists
     ? items.map((user) => (user.id === nextUser.id ? nextUser : user))
     : [nextUser, ...items];
+};
+
+const upsertAdminReview = (items, nextReview) => {
+  const exists = items.some((review) => review.id === nextReview.id);
+  const nextItems = exists
+    ? items.map((review) => (review.id === nextReview.id ? nextReview : review))
+    : [nextReview, ...items];
+
+  return [...nextItems].sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0));
 };
 
 const mapBackendStaffUser = (user) => ({
@@ -812,12 +822,6 @@ const incidentSeed = [
   },
 ];
 
-const techniciansSeed = [
-  { id: "tech-001", name: "Tural", specialty: "Cleaning", status: "free", lat: 40.384, lng: 49.842 },
-  { id: "tech-002", name: "Elvin", specialty: "Technical issues", status: "free", lat: 40.372, lng: 49.858 },
-  { id: "tech-003", name: "Nihad", specialty: "Charging", status: "busy", lat: 40.392, lng: 49.851 },
-];
-
 const tasksSeed = [
   { id: "task-001", vehicleId: "ev-004", technicianId: "tech-003", chargingStationId: "station-004", type: "Charging", status: "Technician on the way" },
   { id: "task-002", vehicleId: "ev-005", technicianId: "tech-001", type: "Cleaning", status: "Vehicle is being serviced" },
@@ -865,8 +869,9 @@ const kycProfilesSeed = [
 ];
 
 const formatDuration = (seconds) => {
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const rest = safeSeconds % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
 };
 
@@ -875,6 +880,13 @@ const parseApiDateMs = (value) => {
   const text = String(value);
   const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`;
   return new Date(normalized).getTime();
+};
+
+const getElapsedSecondsFromApiDate = (value, now = Date.now()) => {
+  const startedAtMs = parseApiDateMs(value);
+  return Number.isFinite(startedAtMs)
+    ? Math.max(0, Math.floor((now - startedAtMs) / 1000))
+    : null;
 };
 
 const formatBakuDateTime = (value, fallback = "Pending date") => {
@@ -937,6 +949,27 @@ const formatUpdatedTime = (value) => {
   }).format(new Date(timeMs));
 };
 
+const INVOICE_TYPE_LABELS = {
+  1: "Balance top-up",
+  2: "Trip payment",
+  BalanceTopUp: "Balance top-up",
+  TripPayment: "Trip payment",
+};
+
+const INVOICE_DELIVERY_STATUS_LABELS = {
+  1: "Pending",
+  2: "Delivered",
+  3: "Failed",
+  Pending: "Pending",
+  Delivered: "Delivered",
+  Failed: "Failed",
+};
+
+const getInvoiceLabel = (labels, value, fallback) => {
+  if (value === null || value === undefined || value === "") return fallback;
+  return labels[value] || fallback;
+};
+
 const isBakuMapPoint = (point) =>
   point &&
   Number.isFinite(Number(point.lat)) &&
@@ -993,13 +1026,14 @@ const makeLiveVehicle = (vehicle, index) => ({
   ...vehicle,
   liveStatus: statusFromVehicle(vehicle),
   speedKmh: vehicle.status === VEHICLE_STATUSES.IN_USE ? 38 : 0,
-  activeSeconds: vehicle.status === VEHICLE_STATUSES.IN_USE ? 740 : index * 64,
+  activeSeconds: vehicle.status === VEHICLE_STATUSES.IN_USE ? getElapsedSecondsFromApiDate(vehicle.activeTripStartedAt) : index * 64,
   location: vehicle.location,
 });
 
 const createVehicleIcon = (vehicle, isSelected) => {
   const meta = STATUS_META[vehicle.liveStatus] || STATUS_META.available;
-  const timer = vehicle.liveStatus === "in_use"
+  const hasRideTimer = vehicle.liveStatus === "in_use" && Number.isFinite(vehicle.activeSeconds);
+  const timer = hasRideTimer
     ? formatDuration(vehicle.activeSeconds)
     : vehicle.chargingProgress
       ? `${vehicle.chargingProgress.currentBatteryPercent}%`
@@ -1023,28 +1057,17 @@ const createVehicleIcon = (vehicle, isSelected) => {
   });
 };
 
-const createTechnicianIcon = (technician) =>
-  L.divIcon({
-    className: "admin-tech-marker",
-    html: `
-      <div class="admin-tech-marker__core">
-        <span>STAFF</span>
-        <b>${technician.status}</b>
-      </div>
-    `,
-    iconSize: [54, 54],
-    iconAnchor: [27, 27],
-  });
-
 const createChargingStationIcon = (station) => {
   const meta = STATION_STATUS_META[station.status] || STATION_STATUS_META[CHARGING_STATION_STATUSES.ONLINE];
 
   return L.divIcon({
     className: "admin-station-marker",
     html: `
+      <div class="admin-station-marker__hitbox" data-admin-station-id="${station.id}">
       <div class="admin-station-marker__core" data-admin-station-id="${station.id}" style="--station:${meta.color};">
         <span>⚡</span>
         <b>${station.availablePorts}/${station.totalPorts}</b>
+      </div>
       </div>
     `,
     iconSize: [48, 58],
@@ -1057,9 +1080,11 @@ const createServicePointIcon = (point) =>
   L.divIcon({
     className: "admin-service-point-marker",
     html: `
+      <div class="admin-service-point-marker__hitbox" data-admin-service-point-id="${point?.id || ""}">
       <div class="admin-service-point-marker__core" data-admin-service-point-id="${point?.id || ""}">
         <span>+</span>
         <b>SVC</b>
+      </div>
       </div>
     `,
     iconSize: [48, 58],
@@ -1151,30 +1176,83 @@ const LeafletLayoutFix = ({ refreshKey }) => {
   return null;
 };
 
+const openMarkerPopupFromRefs = (markerRefs, markerId, attempts = 8) => {
+  if (!markerId) return;
+
+  const tryOpen = (remainingAttempts) => {
+    const marker = markerRefs.current.get(markerId);
+    if (marker) {
+      marker.openPopup();
+      return;
+    }
+
+    if (remainingAttempts <= 0) return;
+    window.setTimeout(() => tryOpen(remainingAttempts - 1), 70);
+  };
+
+  window.requestAnimationFrame(() => tryOpen(attempts));
+};
+
 const MarkerDomClickFallback = ({ onVehicleClick, onStationClick, onServicePointClick }) => {
+  const map = useMap();
+  const lastHandledRef = useRef({ key: "", at: 0 });
+
+  const handleMarkerTarget = useCallback((target) => {
+    if (!(target instanceof Element)) return false;
+
+    const markerNode = target.closest("[data-admin-vehicle-id], [data-admin-station-id], [data-admin-service-point-id]");
+    if (!markerNode) return false;
+
+    const vehicleId = markerNode.getAttribute("data-admin-vehicle-id");
+    const stationId = markerNode.getAttribute("data-admin-station-id");
+    const servicePointId = markerNode.getAttribute("data-admin-service-point-id");
+    const key = vehicleId ? `vehicle:${vehicleId}` : stationId ? `station:${stationId}` : `service:${servicePointId}`;
+    const now = Date.now();
+
+    if (lastHandledRef.current.key === key && now - lastHandledRef.current.at < 160) {
+      return true;
+    }
+
+    lastHandledRef.current = { key, at: now };
+
+    if (vehicleId) {
+      onVehicleClick(vehicleId);
+      return true;
+    }
+
+    if (stationId) {
+      onStationClick(stationId);
+      return true;
+    }
+
+    if (servicePointId) {
+      onServicePointClick(servicePointId);
+      return true;
+    }
+
+    return false;
+  }, [onServicePointClick, onStationClick, onVehicleClick]);
+
   useMapEvents({
     click(event) {
-      const target = event.originalEvent?.target;
-      if (!(target instanceof HTMLElement)) return;
-
-      const vehicleNode = target.closest("[data-admin-vehicle-id]");
-      if (vehicleNode?.dataset.adminVehicleId) {
-        onVehicleClick(vehicleNode.dataset.adminVehicleId);
-        return;
-      }
-
-      const stationNode = target.closest("[data-admin-station-id]");
-      if (stationNode?.dataset.adminStationId) {
-        onStationClick(stationNode.dataset.adminStationId);
-        return;
-      }
-
-      const servicePointNode = target.closest("[data-admin-service-point-id]");
-      if (servicePointNode?.dataset.adminServicePointId) {
-        onServicePointClick(servicePointNode.dataset.adminServicePointId);
-      }
+      handleMarkerTarget(event.originalEvent?.target);
     },
   });
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const handleContainerClick = (event) => {
+      handleMarkerTarget(event.target);
+    };
+
+    container.addEventListener("click", handleContainerClick, true);
+    container.addEventListener("pointerdown", handleContainerClick, true);
+
+    return () => {
+      container.removeEventListener("click", handleContainerClick, true);
+      container.removeEventListener("pointerdown", handleContainerClick, true);
+    };
+  }, [handleMarkerTarget, map]);
 
   return null;
 };
@@ -1424,6 +1502,12 @@ const AdminControlRoom = () => {
   const [isLoadingSuperAdminFinance, setIsLoadingSuperAdminFinance] = useState(false);
   const [superAdminFinancePeriod, setSuperAdminFinancePeriod] = useState(getDefaultFinancePeriod);
   const [superAdminTab, setSuperAdminTab] = useState("finance");
+  const [adminReviews, setAdminReviews] = useState([]);
+  const [adminReviewsError, setAdminReviewsError] = useState("");
+  const [isLoadingAdminReviews, setIsLoadingAdminReviews] = useState(false);
+  const [selectedAdminReviewId, setSelectedAdminReviewId] = useState("");
+  const [adminReviewDraft, setAdminReviewDraft] = useState({ rating: "5", comment: "" });
+  const [adminReviewBusyId, setAdminReviewBusyId] = useState("");
   const [superAdminRoleSearchQuery, setSuperAdminRoleSearchQuery] = useState("");
   const [superAdminRoleFilter, setSuperAdminRoleFilter] = useState("all");
   const [chargingStationsError, setChargingStationsError] = useState("");
@@ -1440,6 +1524,8 @@ const AdminControlRoom = () => {
     driverLicenseNumber: "",
     role: USER_ROLES.Staff,
   });
+  const [createUserErrors, setCreateUserErrors] = useState([]);
+  const [isCreatingBackendUser, setIsCreatingBackendUser] = useState(false);
   const [blockDraft, setBlockDraft] = useState({
     userId: "",
     reason: "",
@@ -1453,7 +1539,6 @@ const AdminControlRoom = () => {
   const [selectedKpiDetail, setSelectedKpiDetail] = useState(null);
   const [kpiSort, setKpiSort] = useState({ key: "ordersCompleted", direction: "desc" });
   const [incidents, setIncidents] = useState(incidentSeed);
-  const [technicians] = useState(techniciansSeed);
   const [serviceTasks, setServiceTasks] = useState(tasksSeed);
   const [staffTasks, setStaffTasks] = useState([]);
   const [isLoadingStaffTasks, setIsLoadingStaffTasks] = useState(false);
@@ -1611,6 +1696,11 @@ const AdminControlRoom = () => {
     if (isSuperAdmin) return true;
     return user.role === USER_ROLES.Rider || user.role === USER_ROLES.Staff;
   }, [adminSession?.id, isSuperAdmin]);
+  const canPermanentlyDeleteUser = useCallback((user) => {
+    if (!isSuperAdmin || !user || user.id === adminSession?.id) return false;
+    const roleKey = normalizeRole(user.role);
+    return roleKey === "rider" || roleKey === "staff";
+  }, [adminSession?.id, isSuperAdmin]);
   const blockableUsers = useMemo(
     () => backendUsers.filter((user) => user.email !== LEGACY_DEVELOPMENT_ADMIN_EMAIL && user.isActive && canManageUserAccount(user)),
     [backendUsers, canManageUserAccount]
@@ -1703,6 +1793,35 @@ const AdminControlRoom = () => {
       setIsLoadingSuperAdminFinance(false);
     }
   }, [isSuperAdmin, superAdminFinancePeriod]);
+
+  const loadAdminReviews = useCallback(async (options = {}) => {
+    if (!isSuperAdmin) return;
+
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingAdminReviews(true);
+    setAdminReviewsError("");
+
+    try {
+      const reviews = await tripReviewsApi.getAdmin();
+      const normalizedReviews = Array.isArray(reviews) ? reviews : [];
+      const nextSelectedReview = normalizedReviews[0] || null;
+      setAdminReviews(normalizedReviews);
+      setSelectedAdminReviewId(nextSelectedReview?.id || "");
+      setAdminReviewDraft({
+        rating: String(nextSelectedReview?.rating || 5),
+        comment: nextSelectedReview?.comment || "",
+      });
+    } catch (error) {
+      setAdminReviews([]);
+      setAdminReviewsError(
+        error.status === 401 || error.status === 403
+          ? "SuperAdmin access is required for review moderation."
+          : error.message || "Reviews are unavailable."
+      );
+    } finally {
+      if (!silent) setIsLoadingAdminReviews(false);
+    }
+  }, [isSuperAdmin]);
 
   const loadBackendUsers = useCallback(async () => {
     setIsLoadingBackendUsers(true);
@@ -1899,6 +2018,13 @@ const AdminControlRoom = () => {
   }, [activeSection, isSuperAdmin, loadSuperAdminFinance]);
 
   useEffect(() => {
+    if (activeSection !== "superadmin" || !isSuperAdmin || superAdminTab !== "reviews") return undefined;
+
+    const reviewsTimer = window.setTimeout(loadAdminReviews, 0);
+    return () => window.clearTimeout(reviewsTimer);
+  }, [activeSection, isSuperAdmin, loadAdminReviews, superAdminTab]);
+
+  useEffect(() => {
     if (!adminSession) return undefined;
 
     const connection = createOperationsConnection();
@@ -2042,18 +2168,24 @@ const AdminControlRoom = () => {
   const liveVehiclesWithChargingProgress = useMemo(
     () =>
       liveVehicles.map((vehicle) => {
+        const vehicleWithTimer = vehicle.liveStatus === "in_use"
+          ? {
+              ...vehicle,
+              activeSeconds: getElapsedSecondsFromApiDate(vehicle.activeTripStartedAt, chargingProgressTick),
+            }
+          : vehicle;
         const progress = chargingProgressByVehicleId.get(vehicle.id);
-        if (!progress) return vehicle;
+        if (!progress) return vehicleWithTimer;
 
         return {
-          ...vehicle,
+          ...vehicleWithTimer,
           batteryPercent: progress.currentBatteryPercent,
           rangeKm: progress.currentRangeKm,
           chargingProgress: progress,
           liveStatus: "low_charge",
         };
       }),
-    [chargingProgressByVehicleId, liveVehicles]
+    [chargingProgressByVehicleId, chargingProgressTick, liveVehicles]
   );
 
   const filteredVehicles = useMemo(() => {
@@ -2080,16 +2212,20 @@ const AdminControlRoom = () => {
 
   const searchResults = useMemo(() => filteredVehicles.slice(0, 6), [filteredVehicles]);
 
-  const taskVehicleIds = useMemo(
-    () => new Set(visibleStaffTasks.map((task) => task.vehicleId).filter(Boolean)),
-    [visibleStaffTasks]
-  );
+  const taskVehicleIds = useMemo(() => {
+    const vehicleIds = new Set(visibleStaffTasks.map((task) => task.vehicleId).filter(Boolean));
+    if (staffTaskDraft.vehicleId) {
+      vehicleIds.add(staffTaskDraft.vehicleId);
+    }
+    return vehicleIds;
+  }, [staffTaskDraft.vehicleId, visibleStaffTasks]);
 
   const taskMapVehicles = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     return liveVehiclesWithChargingProgress.filter((vehicle) => {
       if (!taskVehicleIds.has(vehicle.id)) return false;
+      if (vehicle.id === staffTaskDraft.vehicleId) return true;
       if (!query) return true;
 
       const searchable = [
@@ -2105,7 +2241,7 @@ const AdminControlRoom = () => {
 
       return searchable.includes(query);
     });
-  }, [liveVehiclesWithChargingProgress, searchQuery, taskVehicleIds]);
+  }, [liveVehiclesWithChargingProgress, searchQuery, staffTaskDraft.vehicleId, taskVehicleIds]);
 
   const mapVehicles = activeSection === "tasks" ? taskMapVehicles : filteredVehicles;
 
@@ -2366,9 +2502,7 @@ const AdminControlRoom = () => {
 
   const openVehicleDetailsById = (vehicleId) => {
     focusVehicle(vehicleId);
-    window.setTimeout(() => {
-      vehicleMarkerRefs.current.get(vehicleId)?.openPopup();
-    }, 0);
+    openMarkerPopupFromRefs(vehicleMarkerRefs, vehicleId);
   };
 
   const openChargingStationDetails = (station) => {
@@ -2385,9 +2519,7 @@ const AdminControlRoom = () => {
   const openChargingStationDetailsById = (stationId) => {
     const station = managedChargingStations.find((item) => item.id === stationId);
     openChargingStationDetails(station);
-    window.setTimeout(() => {
-      chargingStationMarkerRefs.current.get(stationId)?.openPopup();
-    }, 0);
+    openMarkerPopupFromRefs(chargingStationMarkerRefs, stationId);
   };
 
   const focusServicePointById = (pointId) => {
@@ -2399,9 +2531,7 @@ const AdminControlRoom = () => {
       lat: point.location.lat,
       lng: point.location.lng,
     });
-    window.setTimeout(() => {
-      servicePointMarkerRefs.current.get(pointId)?.openPopup();
-    }, 0);
+    openMarkerPopupFromRefs(servicePointMarkerRefs, pointId);
   };
 
   const visibleSidebarItems = sidebarItems.filter((item) => isSuperAdmin || !item.superOnly);
@@ -2411,12 +2541,85 @@ const AdminControlRoom = () => {
   const showAdminNotice = (message, section = activeSection, tone = "success") => {
     setAdminNotice({ section, message, tone });
   };
+  const clearAdminNotice = () => {
+    setAdminNotice({ section: null, message: "", tone: "success" });
+  };
   const getApiErrorMessage = (error, fallback) => {
     if (Array.isArray(error?.errors) && error.errors.length) {
       return error.errors.map((item) => item.message).filter(Boolean).join("\n") || fallback;
     }
 
     return error?.message || fallback;
+  };
+  const splitNoticeLines = (message) => String(message || "").split("\n").map((item) => item.trim()).filter(Boolean);
+  const getCreateUserNoticeSection = () => (activeSection === "superadmin" ? "superadmin" : "users");
+  const updateCreateUserDraftField = (field, value) => {
+    setCreateUserErrors([]);
+    setCreateUserDraft((draft) => ({ ...draft, [field]: value }));
+  };
+  const validateCreateUserDraft = () => {
+    const errors = [];
+    const namePattern = /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u;
+    const phonePattern = /^(\+994|994|0)\d{9}$/;
+    const driverLicensePattern = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9-]{5,20}$/;
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const selectedRole = Number(createUserDraft.role);
+    const firstName = createUserDraft.firstName.trim();
+    const lastName = createUserDraft.lastName.trim();
+    const email = createUserDraft.email.trim();
+    const phone = createUserDraft.phone.trim();
+    const password = createUserDraft.password;
+    const driverLicenseNumber = createUserDraft.driverLicenseNumber.trim();
+
+    if (!firstName) {
+      errors.push("First name is required.");
+    } else if (!namePattern.test(firstName)) {
+      errors.push("First name can contain only letters.");
+    }
+
+    if (!lastName) {
+      errors.push("Last name is required.");
+    } else if (!namePattern.test(lastName)) {
+      errors.push("Last name can contain only letters.");
+    }
+
+    if (!email) {
+      errors.push("Email is required.");
+    } else if (!emailPattern.test(email)) {
+      errors.push("Email is not valid.");
+    }
+
+    if (!phone) {
+      errors.push("Phone is required.");
+    } else if (!phonePattern.test(phone)) {
+      errors.push("Phone number must be a valid Azerbaijan number.");
+    }
+
+    if (!password) {
+      errors.push("Password is required.");
+    } else {
+      if (password.length < 8) errors.push("Password must contain at least 8 characters.");
+      if (!/[A-Z]/.test(password)) errors.push("Password must contain at least one uppercase letter.");
+      if (!/[a-z]/.test(password)) errors.push("Password must contain at least one lowercase letter.");
+      if (!/\d/.test(password)) errors.push("Password must contain at least one digit.");
+      if (!/[^a-zA-Z0-9]/.test(password)) errors.push("Password must contain at least one special character.");
+    }
+
+    if (!driverLicenseNumber) {
+      errors.push("Driver license number is required.");
+    } else if (!driverLicensePattern.test(driverLicenseNumber)) {
+      errors.push("Driver license number must contain letters and digits.");
+    }
+
+    if (![USER_ROLES.Staff, USER_ROLES.Admin, USER_ROLES.SuperAdmin].includes(selectedRole)) {
+      errors.push("Select a valid account role.");
+    }
+
+    if (!isSuperAdmin && selectedRole !== USER_ROLES.Staff) {
+      errors.push("Only SuperAdmin can create Admin or SuperAdmin accounts.");
+    }
+
+    return errors;
   };
   const updatePricingMode = async (mode) => {
     setIsUpdatingPricingMode(true);
@@ -2576,6 +2779,121 @@ const AdminControlRoom = () => {
       showAdminNotice(getApiErrorMessage(error, "User status could not be updated."), "superadmin", "error");
     }
   };
+  const deleteSuperAdminUser = async (user, section = "superadmin") => {
+    if (!canPermanentlyDeleteUser(user)) {
+      showAdminNotice("Only Rider and Staff accounts can be permanently deleted.", section, "error");
+      return;
+    }
+
+    const displayName = `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email;
+    const confirmed = await confirm({
+      title: `Delete ${displayName}?`,
+      message: "This permanently removes the account and related test data. The email, phone, and driver license can be used again.",
+      confirmLabel: "Delete permanently",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+
+    try {
+      await adminUsersApi.deleteUser(user.id);
+      setBackendUsers((items) => items.filter((item) => item.id !== user.id));
+      setSelectedKycUserId((current) => (current === user.id ? null : current));
+      await Promise.all([
+        loadBackendUsers(),
+        loadAdminStatistics(),
+        loadStaffKpi({ silent: true }),
+        loadStaffTasks(),
+        loadChargingSessions({ silent: true }),
+        loadBackendVehicles({ silent: true }),
+      ]);
+      showAdminNotice("User permanently deleted.", section);
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "User could not be deleted."), section, "error");
+    }
+  };
+
+  const saveAdminReview = async (review) => {
+    if (!review) return;
+
+    const rating = Number(adminReviewDraft.rating);
+    const comment = adminReviewDraft.comment.trim();
+
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      showAdminNotice("Rating must be between 1 and 5.", "superadmin", "error");
+      return;
+    }
+
+    if (!comment) {
+      showAdminNotice("Comment is required.", "superadmin", "error");
+      return;
+    }
+
+    if (comment.length > 600) {
+      showAdminNotice("Comment must be 600 characters or shorter.", "superadmin", "error");
+      return;
+    }
+
+    setAdminReviewBusyId(review.id);
+    try {
+      const updatedReview = await tripReviewsApi.updateAdmin(review.id, { rating, comment });
+      setAdminReviews((items) => upsertAdminReview(items, updatedReview));
+      setAdminReviewDraft({
+        rating: String(updatedReview.rating || 5),
+        comment: updatedReview.comment || "",
+      });
+      showAdminNotice("Review updated.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Review could not be updated."), "superadmin", "error");
+    } finally {
+      setAdminReviewBusyId("");
+    }
+  };
+
+  const toggleAdminReviewPublication = async (review) => {
+    if (!review) return;
+
+    setAdminReviewBusyId(review.id);
+    try {
+      const updatedReview = await tripReviewsApi.updatePublication(review.id, !review.isPublished);
+      setAdminReviews((items) => upsertAdminReview(items, updatedReview));
+      showAdminNotice(updatedReview.isPublished ? "Review published." : "Review hidden.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Review publication could not be changed."), "superadmin", "error");
+    } finally {
+      setAdminReviewBusyId("");
+    }
+  };
+
+  const deleteAdminReview = async (review) => {
+    if (!review) return;
+
+    const confirmed = await confirm({
+      title: `Delete review from ${review.name || review.email}?`,
+      message: "This permanently removes the rider comment from public comments and the moderation list.",
+      confirmLabel: "Delete review",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+
+    setAdminReviewBusyId(review.id);
+    try {
+      await tripReviewsApi.deleteAdmin(review.id);
+      const nextItems = adminReviews.filter((item) => item.id !== review.id);
+      const nextSelectedReview = nextItems[0] || null;
+      setAdminReviews(nextItems);
+      setSelectedAdminReviewId(nextSelectedReview?.id || "");
+      setAdminReviewDraft({
+        rating: String(nextSelectedReview?.rating || 5),
+        comment: nextSelectedReview?.comment || "",
+      });
+      showAdminNotice("Review deleted.", "superadmin");
+    } catch (error) {
+      showAdminNotice(getApiErrorMessage(error, "Review could not be deleted."), "superadmin", "error");
+    } finally {
+      setAdminReviewBusyId("");
+    }
+  };
+
   const openVehicleNotification = (notice) => {
     if (notice.vehicleId) {
       focusVehicle(notice.vehicleId);
@@ -2656,6 +2974,18 @@ const AdminControlRoom = () => {
   };
 
   const createBackendUser = async () => {
+    if (isCreatingBackendUser) return;
+
+    const noticeSection = getCreateUserNoticeSection();
+    const validationErrors = validateCreateUserDraft();
+    setCreateUserErrors(validationErrors);
+
+    if (validationErrors.length) {
+      clearAdminNotice();
+      return;
+    }
+
+    setIsCreatingBackendUser(true);
     try {
       const payload = {
         firstName: createUserDraft.firstName.trim(),
@@ -2681,10 +3011,15 @@ const AdminControlRoom = () => {
         driverLicenseNumber: "",
         role: USER_ROLES.Staff,
       });
+      setCreateUserErrors([]);
       await loadBackendUsers();
-      showAdminNotice("Account created successfully", "users");
+      showAdminNotice("Account created successfully", noticeSection);
     } catch (error) {
-      showAdminNotice(getApiErrorMessage(error, "Account could not be created."), "users", "error");
+      const message = getApiErrorMessage(error, "Account could not be created.");
+      setCreateUserErrors(splitNoticeLines(message));
+      clearAdminNotice();
+    } finally {
+      setIsCreatingBackendUser(false);
     }
   };
 
@@ -3283,12 +3618,27 @@ const AdminControlRoom = () => {
         {visibleAdminNotice && (
           <button
             type="button"
-            onClick={() => setAdminNotice({ section: null, message: "", tone: "success" })}
+            onClick={clearAdminNotice}
             className={`mt-4 w-full whitespace-pre-line rounded-xl border px-3 py-2 text-left text-xs font-bold ${noticeClassName}`}
           >
             {visibleAdminNotice}
           </button>
         )}
+      </div>
+    );
+  };
+
+  const renderCreateUserErrors = () => {
+    if (!createUserErrors.length) return null;
+
+    return (
+      <div className="mt-3 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-3 text-xs font-bold text-red-100" role="alert" aria-live="polite">
+        <p className="font-black uppercase tracking-wide">Fix these fields</p>
+        <ul className="mt-2 list-disc space-y-1 pl-4">
+          {createUserErrors.map((error, index) => (
+            <li key={`${error}-${index}`}>{error}</li>
+          ))}
+        </ul>
       </div>
     );
   };
@@ -3775,24 +4125,32 @@ const AdminControlRoom = () => {
                   key={key}
                   type={key === "password" ? "password" : key === "email" ? "email" : "text"}
                   value={createUserDraft[key]}
-                  onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, [key]: event.target.value }))}
+                  onChange={(event) => updateCreateUserDraftField(key, event.target.value)}
                   placeholder={placeholder}
                   className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
                 />
               ))}
               <select
                 value={createUserDraft.role}
-                onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, role: Number(event.target.value) }))}
+                onChange={(event) => updateCreateUserDraftField("role", Number(event.target.value))}
                 className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
               >
                 <option value={USER_ROLES.Staff}>Staff</option>
                 {isSuperAdmin && <option value={USER_ROLES.Admin}>Admin</option>}
                 {isSuperAdmin && <option value={USER_ROLES.SuperAdmin}>SuperAdmin</option>}
               </select>
-              <button type="button" onClick={createBackendUser} className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600">
-                Create account
+              <button
+                type="button"
+                onClick={createBackendUser}
+                disabled={isCreatingBackendUser}
+                className={`rounded-xl px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition ${
+                  isCreatingBackendUser ? "cursor-not-allowed bg-slate-700 text-slate-400" : "bg-red-500 hover:bg-red-600"
+                }`}
+              >
+                {isCreatingBackendUser ? "Creating..." : "Create account"}
               </button>
             </div>
+            {renderCreateUserErrors()}
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
@@ -3856,8 +4214,8 @@ const AdminControlRoom = () => {
                   />
                 </label>
               </div>
-              <div className="max-h-[420px] min-h-[220px] overflow-auto">
-                <table className="w-full min-w-[860px] text-left text-sm">
+              <div className="h-[360px] min-h-[360px] overflow-auto [scrollbar-gutter:stable]">
+                <table className="w-full min-w-[1080px] text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-[#10192a] text-[10px] font-black uppercase tracking-wide text-slate-500">
                     <tr>
                       {userTableColumns.map(([key, label]) => (
@@ -3868,7 +4226,7 @@ const AdminControlRoom = () => {
                           </button>
                         </th>
                       ))}
-                      <th className="px-4 py-3">Block</th>
+                      <th className="px-4 py-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/10">
@@ -3897,30 +4255,41 @@ const AdminControlRoom = () => {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setBlockDraft((draft) => ({ ...draft, userId: row.id }));
-                                  showAdminNotice("User selected. Add a block reason and press Block.", "users");
-                                }}
-                                className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
-                              >
-                                Select
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => unblockBackendUser(row.id)}
-                                className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[10px] font-black uppercase text-emerald-100"
-                              >
-                                Unblock
-                              </button>
-                            ) : (
-                              <span className="rounded-lg bg-white/[0.06] px-3 py-2 text-[10px] font-black uppercase text-slate-500">
-                                Protected
-                              </span>
-                            )}
+                            <div className="flex flex-wrap gap-2">
+                              {canManageUserAccount(row.raw) ? row.raw?.isActive ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBlockDraft((draft) => ({ ...draft, userId: row.id }));
+                                    showAdminNotice("User selected. Add a block reason and press Block.", "users");
+                                  }}
+                                  className="rounded-lg bg-red-500/15 px-3 py-2 text-[10px] font-black uppercase text-red-100"
+                                >
+                                  Select
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => unblockBackendUser(row.id)}
+                                  className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[10px] font-black uppercase text-emerald-100"
+                                >
+                                  Unblock
+                                </button>
+                              ) : (
+                                <span className="rounded-lg bg-white/[0.06] px-3 py-2 text-[10px] font-black uppercase text-slate-500">
+                                  Protected
+                                </span>
+                              )}
+                              {canPermanentlyDeleteUser(row.raw) && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteSuperAdminUser(row.raw, "users")}
+                                  className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-100 transition hover:bg-red-500 hover:text-white"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -4023,7 +4392,7 @@ const AdminControlRoom = () => {
                   </div>
 
                   {selectedKycUser.isActive ? (
-                    <div className="grid gap-2 sm:grid-cols-3">
+                    <div className={`grid gap-2 ${canPermanentlyDeleteUser(selectedKycUser) ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
                       <button
                         type="button"
                         onClick={() => updateKycStatus(selectedKycUser.id, "verified")}
@@ -4047,15 +4416,35 @@ const AdminControlRoom = () => {
                       >
                         Reset
                       </button>
+                      {canPermanentlyDeleteUser(selectedKycUser) && (
+                        <button
+                          type="button"
+                          onClick={() => deleteSuperAdminUser(selectedKycUser, "users")}
+                          className="rounded-xl border border-red-400/40 bg-red-500/15 px-3 py-3 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => unblockBackendUser(selectedKycUser.id)}
-                      className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white"
-                    >
-                      Unblock account
-                    </button>
+                    <div className={`grid gap-2 ${canPermanentlyDeleteUser(selectedKycUser) ? "sm:grid-cols-2" : ""}`}>
+                      <button
+                        type="button"
+                        onClick={() => unblockBackendUser(selectedKycUser.id)}
+                        className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-black text-white"
+                      >
+                        Unblock account
+                      </button>
+                      {canPermanentlyDeleteUser(selectedKycUser) && (
+                        <button
+                          type="button"
+                          onClick={() => deleteSuperAdminUser(selectedKycUser, "users")}
+                          className="rounded-xl border border-red-400/40 bg-red-500/15 px-3 py-3 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -4119,6 +4508,9 @@ const AdminControlRoom = () => {
         .toLowerCase()
         .includes(roleSearch);
     });
+    const selectedAdminReview = adminReviews.find((review) => review.id === selectedAdminReviewId) || null;
+    const publishedReviewCount = adminReviews.filter((review) => review.isPublished).length;
+    const hiddenReviewCount = adminReviews.length - publishedReviewCount;
     const statusLabel = (status) => {
       if (status === VEHICLE_STATUSES.AVAILABLE) return "Available";
       if (status === VEHICLE_STATUSES.RESERVED) return "Reserved";
@@ -4150,10 +4542,11 @@ const AdminControlRoom = () => {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-          <div className="sticky top-0 z-20 grid gap-2 rounded-2xl border border-white/10 bg-[#0b1422]/95 p-2 shadow-xl shadow-black/20 backdrop-blur md:grid-cols-3">
+          <div className="sticky top-0 z-20 grid gap-2 rounded-2xl border border-white/10 bg-[#0b1422]/95 p-2 shadow-xl shadow-black/20 backdrop-blur md:grid-cols-4">
             {[
               ["finance", "Finance", FiDollarSign],
               ["fleet", "Fleet", FaCarSide],
+              ["reviews", "Reviews", FiMessageSquare],
               ["roles", "Roles", FiUsers],
             ].map(([id, label, Icon]) => (
               <button
@@ -4530,6 +4923,201 @@ const AdminControlRoom = () => {
             </>
           )}
 
+          {superAdminTab === "reviews" && (
+            <div className="grid gap-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-white">Review moderation</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      Edit rider comments, publish or hide them on the public site, or delete test reviews.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadAdminReviews()}
+                    disabled={isLoadingAdminReviews}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FiActivity />
+                    {isLoadingAdminReviews ? "Loading..." : "Refresh reviews"}
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {[
+                    ["Total reviews", adminReviews.length, "bg-white/[0.06] text-white"],
+                    ["Published", publishedReviewCount, "bg-emerald-500/15 text-emerald-200"],
+                    ["Hidden", hiddenReviewCount, "bg-amber-500/15 text-amber-200"],
+                  ].map(([label, value, className]) => (
+                    <div key={label} className={`rounded-xl border border-white/10 p-4 ${className}`}>
+                      <p className="text-[10px] font-black uppercase tracking-wide opacity-70">{label}</p>
+                      <p className="mt-2 text-2xl font-black">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {adminReviewsError && (
+                  <p className="mt-4 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">
+                    {adminReviewsError}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
+                <div className="max-h-[620px] overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.035] [scrollbar-gutter:stable]">
+                  <div className="sticky top-0 z-10 border-b border-white/10 bg-[#10192a] px-4 py-3">
+                    <p className="text-sm font-black text-white">All comments</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">{adminReviews.length} rider reviews</p>
+                  </div>
+                  {isLoadingAdminReviews && (
+                    <p className="px-4 py-5 text-sm font-bold text-slate-400">Loading reviews...</p>
+                  )}
+                  {!isLoadingAdminReviews && adminReviews.length === 0 && (
+                    <p className="px-4 py-5 text-sm font-bold text-slate-400">No reviews yet.</p>
+                  )}
+                  <div className="divide-y divide-white/10">
+                    {adminReviews.map((review) => {
+                      const active = selectedAdminReviewId === review.id;
+
+                      return (
+                        <button
+                          key={review.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAdminReviewId(review.id);
+                            setAdminReviewDraft({
+                              rating: String(review.rating || 5),
+                              comment: review.comment || "",
+                            });
+                          }}
+                          className={`block w-full px-4 py-4 text-left transition ${
+                            active ? "bg-red-500/15" : "bg-white/[0.02] hover:bg-white/[0.05]"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-black text-white">{review.name || review.email}</p>
+                              <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                                {review.vehicle} - {review.plateNumber}
+                              </p>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                              review.isPublished ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"
+                            }`}>
+                              {review.isPublished ? "Published" : "Hidden"}
+                            </span>
+                          </div>
+                          <p className="mt-3 line-clamp-2 text-sm font-semibold leading-5 text-slate-300">
+                            {review.comment}
+                          </p>
+                          <div className="mt-3 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-slate-500">
+                            <span>{review.rating}/5 rating</span>
+                            <span>{formatBakuDate(review.createdAt, "Unknown date")}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                  {selectedAdminReview ? (
+                    <div className="grid gap-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-wide text-red-300">Selected review</p>
+                          <h3 className="mt-2 text-2xl font-black text-white">{selectedAdminReview.name || selectedAdminReview.email}</h3>
+                          <p className="mt-1 text-sm font-bold text-slate-500">
+                            {selectedAdminReview.email} - {formatBakuDateTime(selectedAdminReview.createdAt, "Unknown date")}
+                          </p>
+                        </div>
+                        <span className={`rounded-xl px-3 py-2 text-xs font-black uppercase ${
+                          selectedAdminReview.isPublished ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"
+                        }`}>
+                          {selectedAdminReview.isPublished ? "Published" : "Hidden"}
+                        </span>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-white/10 bg-[#111a2b] p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Vehicle</p>
+                          <p className="mt-2 font-black text-white">{selectedAdminReview.vehicle}</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">{selectedAdminReview.plateNumber}</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-[#111a2b] p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Trip</p>
+                          <p className="mt-2 break-all text-sm font-black text-white">{selectedAdminReview.tripId}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
+                        <label className="block">
+                          <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Rating</span>
+                          <select
+                            value={adminReviewDraft.rating}
+                            onChange={(event) => setAdminReviewDraft((draft) => ({ ...draft, rating: event.target.value }))}
+                            className="w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-black text-white outline-none"
+                          >
+                            {[5, 4, 3, 2, 1].map((value) => (
+                              <option key={value} value={value}>{value}/5</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Comment</span>
+                          <textarea
+                            value={adminReviewDraft.comment}
+                            onChange={(event) => setAdminReviewDraft((draft) => ({ ...draft, comment: event.target.value }))}
+                            rows={6}
+                            maxLength={600}
+                            className="w-full resize-none rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold leading-6 text-white outline-none placeholder:text-slate-500"
+                          />
+                          <p className="mt-1 text-right text-[10px] font-bold text-slate-500">{adminReviewDraft.comment.length}/600</p>
+                        </label>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <button
+                          type="button"
+                          onClick={() => saveAdminReview(selectedAdminReview)}
+                          disabled={adminReviewBusyId === selectedAdminReview.id}
+                          className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Save review
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleAdminReviewPublication(selectedAdminReview)}
+                          disabled={adminReviewBusyId === selectedAdminReview.id}
+                          className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {selectedAdminReview.isPublished ? "Hide" : "Publish"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteAdminReview(selectedAdminReview)}
+                          disabled={adminReviewBusyId === selectedAdminReview.id}
+                          className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-3 text-xs font-black uppercase tracking-wide text-red-100 transition hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[360px] items-center justify-center rounded-xl border border-dashed border-white/10 bg-[#111a2b] px-4 text-center">
+                      <div>
+                        <FiMessageSquare className="mx-auto text-3xl text-slate-500" />
+                        <p className="mt-3 text-sm font-black text-white">No review selected</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">Choose a rider comment from the list to moderate it.</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {superAdminTab === "roles" && (
             <div className="grid gap-4">
               <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
@@ -4555,14 +5143,14 @@ const AdminControlRoom = () => {
                       key={key}
                       type={key === "password" ? "password" : key === "email" ? "email" : "text"}
                       value={createUserDraft[key]}
-                      onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, [key]: event.target.value }))}
+                      onChange={(event) => updateCreateUserDraftField(key, event.target.value)}
                       placeholder={placeholder}
                       className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-slate-500"
                     />
                   ))}
                   <select
                     value={createUserDraft.role}
-                    onChange={(event) => setCreateUserDraft((draft) => ({ ...draft, role: Number(event.target.value) }))}
+                    onChange={(event) => updateCreateUserDraftField("role", Number(event.target.value))}
                     className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none"
                   >
                     <option value={USER_ROLES.Staff}>Staff</option>
@@ -4572,11 +5160,15 @@ const AdminControlRoom = () => {
                   <button
                     type="button"
                     onClick={createBackendUser}
-                    className="rounded-xl bg-red-500 px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition hover:bg-red-600"
+                    disabled={isCreatingBackendUser}
+                    className={`rounded-xl px-3 py-3 text-xs font-black uppercase tracking-wide text-white transition ${
+                      isCreatingBackendUser ? "cursor-not-allowed bg-slate-700 text-slate-400" : "bg-red-500 hover:bg-red-600"
+                    }`}
                   >
-                    Create account
+                    {isCreatingBackendUser ? "Creating..." : "Create account"}
                   </button>
                 </div>
+                {renderCreateUserErrors()}
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
@@ -4634,7 +5226,7 @@ const AdminControlRoom = () => {
                   })}
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[860px] text-left text-sm">
+                  <table className="w-full min-w-[940px] text-left text-sm">
                     <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
                       <tr>
                         <th className="px-4 py-3">User</th>
@@ -4678,14 +5270,25 @@ const AdminControlRoom = () => {
                             <td className="px-4 py-3 font-semibold text-slate-300">{user.phone}</td>
                             <td className="px-4 py-3 font-semibold text-slate-300">{formatBakuDate(user.createdAt, "Unknown")}</td>
                             <td className="px-4 py-3">
-                              <button
-                                type="button"
-                                onClick={() => updateSuperAdminUserStatus(user, !user.isActive)}
-                                disabled={isCurrentUser}
-                                className={`rounded-lg px-3 py-2 text-xs font-black text-white transition disabled:cursor-not-allowed disabled:opacity-45 ${user.isActive ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}
-                              >
-                                {user.isActive ? "Deactivate" : "Activate"}
-                              </button>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => updateSuperAdminUserStatus(user, !user.isActive)}
+                                  disabled={isCurrentUser}
+                                  className={`rounded-lg px-3 py-2 text-xs font-black text-white transition disabled:cursor-not-allowed disabled:opacity-45 ${user.isActive ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}
+                                >
+                                  {user.isActive ? "Deactivate" : "Activate"}
+                                </button>
+                                {canPermanentlyDeleteUser(user) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteSuperAdminUser(user)}
+                                    className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs font-black text-red-100 transition hover:bg-red-500 hover:text-white"
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -4903,11 +5506,15 @@ const AdminControlRoom = () => {
                             </p>
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-300">{invoice.userEmail || invoice.userName || invoice.userId}</td>
-                          <td className="px-4 py-3 font-semibold text-slate-300">{invoice.type || "Payment"}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">
+                            {getInvoiceLabel(INVOICE_TYPE_LABELS, invoice.type, "Payment")}
+                          </td>
                           <td className="px-4 py-3 font-black text-emerald-200">
                             {Number(invoice.amount || 0).toFixed(2)} {invoice.currency || "AZN"}
                           </td>
-                          <td className="px-4 py-3 font-semibold text-slate-300">{invoice.deliveryStatus || invoice.status || "Ready"}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-300">
+                            {getInvoiceLabel(INVOICE_DELIVERY_STATUS_LABELS, invoice.deliveryStatus, invoice.status || "Ready")}
+                          </td>
                           <td className="px-4 py-3">
                             <button
                               type="button"
@@ -5568,9 +6175,9 @@ const AdminControlRoom = () => {
                 Refresh
               </button>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[210px] overflow-auto overscroll-contain pb-2 [scrollbar-gutter:stable] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-500/70 [&::-webkit-scrollbar-track]:bg-transparent">
               <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                <thead className="sticky top-0 z-10 bg-[#1a2433] text-[10px] font-black uppercase text-slate-500 shadow-[0_1px_0_rgba(255,255,255,0.08)]">
                   <tr>
                     <th className="px-4 py-3">Staff member</th>
                     <th className="px-4 py-3">Completed tasks</th>
@@ -5613,9 +6220,9 @@ const AdminControlRoom = () => {
                 <p className="mt-1 text-xs font-semibold text-slate-500">{sortedAdmins.length} admin accounts</p>
               </div>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[210px] overflow-auto overscroll-contain pb-2 [scrollbar-gutter:stable] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-500/70 [&::-webkit-scrollbar-track]:bg-transparent">
               <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="bg-white/[0.04] text-[10px] font-black uppercase text-slate-500">
+                <thead className="sticky top-0 z-10 bg-[#1a2433] text-[10px] font-black uppercase text-slate-500 shadow-[0_1px_0_rgba(255,255,255,0.08)]">
                   <tr>
                     <th className="px-4 py-3">Admin</th>
                     <th className="px-4 py-3">Completed work</th>
@@ -5763,7 +6370,17 @@ const AdminControlRoom = () => {
               </select>
               <select
                 value={staffTaskDraft.vehicleId}
-                onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, vehicleId: event.target.value }))}
+                onChange={(event) => {
+                  const vehicleId = event.target.value;
+                  setStaffTaskDraft((draft) => ({ ...draft, vehicleId }));
+
+                  if (vehicleId) {
+                    openVehicleDetailsById(vehicleId);
+                  } else {
+                    setSelectedVehicleId("");
+                    setFocusTarget(null);
+                  }
+                }}
                 className="rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-sm font-bold text-white outline-none focus:border-red-400/70"
               >
                 <option value="">No vehicle</option>
@@ -5774,6 +6391,16 @@ const AdminControlRoom = () => {
                   </option>
                 ))}
               </select>
+              <p className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] font-bold leading-4 text-slate-400">
+                {staffTaskDraft.vehicleId
+                  ? (() => {
+                      const vehicle = backendVehicles.find((item) => item.id === staffTaskDraft.vehicleId);
+                      return vehicle
+                        ? `Map focus: ${vehicle.plateNumber} - ${vehicle.brand} ${vehicle.model}`
+                        : "Map focus: selected vehicle";
+                    })()
+                  : "Map focus: choose a vehicle to center the map."}
+              </p>
               <select
                 value={staffTaskDraft.priority}
                 onChange={(event) => setStaffTaskDraft((draft) => ({ ...draft, priority: event.target.value }))}
@@ -6811,6 +7438,11 @@ const AdminControlRoom = () => {
             z-index: 820 !important;
           }
 
+          .admin-map .leaflet-admin-interactive-markers-pane {
+            pointer-events: auto !important;
+            z-index: 880 !important;
+          }
+
           .admin-map .leaflet-popup-pane {
             pointer-events: auto !important;
             z-index: 900 !important;
@@ -6829,9 +7461,17 @@ const AdminControlRoom = () => {
             pointer-events: auto !important;
           }
 
-          .admin-tech-marker {
-            background: transparent;
-            border: 0;
+          .admin-map .leaflet-marker-icon.admin-car-marker,
+          .admin-map .leaflet-marker-icon.admin-car-marker *,
+          .admin-map .leaflet-marker-icon.admin-station-marker,
+          .admin-map .leaflet-marker-icon.admin-station-marker *,
+          .admin-map .leaflet-marker-icon.admin-service-point-marker,
+          .admin-map .leaflet-marker-icon.admin-service-point-marker *,
+          .admin-map [data-admin-vehicle-id],
+          .admin-map [data-admin-station-id],
+          .admin-map [data-admin-service-point-id] {
+            cursor: pointer !important;
+            pointer-events: auto !important;
           }
 
           .admin-station-marker {
@@ -6842,6 +7482,17 @@ const AdminControlRoom = () => {
           .admin-service-point-marker {
             background: transparent;
             border: 0;
+          }
+
+          .admin-station-marker__hitbox,
+          .admin-service-point-marker__hitbox {
+            align-items: center;
+            cursor: pointer;
+            display: flex;
+            height: 58px;
+            justify-content: center;
+            pointer-events: auto;
+            width: 48px;
           }
 
           .admin-station-marker__core {
@@ -6912,34 +7563,6 @@ const AdminControlRoom = () => {
             font-size: 9px;
             font-weight: 900;
             line-height: 1;
-          }
-
-          .admin-tech-marker__core {
-            align-items: center;
-            background: rgba(15, 23, 42, 0.95);
-            border: 2px solid #38bdf8;
-            border-radius: 999px;
-            box-shadow: 0 0 22px rgba(56, 189, 248, 0.35);
-            color: #fff;
-            display: grid;
-            height: 54px;
-            justify-items: center;
-            padding: 7px;
-            width: 54px;
-          }
-
-          .admin-tech-marker__core span {
-            font-size: 9px;
-            font-weight: 900;
-            letter-spacing: 0.02em;
-            line-height: 1;
-          }
-
-          .admin-tech-marker__core b {
-            color: #7dd3fc;
-            font-size: 8px;
-            line-height: 1;
-            text-transform: uppercase;
           }
 
           .admin-car-marker__wrap {
@@ -7235,6 +7858,7 @@ const AdminControlRoom = () => {
                     onStationClick={openChargingStationDetailsById}
                     onServicePointClick={focusServicePointById}
                   />
+                  <Pane name="admin-interactive-markers" style={{ zIndex: 880, pointerEvents: "auto" }} />
 
                   {isZoneMap && managedZones.map((zone) => {
                     const zoneMeta = getParkingZoneMeta(zone.type);
@@ -7267,6 +7891,7 @@ const AdminControlRoom = () => {
                     <Circle
                       center={[selectedVehicle.location.lat, selectedVehicle.location.lng]}
                       radius={420}
+                      interactive={false}
                       pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.14, weight: 2 }}
                     />
                   )}
@@ -7297,12 +7922,15 @@ const AdminControlRoom = () => {
                         }}
                         position={[station.location.lat, station.location.lng]}
                         icon={createChargingStationIcon(station)}
+                        pane="admin-interactive-markers"
                         eventHandlers={{
-                          click: (event) => {
+                          click: () => {
                             openChargingStationDetailsById(station.id);
-                            event.target.openPopup();
                           },
                         }}
+                        interactive
+                        keyboard
+                        riseOnHover
                       >
                         <Popup>
                           <div className="min-w-[250px]">
@@ -7355,11 +7983,15 @@ const AdminControlRoom = () => {
                       }}
                       position={[point.location.lat, point.location.lng]}
                       icon={createServicePointIcon(point)}
+                      pane="admin-interactive-markers"
                       eventHandlers={{
-                        click: (event) => {
-                          event.target.openPopup();
+                        click: () => {
+                          focusServicePointById(point.id);
                         },
                       }}
+                      interactive
+                      keyboard
+                      riseOnHover
                     >
                       <Popup>
                         <div className="min-w-[220px]">
@@ -7393,12 +8025,13 @@ const AdminControlRoom = () => {
                         }}
                         position={[vehicle.location.lat, vehicle.location.lng]}
                         icon={createVehicleIcon(vehicle, active)}
+                        pane="admin-interactive-markers"
                         eventHandlers={{
-                          click: (event) => {
+                          click: () => {
                             openVehicleDetailsById(vehicle.id);
-                            event.target.openPopup();
                           },
                         }}
+                        interactive
                         keyboard
                         riseOnHover
                         zIndexOffset={active ? 1000 : 500}
@@ -7425,22 +8058,6 @@ const AdminControlRoom = () => {
                       </Marker>
                     );
                   })}
-
-                  {!isOperationsMap && activeSection === "tasks" &&
-                    technicians.map((technician) => (
-                      <Marker
-                        key={technician.id}
-                        position={[technician.lat, technician.lng]}
-                        icon={createTechnicianIcon(technician)}
-                      >
-                        <Popup>
-                          <div className="min-w-[150px]">
-                            <p className="text-sm font-black text-slate-950">{technician.name}</p>
-                            <p className="mt-1 text-xs font-bold text-slate-500">{technician.status}</p>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    ))}
 
                   <MapFocus focusTarget={focusTarget} />
                   <MapSectionFocus activeSection={activeSection} />

@@ -23,10 +23,12 @@ public sealed class UpsertParkingZoneRequestValidator : AbstractValidator<Upsert
             .ChildRules(point =>
             {
                 point.RuleFor(value => value.Latitude)
-                    .InclusiveBetween(40.2, 40.6);
+                    .InclusiveBetween(-90, 90)
+                    .WithMessage("Latitude must be between -90 and 90.");
 
                 point.RuleFor(value => value.Longitude)
-                    .InclusiveBetween(49.55, 50.25);
+                    .InclusiveBetween(-180, 180)
+                    .WithMessage("Longitude must be between -180 and 180.");
             });
     }
 }

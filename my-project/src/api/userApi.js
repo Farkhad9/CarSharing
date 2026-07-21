@@ -10,6 +10,23 @@ const normalizeUser = (user) => ({
 
 export const userApi = {
   getMe: async () => normalizeUser(await apiRequest("/api/users/me")),
+  resendEmailVerification: async () => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      return await apiRequest("/api/users/me/email-verification/resend", {
+        method: "POST",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new Error("Verification email request timed out. Please try again.", { cause: error });
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  },
   changePassword: async ({ currentPassword, newPassword, confirmPassword }) => {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 15000);

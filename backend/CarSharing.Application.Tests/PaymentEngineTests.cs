@@ -52,6 +52,38 @@ public sealed class PaymentEngineTests
     }
 
     [Fact]
+    public async Task PayTrip_UsesLockedTripTotalWhenVehiclePriceChangesBeforePayment()
+    {
+        var fixture = CreateFixture(balance: 100, battery: 80);
+        var lockedTotal = fixture.Trip.TotalPrice;
+
+        fixture.Vehicle.UpdateDetails(
+            fixture.Vehicle.Brand,
+            fixture.Vehicle.Model,
+            fixture.Vehicle.Year,
+            fixture.Vehicle.PlateNumber,
+            fixture.Vehicle.MileageKm,
+            fixture.Vehicle.BatteryPercent,
+            fixture.Vehicle.RangeKm,
+            99m,
+            fixture.Vehicle.Currency,
+            fixture.Vehicle.Seats,
+            fixture.Vehicle.Color,
+            fixture.Vehicle.ConnectorType,
+            fixture.Vehicle.ChargingStationId,
+            fixture.Vehicle.LocationLabel,
+            fixture.Vehicle.Zone,
+            fixture.Vehicle.Latitude,
+            fixture.Vehicle.Longitude);
+
+        var result = await fixture.Service.PayTripAsync(fixture.Trip.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(lockedTotal, fixture.Payments.Items.Single().Amount);
+        Assert.Equal(100m - lockedTotal, fixture.User.Balance);
+    }
+
+    [Fact]
     public async Task PayTrip_WithInsufficientBalance_DoesNotPartiallyDebit()
     {
         var fixture = CreateFixture(balance: 8, battery: 80);
@@ -145,6 +177,7 @@ public sealed class PaymentEngineTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<bool> ExistsByDriverLicenseNumberAsync(string driverLicenseNumber, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(User entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteAsync(User entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class TripRepo(Trip trip) : ITripRepository

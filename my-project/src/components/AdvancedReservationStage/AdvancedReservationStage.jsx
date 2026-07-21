@@ -226,12 +226,12 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
     }, []);
     const savedCards = useMemo(() => {
         try {
-            const cards = JSON.parse(localStorage.getItem("electroStreetCards") || "[]");
+            const cards = JSON.parse(localStorage.getItem(`electroStreetCards:${currentUser?.id || "anonymous"}`) || "[]");
             return Array.isArray(cards) ? cards : [];
         } catch {
             return [];
         }
-    }, []);
+    }, [currentUser?.id]);
     const [passengerCount, setPassengerCount] = useState(1);
     const [displayedRate, setDisplayedRate] = useState(0);
     const [isReservationConfirmed, setIsReservationConfirmed] = useState(false);
