@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiAlertTriangle, FiCamera, FiCheckCircle, FiClock, FiLogOut, FiRefreshCw, FiTool, FiX } from "react-icons/fi";
+import { FiAlertTriangle, FiCamera, FiCheckCircle, FiClock, FiHeadphones, FiLogOut, FiRefreshCw, FiSend, FiTool, FiX } from "react-icons/fi";
 import { authApi } from "../../api/authApi";
 import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { chargingApi } from "../../api/chargingApi";
 import { STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
+import {
+  SUPPORT_MESSAGE_SENDER_TYPES,
+  SUPPORT_REALTIME_EVENTS,
+  SUPPORT_TICKET_STATUSES,
+  createSupportConnection,
+  staffSupportApi,
+  startSupportConnection,
+  stopSupportConnection,
+} from "../../api/supportApi";
 import { TRIP_COMPLETION_STATUSES, tripCompletionRequestsApi } from "../../api/tripCompletionRequestsApi";
 import { vehicleApi } from "../../api/vehicleApi";
 import { useConfirmDialog } from "../ui/useConfirmDialog";
@@ -45,12 +54,41 @@ const statusOptions = [
   STAFF_TASK_STATUSES.Waiting,
 ];
 
+const SUPPORT_QUEUE_FILTER = "support";
+
 const filterItems = [
   { id: "all", label: "All", icon: FiTool },
   { id: STAFF_TASK_STATUSES.Done, label: "Done", icon: FiCheckCircle },
   { id: STAFF_TASK_STATUSES.InProgress, label: "In progress", icon: FiRefreshCw },
   { id: STAFF_TASK_STATUSES.Waiting, label: "Waiting", icon: FiClock },
 ];
+
+const supportStatusLabels = {
+  [SUPPORT_TICKET_STATUSES.Open]: "Active",
+  [SUPPORT_TICKET_STATUSES.WaitingForStaff]: "Waiting for staff",
+  [SUPPORT_TICKET_STATUSES.WaitingForRider]: "Waiting for rider",
+  [SUPPORT_TICKET_STATUSES.EscalatedToAdmin]: "Admin review",
+  [SUPPORT_TICKET_STATUSES.Resolved]: "Resolved",
+  [SUPPORT_TICKET_STATUSES.Closed]: "Closed",
+};
+
+const supportStatusStyles = {
+  [SUPPORT_TICKET_STATUSES.Open]: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  [SUPPORT_TICKET_STATUSES.WaitingForStaff]: "border-amber-300 bg-amber-50 text-amber-700",
+  [SUPPORT_TICKET_STATUSES.WaitingForRider]: "border-blue-300 bg-blue-50 text-blue-700",
+  [SUPPORT_TICKET_STATUSES.EscalatedToAdmin]: "border-red-300 bg-red-50 text-red-700",
+  [SUPPORT_TICKET_STATUSES.Resolved]: "border-zinc-300 bg-zinc-50 text-zinc-600",
+  [SUPPORT_TICKET_STATUSES.Closed]: "border-zinc-300 bg-zinc-50 text-zinc-600",
+};
+
+const upsertSupportTicket = (items, nextTicket) => {
+  const exists = items.some((ticket) => ticket.id === nextTicket.id);
+  const nextItems = exists
+    ? items.map((ticket) => (ticket.id === nextTicket.id ? nextTicket : ticket))
+    : [nextTicket, ...items];
+
+  return [...nextItems].sort((first, second) => new Date(second.lastMessageAt || 0) - new Date(first.lastMessageAt || 0));
+};
 
 const completionDecisionLabels = {
   [TRIP_COMPLETION_STATUSES.Approved]: "Approved",
@@ -119,6 +157,47 @@ const formatBakuDeadline = (value) => {
     timeStyle: "short",
     hour12: false,
   }).format(date);
+};
+
+const toBakuDateKey = (value) => {
+  const date = parseApiDate(value);
+  if (!date || Number.isNaN(date.getTime())) return "";
+
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: BAKU_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const getBakuDateKeyByOffset = (offsetDays = 0) => {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  return toBakuDateKey(date.toISOString());
+};
+
+const getWorkDateValue = (item) => {
+  if (!item) return "";
+  if (item.supportTicketId) return item.closedAt || item.createdAt;
+  if (item.completionRequestId) return item.status === STAFF_TASK_STATUSES.Done
+    ? item.createdAt || item.dueAt
+    : item.dueAt || item.createdAt;
+  return item.status === STAFF_TASK_STATUSES.Done
+    ? item.updatedAt || item.createdAt || item.dueAt
+    : item.createdAt || item.updatedAt || item.dueAt;
+};
+
+const matchesWorkDate = (item, selectedDate) => {
+  if (selectedDate === "all") return true;
+  return toBakuDateKey(getWorkDateValue(item)) === selectedDate;
 };
 
 const toCompletionTask = (request, vehicleLabel) => ({
@@ -191,17 +270,53 @@ const StaffDashboard = () => {
   const [activeChargingSessions, setActiveChargingSessions] = useState([]);
   const [completionRequests, setCompletionRequests] = useState([]);
   const [reviewedCompletionRequests, setReviewedCompletionRequests] = useState([]);
+  const [supportTickets, setSupportTickets] = useState([]);
+  const [activeSupportTicketId, setActiveSupportTicketId] = useState(null);
+  const [supportDraft, setSupportDraft] = useState("");
+  const [supportError, setSupportError] = useState("");
+  const [supportNotice, setSupportNotice] = useState("");
+  const [isLoadingSupport, setIsLoadingSupport] = useState(false);
+  const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [backendVehicles, setBackendVehicles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [refreshNotice, setRefreshNotice] = useState("");
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
+  const [selectedWorkDate, setSelectedWorkDate] = useState(() => getBakuDateKeyByOffset(0));
   const [completionError, setCompletionError] = useState("");
   const [rejectDraft, setRejectDraft] = useState({ requestId: null, reason: "Photos need to be retaken." });
   const [now, setNow] = useState(() => Date.now());
   const hasLoadedTasksRef = useRef(false);
   const { confirm, dialog } = useConfirmDialog();
+
+  useEffect(() => {
+    const handleSessionRefreshed = (event) => {
+      const user = event.detail;
+      if (!user?.id || user.roleKey !== "staff") return;
+
+      setSession({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: "staff",
+        signedInAt: new Date().toISOString(),
+      });
+      setSupportError("");
+      setActionError("");
+    };
+    const handleSessionExpired = () => {
+      setSession(null);
+      window.location.href = "/staff-login";
+    };
+
+    window.addEventListener("electrostreet:session-refreshed", handleSessionRefreshed);
+    window.addEventListener("electrostreet:session-expired", handleSessionExpired);
+    return () => {
+      window.removeEventListener("electrostreet:session-refreshed", handleSessionRefreshed);
+      window.removeEventListener("electrostreet:session-expired", handleSessionExpired);
+    };
+  }, []);
 
   const loadTasks = useCallback(async (options = {}) => {
     if (!session) return;
@@ -252,22 +367,56 @@ const StaffDashboard = () => {
     }
   }, [session]);
 
+  const loadSupportTickets = useCallback(async (options = {}) => {
+    if (!session) return;
+    const silent = options.silent === true;
+    if (!silent) setIsLoadingSupport(true);
+    setSupportError("");
+
+    try {
+      const tickets = await staffSupportApi.getTickets();
+      const normalizedTickets = Array.isArray(tickets) ? tickets : [];
+      const nextVisibleTickets = normalizedTickets.filter((ticket) =>
+        ticket.status !== SUPPORT_TICKET_STATUSES.Closed &&
+        ticket.status !== SUPPORT_TICKET_STATUSES.Resolved &&
+        ticket.status !== SUPPORT_TICKET_STATUSES.EscalatedToAdmin
+      );
+      setSupportTickets(normalizedTickets);
+      setActiveSupportTicketId((currentId) =>
+        nextVisibleTickets.some((ticket) => ticket.id === currentId)
+          ? currentId
+          : nextVisibleTickets[0]?.id || null
+      );
+      setSupportNotice("");
+    } catch (error) {
+      setSupportError(error.message || "Support queue is unavailable.");
+    } finally {
+      if (!silent) setIsLoadingSupport(false);
+    }
+  }, [session]);
+
   useEffect(() => {
     if (!session) {
       window.location.href = "/staff-login";
       return;
     }
 
-    const timer = window.setTimeout(loadTasks, 0);
+    const timer = window.setTimeout(() => {
+      loadTasks();
+      loadSupportTickets();
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadTasks, session]);
+  }, [loadSupportTickets, loadTasks, session]);
 
   useEffect(() => {
     if (!session) return undefined;
 
-    const timer = window.setInterval(() => loadTasks({ silent: true }), 10000);
+    const timer = window.setInterval(() => {
+      loadTasks({ silent: true });
+      loadSupportTickets({ silent: true });
+    }, 10000);
     return () => window.clearInterval(timer);
-  }, [loadTasks, session]);
+  }, [loadSupportTickets, loadTasks, session]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -293,18 +442,50 @@ const StaffDashboard = () => {
 
     connection.on(REALTIME_EVENTS.StaffTaskCreated, handleTaskChange);
     connection.on(REALTIME_EVENTS.StaffTaskUpdated, handleTaskChange);
-    connection.onreconnecting(() => setRefreshNotice("Live updates reconnecting..."));
+    connection.onreconnecting(() => setRefreshNotice("Loading updates..."));
     connection.onreconnected(() => setRefreshNotice(""));
-    connection.onclose(() => setRefreshNotice("Live updates paused. Refresh is still available."));
+    connection.onclose(() => setRefreshNotice(""));
 
     startConnection(connection).catch(() => {
-      setRefreshNotice("Live updates unavailable. Refresh is still available.");
+      setRefreshNotice("");
     });
 
     return () => {
       connection.off(REALTIME_EVENTS.StaffTaskCreated, handleTaskChange);
       connection.off(REALTIME_EVENTS.StaffTaskUpdated, handleTaskChange);
       stopConnection(connection).catch(() => {});
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+
+    const connection = createSupportConnection();
+    const handleTicketUpdate = (ticket) => {
+      setSupportTickets((items) => {
+        if (ticket.status === SUPPORT_TICKET_STATUSES.EscalatedToAdmin) {
+          return items.filter((item) => item.id !== ticket.id);
+        }
+
+        return upsertSupportTicket(items, ticket);
+      });
+      setActiveSupportTicketId((currentId) => currentId || ticket.id);
+      setSupportNotice("");
+      setSupportError("");
+    };
+
+    connection.on(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+    connection.onreconnecting(() => setSupportNotice("Loading support updates..."));
+    connection.onreconnected(() => setSupportNotice(""));
+    connection.onclose(() => setSupportNotice(""));
+
+    startSupportConnection(connection).catch(() => {
+      setSupportNotice("");
+    });
+
+    return () => {
+      connection.off(SUPPORT_REALTIME_EVENTS.SupportTicketUpdated, handleTicketUpdate);
+      stopSupportConnection(connection).catch(() => {});
     };
   }, [session]);
 
@@ -339,39 +520,81 @@ const StaffDashboard = () => {
     [backendVehicles, completionReviewItems]
   );
 
-  const allFilterItems = useMemo(() => [...reviewTasksForStats, ...tasks], [reviewTasksForStats, tasks]);
+  const supportTaskItems = useMemo(
+    () =>
+      supportTickets
+        .filter((ticket) => ticket.status === SUPPORT_TICKET_STATUSES.Closed || ticket.status === SUPPORT_TICKET_STATUSES.Resolved)
+        .map((ticket) => ({
+          id: `support-${ticket.id}`,
+          supportTicketId: ticket.id,
+          title: `Support chat: ${ticket.subject}`,
+          description: ticket.messages[ticket.messages.length - 1]?.body || "Support ticket was closed.",
+          riderName: ticket.riderName,
+          riderEmail: ticket.riderEmail,
+          closedAt: ticket.closedAt || ticket.updatedAt || ticket.lastMessageAt,
+          status: STAFF_TASK_STATUSES.Done,
+          priority: ticket.priority,
+          createdAt: ticket.closedAt || ticket.updatedAt || ticket.lastMessageAt,
+        })),
+    [supportTickets]
+  );
+
+  const activeSupportTicketsCount = useMemo(
+    () =>
+      supportTickets.filter((ticket) =>
+        ticket.status !== SUPPORT_TICKET_STATUSES.Closed &&
+        ticket.status !== SUPPORT_TICKET_STATUSES.Resolved &&
+        ticket.status !== SUPPORT_TICKET_STATUSES.EscalatedToAdmin
+      ).length,
+    [supportTickets]
+  );
+
+  const allFilterItems = useMemo(
+    () => [...reviewTasksForStats, ...tasks, ...supportTaskItems],
+    [reviewTasksForStats, supportTaskItems, tasks]
+  );
+
+  const datedAllFilterItems = useMemo(
+    () => allFilterItems.filter((item) => matchesWorkDate(item, selectedWorkDate)),
+    [allFilterItems, selectedWorkDate]
+  );
 
   const stats = useMemo(
     () => ({
-      all: allFilterItems.length,
-      [STAFF_TASK_STATUSES.Done]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
-      [STAFF_TASK_STATUSES.InProgress]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
-      [STAFF_TASK_STATUSES.Waiting]: allFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
+      all: datedAllFilterItems.length,
+      [STAFF_TASK_STATUSES.Done]: datedAllFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Done).length,
+      [STAFF_TASK_STATUSES.InProgress]: datedAllFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.InProgress).length,
+      [STAFF_TASK_STATUSES.Waiting]: datedAllFilterItems.filter((task) => task.status === STAFF_TASK_STATUSES.Waiting).length,
     }),
-    [allFilterItems]
+    [datedAllFilterItems]
   );
 
   const pendingCompletionCount = useMemo(
-    () => completionReviewItems.filter((request) => request.status !== STAFF_TASK_STATUSES.Done).length,
-    [completionReviewItems]
+    () => reviewTasksForStats.filter((request) =>
+      request.status !== STAFF_TASK_STATUSES.Done && matchesWorkDate(request, selectedWorkDate)
+    ).length,
+    [reviewTasksForStats, selectedWorkDate]
   );
 
   const visibleCompletionReviews = useMemo(() => {
-    const filtered = activeFilter === "all"
-      ? completionReviewItems
-      : completionReviewItems.filter((request) => request.status === activeFilter);
+    const filtered = completionReviewItems.filter((request) =>
+      (activeFilter === "all" || request.status === activeFilter) &&
+      (selectedWorkDate === "all" || toBakuDateKey(request.status === STAFF_TASK_STATUSES.Done
+        ? request.reviewedAt || request.requestedAt
+        : request.requestedAt) === selectedWorkDate)
+    );
 
     return [...filtered].sort((first, second) => {
       if (first.status === STAFF_TASK_STATUSES.Done && second.status !== STAFF_TASK_STATUSES.Done) return 1;
       if (first.status !== STAFF_TASK_STATUSES.Done && second.status === STAFF_TASK_STATUSES.Done) return -1;
       return new Date(second.requestedAt || 0).getTime() - new Date(first.requestedAt || 0).getTime();
     });
-  }, [activeFilter, completionReviewItems]);
+  }, [activeFilter, completionReviewItems, selectedWorkDate]);
 
   const visibleTasks = useMemo(() => {
-    const filtered = activeFilter === "all"
-      ? tasks
-      : tasks.filter((task) => task.status === activeFilter);
+    const filtered = tasks.filter((task) =>
+      (activeFilter === "all" || task.status === activeFilter) && matchesWorkDate(task, selectedWorkDate)
+    );
 
     return [...filtered].sort((first, second) => {
       const firstRemaining = getRemainingMs(first, now);
@@ -380,7 +603,15 @@ const StaffDashboard = () => {
       if (firstRemaining !== secondRemaining) return firstRemaining - secondRemaining;
       return new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime();
     });
-  }, [activeFilter, tasks, now]);
+  }, [activeFilter, tasks, now, selectedWorkDate]);
+
+  const visibleSupportDoneTasks = useMemo(() => {
+    if (activeFilter !== "all" && activeFilter !== STAFF_TASK_STATUSES.Done) return [];
+
+    return supportTaskItems.filter((task) => matchesWorkDate(task, selectedWorkDate)).sort((first, second) =>
+      new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime()
+    );
+  }, [activeFilter, selectedWorkDate, supportTaskItems]);
 
   const updateStatus = async (taskId, status) => {
     setActionError("");
@@ -469,6 +700,79 @@ const StaffDashboard = () => {
     return vehicle ? `${vehicle.brand} ${vehicle.model}` : "EV";
   }
 
+  const visibleSupportTickets = supportTickets.filter((ticket) =>
+    ticket.status !== SUPPORT_TICKET_STATUSES.Closed &&
+    ticket.status !== SUPPORT_TICKET_STATUSES.Resolved &&
+    ticket.status !== SUPPORT_TICKET_STATUSES.EscalatedToAdmin
+  );
+  const activeSupportTicket = visibleSupportTickets.find((ticket) => ticket.id === activeSupportTicketId) || visibleSupportTickets[0] || null;
+
+  const refreshSupportTicket = (ticket) => {
+    setSupportTickets((items) => upsertSupportTicket(items, ticket));
+    setActiveSupportTicketId(ticket.id);
+  };
+
+  const assignSupportToMe = async (ticketId) => {
+    setSupportError("");
+    try {
+      refreshSupportTicket(await staffSupportApi.assignToMe(ticketId));
+    } catch (error) {
+      setSupportError(error.message || "Support ticket could not be assigned.");
+    }
+  };
+
+  const sendSupportReply = async () => {
+    const body = supportDraft.trim();
+    if (!body || !activeSupportTicket || isSendingSupport) return;
+
+    setIsSendingSupport(true);
+    setSupportError("");
+    try {
+      const ticket = await staffSupportApi.sendMessage(activeSupportTicket.id, { body });
+      refreshSupportTicket(ticket);
+      setSupportDraft("");
+    } catch (error) {
+      setSupportError(error.message || "Support reply could not be sent.");
+    } finally {
+      setIsSendingSupport(false);
+    }
+  };
+
+  const escalateSupportTicket = async () => {
+    if (!activeSupportTicket) return;
+    setSupportError("");
+    try {
+      const ticket = await staffSupportApi.escalateToAdmin(activeSupportTicket.id);
+      setSupportTickets((items) => items.filter((item) => item.id !== ticket.id));
+      setActiveSupportTicketId(null);
+      setSupportNotice("Ticket was transferred to an administrator.");
+    } catch (error) {
+      setSupportError(error.message || "Ticket could not be transferred to admin.");
+    }
+  };
+
+  const closeSupportTicket = async () => {
+    if (!activeSupportTicket) return;
+    setSupportError("");
+    try {
+      const ticket = await staffSupportApi.closeTicket(activeSupportTicket.id);
+      let nextActiveTicketId = null;
+      setSupportTickets((items) => {
+        const nextItems = upsertSupportTicket(items, ticket);
+        const nextActiveTicket = nextItems.find((item) =>
+          item.id !== ticket.id &&
+          item.status !== SUPPORT_TICKET_STATUSES.Closed &&
+          item.status !== SUPPORT_TICKET_STATUSES.Resolved
+        );
+        nextActiveTicketId = nextActiveTicket?.id || null;
+        return nextItems;
+      });
+      setActiveSupportTicketId(nextActiveTicketId);
+    } catch (error) {
+      setSupportError(error.message || "Support ticket could not be closed.");
+    }
+  };
+
   const handleLogout = async () => {
     await authApi.logout();
     setSession(null);
@@ -519,9 +823,73 @@ const StaffDashboard = () => {
               <span className="text-xl font-black">{stats[id]}</span>
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => setActiveFilter(SUPPORT_QUEUE_FILTER)}
+            className={`flex items-center justify-between rounded-lg p-4 text-left transition ${
+              activeFilter === SUPPORT_QUEUE_FILTER ? "bg-red-50 ring-1 ring-red-200" : "bg-zinc-50 hover:bg-zinc-100"
+            }`}
+          >
+            <span className="flex items-center gap-2 text-sm font-black text-zinc-600">
+              <FiHeadphones />
+              Support queue
+            </span>
+            <span className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-lg font-black leading-none ${
+              activeSupportTicketsCount > 0 ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-400"
+            }`}>
+              {activeSupportTicketsCount}
+            </span>
+          </button>
         </aside>
 
         <section className="min-w-0">
+          {activeFilter !== SUPPORT_QUEUE_FILTER && (
+          <div className="mb-4 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-black text-zinc-950">Work date</p>
+                <p className="text-xs font-semibold text-zinc-500">Show staff work for one selected day.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedWorkDate(getBakuDateKeyByOffset(0))}
+                  className={`rounded-lg px-3 py-2 text-xs font-black transition ${
+                    selectedWorkDate === getBakuDateKeyByOffset(0) ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                  }`}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedWorkDate(getBakuDateKeyByOffset(-1))}
+                  className={`rounded-lg px-3 py-2 text-xs font-black transition ${
+                    selectedWorkDate === getBakuDateKeyByOffset(-1) ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                  }`}
+                >
+                  Yesterday
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedWorkDate("all")}
+                  className={`rounded-lg px-3 py-2 text-xs font-black transition ${
+                    selectedWorkDate === "all" ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                  }`}
+                >
+                  All dates
+                </button>
+                <input
+                  type="date"
+                  value={selectedWorkDate === "all" ? "" : selectedWorkDate}
+                  onChange={(event) => setSelectedWorkDate(event.target.value || getBakuDateKeyByOffset(0))}
+                  className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-black text-zinc-700 outline-none focus:border-red-300"
+                />
+              </div>
+            </div>
+          </div>
+          )}
+
+          {activeFilter !== SUPPORT_QUEUE_FILTER && (
           <div className="mb-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -627,7 +995,158 @@ const StaffDashboard = () => {
               )}
             </div>
           </div>
+          )}
 
+          {activeFilter === SUPPORT_QUEUE_FILTER && (
+          <div className="mb-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="flex items-center gap-2 text-xl font-black">
+                  <FiHeadphones />
+                  Support queue
+                </h2>
+                <p className="text-sm font-semibold text-zinc-500">
+                  Take rider chats, answer basic issues, or transfer serious cases to admin.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadSupportTickets()}
+                className="rounded-lg border border-zinc-200 px-4 py-3 text-xs font-black transition hover:bg-zinc-50"
+              >
+                Refresh support
+              </button>
+            </div>
+
+            {(supportError || supportNotice || isLoadingSupport) && (
+              <p className={`mt-4 rounded-lg border px-4 py-3 text-sm font-bold ${
+                supportError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : supportNotice
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-blue-200 bg-blue-50 text-blue-700"
+              }`}>
+                {supportError || supportNotice || "Loading support queue..."}
+              </p>
+            )}
+
+            <div className="mt-4 grid min-h-[420px] overflow-hidden rounded-lg border border-zinc-200 lg:grid-cols-[320px_minmax(0,1fr)]">
+              <div className="border-b border-zinc-200 bg-zinc-50 lg:border-b-0 lg:border-r">
+                {visibleSupportTickets.length ? visibleSupportTickets.map((ticket) => {
+                  const active = activeSupportTicket?.id === ticket.id;
+                  const lastMessage = ticket.messages[ticket.messages.length - 1];
+
+                  return (
+                    <button
+                      key={ticket.id}
+                      type="button"
+                      onClick={() => setActiveSupportTicketId(ticket.id)}
+                      className={`w-full border-b border-zinc-200 p-4 text-left transition last:border-b-0 ${
+                        active ? "bg-red-50" : "hover:bg-white"
+                      }`}
+                    >
+                      <span className="flex items-start justify-between gap-3">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-black text-zinc-950">{ticket.subject}</span>
+                          <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">
+                            {ticket.riderName} - {ticket.riderEmail}
+                          </span>
+                        </span>
+                        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${supportStatusStyles[ticket.status] || supportStatusStyles[SUPPORT_TICKET_STATUSES.Open]}`}>
+                          {supportStatusLabels[ticket.status] || "Active"}
+                        </span>
+                      </span>
+                      <span className="mt-3 block truncate text-xs font-semibold text-zinc-500">{lastMessage?.body}</span>
+                    </button>
+                  );
+                }) : (
+                  <div className="p-6 text-sm font-bold text-zinc-500">No support chats in your queue.</div>
+                )}
+              </div>
+
+              <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+                <div className="border-b border-zinc-200 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-lg font-black text-zinc-950">{activeSupportTicket?.subject || "Select a support chat"}</p>
+                      {activeSupportTicket && (
+                        <p className="mt-1 text-xs font-bold text-zinc-500">
+                          {activeSupportTicket.assignedStaffName ? `Assigned to ${activeSupportTicket.assignedStaffName}` : "Unassigned"}
+                        </p>
+                      )}
+                    </div>
+                    {activeSupportTicket && (
+                      <div className="flex flex-wrap gap-2">
+                        {!activeSupportTicket.assignedStaffId && (
+                          <button type="button" onClick={() => assignSupportToMe(activeSupportTicket.id)} className="rounded-lg bg-zinc-950 px-3 py-2 text-xs font-black text-white">
+                            Take ticket
+                          </button>
+                        )}
+                        <button type="button" onClick={escalateSupportTicket} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+                          Transfer to admin
+                        </button>
+                        <button type="button" onClick={closeSupportTicket} className="rounded-lg border border-zinc-200 px-3 py-2 text-xs font-black text-zinc-600">
+                          Close
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="min-h-0 space-y-3 overflow-y-auto bg-zinc-50 p-4">
+                  {activeSupportTicket?.messages.map((message) => {
+                    const fromRider = message.senderType === SUPPORT_MESSAGE_SENDER_TYPES.Rider;
+
+                    return (
+                      <article
+                        key={message.id}
+                        className={`max-w-[82%] rounded-lg px-4 py-3 ${
+                          fromRider ? "border border-zinc-200 bg-white" : "ml-auto bg-red-50 text-red-900"
+                        }`}
+                      >
+                        <p className="text-[11px] font-black uppercase tracking-wide opacity-70">{message.senderName}</p>
+                        <p className="mt-1 text-sm font-semibold leading-6">{message.body}</p>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                <div className="border-t border-zinc-200 p-4">
+                  <div className="flex gap-2">
+                    <input
+                      value={supportDraft}
+                      onChange={(event) => {
+                        setSupportDraft(event.target.value);
+                        setSupportError("");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          sendSupportReply();
+                        }
+                      }}
+                      disabled={!activeSupportTicket}
+                      placeholder="Reply to rider"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-bold outline-none focus:border-red-300 disabled:opacity-60"
+                    />
+                    <button
+                      type="button"
+                      onClick={sendSupportReply}
+                      disabled={!supportDraft.trim() || !activeSupportTicket || isSendingSupport}
+                      className="inline-flex items-center justify-center rounded-lg bg-red-600 px-4 text-white transition hover:bg-red-700 disabled:bg-zinc-300"
+                      aria-label="Send support reply"
+                    >
+                      <FiSend />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {activeFilter !== SUPPORT_QUEUE_FILTER && (
+          <>
           <div className="mb-4">
             <h2 className="text-xl font-black">My tasks</h2>
             <p className="text-sm font-semibold text-zinc-500">
@@ -659,8 +1178,39 @@ const StaffDashboard = () => {
               <div className="rounded-lg border border-zinc-200 bg-white p-10 text-center">
                 <p className="text-lg font-black">Loading tasks...</p>
               </div>
-            ) : visibleTasks.length ? (
-              visibleTasks.map((task) => {
+            ) : visibleTasks.length || visibleSupportDoneTasks.length ? (
+              <>
+              {visibleSupportDoneTasks.map((task) => (
+                <article key={task.id} className="rounded-lg border border-emerald-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="flex items-center gap-2 text-lg font-black">
+                          <FiHeadphones className="text-red-500" />
+                          {task.title}
+                        </h3>
+                        <span className={`rounded-full border px-3 py-1 text-xs font-black ${statusStyles[task.status]}`}>
+                          Done
+                        </span>
+                        <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-black text-red-700">
+                          Support ticket
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold leading-6 text-zinc-600">{task.description}</p>
+                      <div className="mt-4 flex flex-wrap gap-2 text-xs font-black text-zinc-500">
+                        <span className="rounded-lg bg-zinc-100 px-3 py-2">
+                          Rider: {task.riderName || task.riderEmail || "Rider"}
+                        </span>
+                        <span className="rounded-lg bg-zinc-100 px-3 py-2">
+                          Closed: {formatDate(task.closedAt)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ))}
+
+              {visibleTasks.map((task) => {
                 const countdown = formatCountdown(task, now);
                 const overdue = countdown === "Overdue";
                 const chargingSession = activeChargingSessions.find((session) => session.staffTaskId === task.id);
@@ -723,7 +1273,8 @@ const StaffDashboard = () => {
                     </div>
                   </article>
                 );
-              })
+              })}
+              </>
             ) : (
               <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-10 text-center">
                 <p className="text-lg font-black">No tasks in this view</p>
@@ -733,6 +1284,8 @@ const StaffDashboard = () => {
               </div>
             )}
           </div>
+          </>
+          )}
         </section>
       </section>
 

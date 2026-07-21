@@ -22,6 +22,7 @@ using CarSharing.Application.Charging.Services;
 using CarSharing.Application.StaffTasks.Dtos;
 using CarSharing.Application.StaffTasks.Services;
 using CarSharing.Application.StaffTasks.Validators;
+using CarSharing.Application.Support.Services;
 using CarSharing.Application.Invoices.Services;
 using CarSharing.Application.Admin.Services;
 using CarSharing.Application.Admin.Dtos;
@@ -44,6 +45,7 @@ public static class DependencyInjection
         services.AddScoped<IDynamicPricingService, DynamicPricingService>();
         services.AddScoped<IChargingService, ChargingService>();
         services.AddScoped<IStaffTaskService, StaffTaskService>();
+        services.AddScoped<ISupportService, SupportService>();
         services.AddScoped<IInvoiceService, InvoiceService>();
         services.AddScoped<IAdminStatisticsService, AdminStatisticsService>();
         services.AddScoped<IAdminUserService, AdminUserService>();

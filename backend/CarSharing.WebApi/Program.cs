@@ -9,6 +9,7 @@ using CarSharing.WebApi.Services;
 using CarSharing.Domain.Enums;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
@@ -68,7 +69,8 @@ var authenticationBuilder = builder.Services.AddAuthentication(JwtBearerDefaults
                 var accessToken = context.Request.Query["access_token"];
                 var path = context.HttpContext.Request.Path;
 
-                if (!string.IsNullOrWhiteSpace(accessToken) && path.StartsWithSegments("/hubs/operations"))
+                if (!string.IsNullOrWhiteSpace(accessToken) &&
+                    (path.StartsWithSegments("/hubs/operations") || path.StartsWithSegments("/hubs/support")))
                 {
                     context.Token = accessToken;
                 }
@@ -258,7 +260,18 @@ app.Use(async (context, next) =>
             if (user.TryExpireBlock(now))
             {
                 var unitOfWork = context.RequestServices.GetRequiredService<IUnitOfWork>();
-                await unitOfWork.SaveChangesAsync(context.RequestAborted);
+                try
+                {
+                    await unitOfWork.SaveChangesAsync(context.RequestAborted);
+                }
+                catch (DbUpdateConcurrencyException exception)
+                {
+                    // Expired-block cleanup is opportunistic; it must not break the requested API call.
+                    foreach (var entry in exception.Entries)
+                    {
+                        entry.State = EntityState.Detached;
+                    }
+                }
             }
         }
     }
@@ -269,6 +282,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHub<OperationsHub>("/hubs/operations");
+app.MapHub<SupportHub>("/hubs/support");
 
 if (app.Environment.IsDevelopment())
 {
