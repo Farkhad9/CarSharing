@@ -6,7 +6,11 @@ export const paymentApi = {
   createTopUp: (amount) => apiRequest("/api/payments/top-up", {
     method: "POST",
     body: JSON.stringify({ amount: Number(amount) }),
+    timeoutMs: 15000,
   }),
   payTrip: (tripId) => apiRequest(`/api/payments/trips/${tripId}/pay`, { method: "POST" }),
-  createTripCheckout: (tripId) => apiRequest(`/api/payments/trips/${tripId}/checkout`, { method: "POST" }),
+  createTripCheckout: (tripId) => apiRequest(`/api/payments/trips/${tripId}/checkout`, {
+    method: "POST",
+    timeoutMs: 15000,
+  }),
 };

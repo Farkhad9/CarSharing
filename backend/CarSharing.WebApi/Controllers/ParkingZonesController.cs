@@ -1,6 +1,7 @@
 using CarSharing.Application.Common.Models;
 using CarSharing.Application.ParkingZones.Dtos;
 using CarSharing.Application.ParkingZones.Services;
+using CarSharing.Domain.Enums;
 using CarSharing.WebApi.Auth;
 using CarSharing.WebApi.Hubs;
 using Microsoft.AspNetCore.Authorization;
@@ -11,7 +12,6 @@ namespace CarSharing.WebApi.Controllers;
 
 [ApiController]
 [Route("api/parking-zones")]
-[Authorize(Policy = AuthorizationPolicies.AdminOnly)]
 public sealed class ParkingZonesController : ControllerBase
 {
     private readonly IParkingZoneService _parkingZoneService;
@@ -28,7 +28,8 @@ public sealed class ParkingZonesController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive, CancellationToken cancellationToken)
     {
-        var result = await _parkingZoneService.GetAllAsync(includeInactive, cancellationToken);
+        var canIncludeInactive = User.IsInRole(nameof(UserRole.Admin)) || User.IsInRole(nameof(UserRole.SuperAdmin));
+        var result = await _parkingZoneService.GetAllAsync(includeInactive && canIncludeInactive, cancellationToken);
         return Ok(result.Value);
     }
 

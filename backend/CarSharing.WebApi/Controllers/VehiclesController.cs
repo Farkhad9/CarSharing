@@ -45,7 +45,7 @@ public class VehiclesController : ControllerBase
         if (!CanSeeFullFleet())
         {
             vehicles = vehicles
-                .Where(vehicle => vehicle.Status == VehicleStatus.Available)
+                .Where(IsVisibleForRider)
                 .ToList();
         }
 
@@ -62,7 +62,7 @@ public class VehiclesController : ControllerBase
             return ToErrorResponse(result.Errors);
         }
 
-        if (!CanSeeFullFleet() && result.Value!.Status != VehicleStatus.Available)
+        if (!CanSeeFullFleet() && !IsVisibleForRider(result.Value!))
         {
             return NotFound();
         }
@@ -186,6 +186,9 @@ public class VehiclesController : ControllerBase
 
     private bool CanSeeFullFleet() =>
         _currentUser.Role is UserRole.Staff or UserRole.Admin or UserRole.SuperAdmin;
+
+    private static bool IsVisibleForRider(VehicleDto vehicle) =>
+        vehicle.Status != VehicleStatus.Maintenance;
 
     private async Task<Result<VehicleImageUrls>> SaveVehicleImagesAsync(
         VehiclePhotoUploadRequest request,

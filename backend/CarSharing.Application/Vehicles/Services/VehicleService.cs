@@ -4,6 +4,7 @@ using CarSharing.Application.Common.Models;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Domain.Entities;
 using CarSharing.Domain.Enums;
+using CarSharing.Application.Pricing.Services;
 using FluentValidation;
 
 namespace CarSharing.Application.Vehicles.Services;
@@ -11,6 +12,7 @@ namespace CarSharing.Application.Vehicles.Services;
 public class VehicleService : IVehicleService
 {
     private const int ChargingPercentPerMinute = 10;
+    private const int RangeKmPerBatteryPercent = 4;
     private static readonly Error NotFound = new("Vehicle.NotFound", "Vehicle was not found.");
     private static readonly Error PlateNumberNotUnique = new("Vehicle.PlateNumberNotUnique", "Vehicle with this plate number already exists.");
     private static readonly Error CannotChargeInUseVehicle = new("Vehicle.CannotChargeInUse", "Vehicle cannot be sent to charging while it is in use or reserved.");
@@ -19,8 +21,10 @@ public class VehicleService : IVehicleService
     private readonly IVehicleRepository _vehicleRepository;
     private readonly IChargingSessionRepository _chargingSessionRepository;
     private readonly IStaffTaskRepository _staffTaskRepository;
+    private readonly ITripRepository _tripRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICurrentUserService _currentUser;
+    private readonly IDynamicPricingService _dynamicPricingService;
     private readonly IMapper _mapper;
     private readonly IValidator<CreateVehicleRequest> _createVehicleValidator;
     private readonly IValidator<UpdateVehicleRequest> _updateVehicleValidator;
@@ -30,8 +34,10 @@ public class VehicleService : IVehicleService
         IVehicleRepository vehicleRepository,
         IChargingSessionRepository chargingSessionRepository,
         IStaffTaskRepository staffTaskRepository,
+        ITripRepository tripRepository,
         IUnitOfWork unitOfWork,
         ICurrentUserService currentUser,
+        IDynamicPricingService dynamicPricingService,
         IMapper mapper,
         IValidator<CreateVehicleRequest> createVehicleValidator,
         IValidator<UpdateVehicleRequest> updateVehicleValidator,
@@ -40,8 +46,10 @@ public class VehicleService : IVehicleService
         _vehicleRepository = vehicleRepository;
         _chargingSessionRepository = chargingSessionRepository;
         _staffTaskRepository = staffTaskRepository;
+        _tripRepository = tripRepository;
         _unitOfWork = unitOfWork;
         _currentUser = currentUser;
+        _dynamicPricingService = dynamicPricingService;
         _mapper = mapper;
         _createVehicleValidator = createVehicleValidator;
         _updateVehicleValidator = updateVehicleValidator;
@@ -52,6 +60,9 @@ public class VehicleService : IVehicleService
     {
         var vehicles = await _vehicleRepository.GetAllAsync(cancellationToken);
         var activeSessions = await _chargingSessionRepository.GetActiveAsync(cancellationToken);
+        var openTripsByVehicleId = (await _tripRepository.GetOpenTripsAsync(cancellationToken))
+            .GroupBy(trip => trip.VehicleId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(trip => trip.StartedAt).First());
         var activeSessionsByVehicleId = new Dictionary<Guid, (ChargingSession Session, StaffTask? Task)>();
         foreach (var session in activeSessions)
         {
@@ -60,12 +71,16 @@ public class VehicleService : IVehicleService
                 await _staffTaskRepository.GetByIdAsync(session.StaffTaskId, cancellationToken));
         }
 
-        var vehicleDtos = vehicles
-            .Select(vehicle => MapVehicleWithChargingProgress(
+        var vehicleDtos = new List<VehicleDto>();
+        foreach (var vehicle in vehicles)
+        {
+            vehicleDtos.Add(await MapVehicleAsync(
                 vehicle,
                 activeSessionsByVehicleId.GetValueOrDefault(vehicle.Id).Session,
-                activeSessionsByVehicleId.GetValueOrDefault(vehicle.Id).Task))
-            .ToList();
+                activeSessionsByVehicleId.GetValueOrDefault(vehicle.Id).Task,
+                openTripsByVehicleId.GetValueOrDefault(vehicle.Id),
+                cancellationToken));
+        }
 
         return Result<IReadOnlyList<VehicleDto>>.Success(vehicleDtos);
     }
@@ -82,7 +97,11 @@ public class VehicleService : IVehicleService
         var activeTask = activeSession is null
             ? null
             : await _staffTaskRepository.GetByIdAsync(activeSession.StaffTaskId, cancellationToken);
-        return Result<VehicleDto>.Success(MapVehicleWithChargingProgress(vehicle, activeSession, activeTask));
+        var openTrip = (await _tripRepository.GetOpenTripsAsync(cancellationToken))
+            .Where(trip => trip.VehicleId == vehicle.Id)
+            .OrderByDescending(trip => trip.StartedAt)
+            .FirstOrDefault();
+        return Result<VehicleDto>.Success(await MapVehicleAsync(vehicle, activeSession, activeTask, openTrip, cancellationToken));
     }
 
     public async Task<Result<VehicleDto>> CreateAsync(CreateVehicleRequest request, CancellationToken cancellationToken = default)
@@ -121,7 +140,7 @@ public class VehicleService : IVehicleService
         await _vehicleRepository.AddAsync(vehicle, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+        return Result<VehicleDto>.Success(await MapVehicleAsync(vehicle, cancellationToken: cancellationToken));
     }
 
     public async Task<Result<VehicleDto>> UpdateAsync(Guid id, UpdateVehicleRequest request, CancellationToken cancellationToken = default)
@@ -166,7 +185,7 @@ public class VehicleService : IVehicleService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+        return Result<VehicleDto>.Success(await MapVehicleAsync(vehicle, cancellationToken: cancellationToken));
     }
 
     public async Task<Result<VehicleDto>> UpdateImagesAsync(
@@ -188,7 +207,7 @@ public class VehicleService : IVehicleService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+        return Result<VehicleDto>.Success(await MapVehicleAsync(vehicle, cancellationToken: cancellationToken));
     }
 
     public async Task<Result<VehicleDto>> UpdateStatusAsync(Guid id, UpdateVehicleStatusRequest request, CancellationToken cancellationToken = default)
@@ -219,7 +238,7 @@ public class VehicleService : IVehicleService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<VehicleDto>.Success(_mapper.Map<VehicleDto>(vehicle));
+        return Result<VehicleDto>.Success(await MapVehicleAsync(vehicle, cancellationToken: cancellationToken));
     }
 
     private static string NormalizePlateNumber(string plateNumber)
@@ -227,25 +246,48 @@ public class VehicleService : IVehicleService
         return plateNumber.Trim().ToUpperInvariant();
     }
 
-    private VehicleDto MapVehicleWithChargingProgress(Vehicle vehicle, ChargingSession? activeSession, StaffTask? activeTask)
+    private async Task<VehicleDto> MapVehicleAsync(
+        Vehicle vehicle,
+        ChargingSession? activeSession = null,
+        StaffTask? activeTask = null,
+        Trip? openTrip = null,
+        CancellationToken cancellationToken = default)
     {
         var dto = _mapper.Map<VehicleDto>(vehicle);
-        if (activeSession is null)
+        if (activeSession is not null)
         {
-            return dto;
+            if (activeTask?.Status != StaffTaskStatus.InProgress)
+            {
+                dto.BatteryPercent = activeSession.StartBatteryPercent;
+            }
+            else
+            {
+                var elapsedMinutes = Math.Max(0, (DateTime.UtcNow - activeTask.UpdatedAt).TotalMinutes);
+                dto.BatteryPercent = Math.Min(
+                    activeSession.TargetBatteryPercent,
+                    (int)Math.Round(activeSession.StartBatteryPercent + elapsedMinutes * ChargingPercentPerMinute));
+            }
+        }
+        else if (openTrip is not null && ShouldApplyOpenTripBattery(vehicle))
+        {
+            dto.BatteryPercent = openTrip.CalculateBatteryPercentAfterRide(openTrip.StartBatteryPercent, DateTime.UtcNow);
         }
 
-        if (activeTask?.Status != StaffTaskStatus.InProgress)
-        {
-            dto.BatteryPercent = activeSession.StartBatteryPercent;
-            return dto;
-        }
+        dto.RangeKm = dto.BatteryPercent * RangeKmPerBatteryPercent;
 
-        var elapsedMinutes = Math.Max(0, (DateTime.UtcNow - activeTask.UpdatedAt).TotalMinutes);
-        dto.BatteryPercent = Math.Min(
-            activeSession.TargetBatteryPercent,
-            (int)Math.Round(activeSession.StartBatteryPercent + elapsedMinutes * ChargingPercentPerMinute));
+        var pricing = await _dynamicPricingService.CalculateAsync(vehicle, DateTime.UtcNow, cancellationToken);
+        dto.ActivePricePerMinute = pricing.FinalPricePerMinute;
+        dto.DemandMultiplier = pricing.DemandMultiplier;
+        dto.ZoneMultiplier = pricing.ZoneMultiplier;
+        dto.BatteryMultiplier = pricing.BatteryMultiplier;
+        dto.PricingAdjustmentAmount = pricing.ManualAdjustmentAmount;
+        dto.PricingMode = pricing.PricingMode;
         return dto;
+    }
+
+    private static bool ShouldApplyOpenTripBattery(Vehicle vehicle)
+    {
+        return vehicle.Status == VehicleStatus.InUse;
     }
 
     private static IReadOnlyList<Error> ToValidationErrors(FluentValidation.Results.ValidationResult validationResult)

@@ -202,6 +202,9 @@ public class TripEngineTests
             Guid.NewGuid(),
             DateTime.UtcNow.AddMinutes(-1),
             DateTime.UtcNow.AddMinutes(30),
+            "Fountain Square parking",
+            40.3716,
+            49.8372,
             currency: "AZN");
     }
 
@@ -259,6 +262,11 @@ public class TripEngineTests
 
         public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(Trips.SingleOrDefault(trip => trip.Id == id));
+
+        public Task<IReadOnlyList<Trip>> GetOpenTripsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(Trips
+                .Where(trip => trip.Status != TripStatus.Completed && trip.Status != TripStatus.Cancelled)
+                .ToList());
 
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Trips.LastOrDefault(trip => trip.UserId == userId));

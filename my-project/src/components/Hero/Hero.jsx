@@ -1,19 +1,54 @@
+import { useMemo } from "react";
 import { FaBatteryThreeQuarters, FaBolt, FaCar, FaLocationDot } from "react-icons/fa6";
 
 import img from "../../assets/img/hero.png";
 import { VEHICLE_STATUSES } from "../../data/statuses";
+import { useUserLocation } from "../../hooks/useUserLocation";
 import { useVehicles } from "../../hooks/useVehicles";
+import { formatPickupDistance, getDistanceMeters, getWalkMinutes } from "../../utils/pickupMetrics";
 
 const LOW_CHARGE_RESERVATION_LIMIT = 30;
 
 const Hero = ({ onReserveClick, onFeaturedReserve }) => {
   const { vehicles, isLoading, error } = useVehicles();
-  const availableVehicle = vehicles.find(
-    (vehicle) =>
-      vehicle.status === VEHICLE_STATUSES.AVAILABLE &&
-      Number(vehicle.batteryPercent) > LOW_CHARGE_RESERVATION_LIMIT
+  const { userLocation, hasResolvedUserLocation } = useUserLocation();
+  const availableVehicles = useMemo(
+    () =>
+      vehicles.filter(
+        (vehicle) =>
+          vehicle.status === VEHICLE_STATUSES.AVAILABLE &&
+          Number(vehicle.batteryPercent) > LOW_CHARGE_RESERVATION_LIMIT
+      ),
+    [vehicles]
   );
+  const availableVehicle = useMemo(() => {
+    return availableVehicles
+      .map((vehicle) => {
+        const distanceMeters = getDistanceMeters(userLocation, [
+          Number(vehicle.location?.lat),
+          Number(vehicle.location?.lng),
+        ]);
+
+        return {
+          ...vehicle,
+          distanceMeters,
+          walkTimeMinutes: hasResolvedUserLocation ? getWalkMinutes(distanceMeters) : null,
+        };
+      })
+      .sort((first, second) => first.distanceMeters - second.distanceMeters)[0] || null;
+  }, [availableVehicles, hasResolvedUserLocation, userLocation]);
   const onlineVehiclesCount = vehicles.length;
+  const availableVehiclesCount = availableVehicles.length;
+  const featuredImage = availableVehicle?.galleryImages?.find(Boolean) || availableVehicle?.image || img;
+  const featuredTitle = availableVehicle
+    ? `${availableVehicle.brand} ${availableVehicle.model}`
+    : "Nearest EV";
+  const featuredLocation = availableVehicle?.location?.label || "Baku";
+  const featuredDistance = availableVehicle?.walkTimeMinutes
+    ? `${availableVehicle.walkTimeMinutes} min walk`
+    : Number.isFinite(availableVehicle?.distanceMeters)
+      ? formatPickupDistance(availableVehicle.distanceMeters)
+      : "Finding nearest";
   const primaryPrice = availableVehicle
     ? `${availableVehicle.pricePerMinute.toFixed(2)} ${availableVehicle.currency || "AZN"}/min`
     : "0.00 AZN/min";
@@ -89,7 +124,7 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
                 <FaCar />
               </span>
               <div>
-                <p className="text-lg font-bold text-gray-900">{onlineVehiclesCount}</p>
+                <p className="text-lg font-bold text-gray-900">{availableVehiclesCount}</p>
                 <p className="text-xs font-medium text-gray-500">EVs Available</p>
               </div>
             </div>
@@ -115,7 +150,7 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
         </div>
 
         <div className="flex-1" data-aos="zoom-in" data-aos-delay="300">
-          <img src={img} alt="Mercedes Benz" className="w-full h-auto object-contain" />
+          <img src={featuredImage} alt={featuredTitle} className="w-full h-auto object-contain" />
           {availableVehicle && (
             <div className="mt-5 rounded-xl border border-red-100 bg-white p-5 shadow-lg shadow-red-100/60">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -124,7 +159,7 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
                     Featured EV
                   </p>
                   <h2 className="mt-1 text-xl font-bold text-gray-900">
-                    {availableVehicle.brand} {availableVehicle.model}
+                    {featuredTitle}
                   </h2>
                 </div>
                 <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-500">
@@ -172,8 +207,9 @@ const Hero = ({ onReserveClick, onFeaturedReserve }) => {
                   <div>
                     <p className="text-gray-500">Location</p>
                     <p className="font-semibold text-gray-900">
-                      {availableVehicle.location.label}
+                      {featuredLocation}
                     </p>
+                    <p className="text-xs font-semibold text-red-500">{featuredDistance}</p>
                   </div>
                 </div>
               </div>

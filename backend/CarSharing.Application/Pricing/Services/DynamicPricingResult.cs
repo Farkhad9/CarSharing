@@ -5,4 +5,6 @@ public sealed record DynamicPricingResult(
     decimal DemandMultiplier,
     decimal ZoneMultiplier,
     decimal BatteryMultiplier,
+    decimal ManualAdjustmentAmount,
+    string PricingMode,
     decimal FinalPricePerMinute);

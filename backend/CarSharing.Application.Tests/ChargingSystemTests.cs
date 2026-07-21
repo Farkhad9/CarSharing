@@ -29,6 +29,78 @@ public sealed class ChargingSystemTests
     }
 
     [Fact]
+    public async Task StartChargingAsync_AllowsAvailableLowBatteryVehicle()
+    {
+        var fixture = CreateFixture(vehicleStatus: VehicleStatus.Available, batteryPercent: 24);
+
+        var result = await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(VehicleStatus.Charging, fixture.Vehicle.Status);
+        Assert.Equal(fixture.Station.Id, fixture.Vehicle.ChargingStationId);
+        Assert.Single(fixture.Sessions.Items);
+        Assert.Single(fixture.Tasks.Items);
+    }
+
+    [Fact]
+    public async Task StartChargingAsync_RejectsAvailableVehicleThatDoesNotNeedCharging()
+    {
+        var fixture = CreateFixture(vehicleStatus: VehicleStatus.Available, batteryPercent: 60);
+
+        var result = await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("Charging.VehicleMustNeedCharging", result.Errors.Single().Code);
+        Assert.Empty(fixture.Sessions.Items);
+        Assert.Empty(fixture.Tasks.Items);
+        Assert.Equal(VehicleStatus.Available, fixture.Vehicle.Status);
+    }
+
+    [Fact]
+    public async Task StartChargingAsync_RejectsReservedLowBatteryVehicle()
+    {
+        var fixture = CreateFixture(vehicleStatus: VehicleStatus.Reserved, batteryPercent: 10);
+
+        var result = await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("Charging.VehicleMustNeedCharging", result.Errors.Single().Code);
+        Assert.Empty(fixture.Sessions.Items);
+        Assert.Empty(fixture.Tasks.Items);
+        Assert.Equal(VehicleStatus.Reserved, fixture.Vehicle.Status);
+    }
+
+    [Fact]
+    public async Task StartChargingAsync_UsesOpenTripBatteryForLowChargeDecision()
+    {
+        var fixture = CreateFixture(
+            vehicleStatus: VehicleStatus.Available,
+            batteryPercent: 80,
+            openTripStartedAt: DateTime.UtcNow.AddMinutes(-55));
+
+        var result = await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+
+        Assert.True(result.IsSuccess);
+        var startBatteryPercent = fixture.Sessions.Items.Single().StartBatteryPercent;
+        Assert.InRange(startBatteryPercent, 24, 25);
+        Assert.Equal(startBatteryPercent, fixture.Vehicle.BatteryPercent);
+        Assert.Equal(startBatteryPercent * 4, fixture.Vehicle.RangeKm);
+        Assert.Equal(VehicleStatus.Charging, fixture.Vehicle.Status);
+    }
+
+    [Fact]
     public async Task StartChargingAsync_RejectsUnavailableStation()
     {
         var fixture = CreateFixture(stationStatus: ChargingStationStatus.Maintenance, availablePorts: 0);
@@ -67,6 +139,44 @@ public sealed class ChargingSystemTests
         Assert.Equal(100, fixture.Vehicle.BatteryPercent);
         Assert.Equal(VehicleStatus.Charging, fixture.Vehicle.Status);
         Assert.Equal(2, fixture.Station.AvailablePorts);
+    }
+
+    [Fact]
+    public async Task GetActiveSessionsAsync_ReturnsDynamicBatteryRangeAndRemainingMinutes()
+    {
+        var fixture = CreateFixture();
+        await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+        fixture.Tasks.Items.Single().ChangeStatus(StaffTaskStatus.InProgress, DateTime.UtcNow.AddMinutes(-3));
+
+        var result = await fixture.Service.GetActiveSessionsAsync();
+
+        Assert.True(result.IsSuccess);
+        var session = Assert.Single(result.Value!);
+        Assert.InRange(session.CurrentBatteryPercent, 54, 56);
+        Assert.Equal(session.CurrentBatteryPercent * 4, session.CurrentRangeKm);
+        Assert.Equal(5, session.MinutesRemaining);
+    }
+
+    [Fact]
+    public async Task GetActiveSessionsAsync_TreatsDoneChargingTaskAsReadyForLegacySessions()
+    {
+        var fixture = CreateFixture(batteryPercent: 0);
+        await fixture.Service.StartChargingAsync(new StartChargingSessionRequest(
+            fixture.Vehicle.Id,
+            fixture.Station.Id,
+            fixture.StaffId));
+        fixture.Tasks.Items.Single().ChangeStatus(StaffTaskStatus.Done, DateTime.UtcNow);
+
+        var result = await fixture.Service.GetActiveSessionsAsync();
+
+        Assert.True(result.IsSuccess);
+        var session = Assert.Single(result.Value!);
+        Assert.Equal(100, session.CurrentBatteryPercent);
+        Assert.Equal(400, session.CurrentRangeKm);
+        Assert.Equal(0, session.MinutesRemaining);
     }
 
     [Fact]
@@ -162,7 +272,10 @@ public sealed class ChargingSystemTests
 
     private static Fixture CreateFixture(
         ChargingStationStatus stationStatus = ChargingStationStatus.Online,
-        int availablePorts = 2)
+        int availablePorts = 2,
+        VehicleStatus vehicleStatus = VehicleStatus.Charging,
+        int batteryPercent = 24,
+        DateTime? openTripStartedAt = null)
     {
         var adminId = Guid.NewGuid();
         var staffId = Guid.NewGuid();
@@ -172,7 +285,7 @@ public sealed class ChargingSystemTests
             2025,
             "10-AA-001",
             1000,
-            24,
+            batteryPercent,
             120,
             0.42m,
             "AZN",
@@ -184,7 +297,8 @@ public sealed class ChargingSystemTests
             "Center",
             40.4,
             49.8);
-        vehicle.ChangeStatus(VehicleStatus.Charging);
+        vehicle.ChangeStatus(vehicleStatus);
+        var openTrip = CreateOpenTrip(vehicle, adminId, openTripStartedAt);
 
         var station = ChargingStation.Create(
             "Ganjlik Mall EV Dock",
@@ -203,9 +317,29 @@ public sealed class ChargingSystemTests
         var sessions = new SessionRepo();
         var tasks = new TaskRepo();
         var vehicles = new VehicleRepo(vehicle);
-        var service = new ChargingService(stations, sessions, tasks, vehicles, currentUser, new UnitOfWork());
+        var trips = new TripRepo(openTrip);
+        var service = new ChargingService(stations, sessions, tasks, trips, vehicles, currentUser, new UnitOfWork());
 
         return new Fixture(service, vehicle, station, stations, sessions, tasks, currentUser, adminId, staffId);
+    }
+
+    private static Trip? CreateOpenTrip(Vehicle vehicle, Guid userId, DateTime? startedAt)
+    {
+        if (startedAt is null)
+        {
+            return null;
+        }
+
+        var reservation = Reservation.Create(
+            userId,
+            vehicle.Id,
+            startedAt.Value.AddMinutes(-5),
+            startedAt.Value.AddMinutes(10),
+            "Baku Boulevard",
+            vehicle.Latitude + 0.01,
+            vehicle.Longitude + 0.01);
+
+        return Trip.StartFromReservation(reservation, vehicle, startedAt.Value);
     }
 
     private sealed record Fixture(
@@ -331,6 +465,26 @@ public sealed class ChargingSystemTests
         public Task<bool> ExistsByPlateNumberAsync(string plateNumber, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<bool> ExistsByPlateNumberAsync(string plateNumber, Guid excludedVehicleId, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task AddAsync(Vehicle entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class TripRepo(Trip? openTrip) : ITripRepository
+    {
+        public Task<IReadOnlyList<Trip>> GetOpenTripsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(openTrip is null ? [] : [openTrip]);
+
+        public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult(openTrip?.Id == id ? openTrip : null);
+
+        public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(openTrip?.UserId == userId ? openTrip : null);
+
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(openTrip?.UserId == userId ? [openTrip] : []);
+
+        public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(openTrip?.ReservationId == reservationId ? openTrip : null);
+
+        public Task AddAsync(Trip trip, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class CurrentUser(Guid userId, UserRole role) : ICurrentUserService

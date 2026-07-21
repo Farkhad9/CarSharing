@@ -116,23 +116,120 @@ public sealed class StaffTaskManagementTests
         Assert.Equal(firstStaff.Id, task.AssigneeId);
     }
 
+    [Fact]
+    public async Task UpdateStatusAsync_ForChargingDone_StoresCurrentBattery()
+    {
+        var staff = User.CreateStaff("Charge", "Staff", "staff-charge-done@test.local", "+994501234508", "hash", "STAFFT9");
+        var fixture = CreateFixture(UserRole.Staff, staff, staff.Id);
+        var vehicle = CreateVehicle(0);
+        var station = CreateStation();
+        var now = DateTime.UtcNow;
+        var task = StaffTask.Create(
+            "Charge vehicle",
+            "Move EV to charging station",
+            staff.Id,
+            vehicle.Id,
+            StaffTaskPriority.High,
+            null,
+            now.AddMinutes(-10),
+            StaffTaskType.Charging);
+        task.ChangeStatus(StaffTaskStatus.InProgress, now.AddMinutes(-9));
+        var session = ChargingSession.Start(vehicle, station, staff.Id, Guid.NewGuid(), task.Id, 100, now.AddMinutes(-10));
+        fixture.Tasks.Items.Add(task);
+        fixture.Sessions.Items.Add(session);
+
+        var result = await fixture.Service.UpdateStatusAsync(task.Id, new UpdateStaffTaskStatusRequest(StaffTaskStatus.Done));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(StaffTaskStatus.Done, task.Status);
+        Assert.InRange(session.CurrentBatteryPercent, 89, 91);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ForChargingDone_RejectsBatteryUnderMinimum()
+    {
+        var staff = User.CreateStaff("Charge", "Blocked", "staff-charge-low@test.local", "+994501234509", "hash", "STAFF10");
+        var fixture = CreateFixture(UserRole.Staff, staff, staff.Id);
+        var vehicle = CreateVehicle(0);
+        var station = CreateStation();
+        var now = DateTime.UtcNow;
+        var task = StaffTask.Create(
+            "Charge vehicle",
+            "Move EV to charging station",
+            staff.Id,
+            vehicle.Id,
+            StaffTaskPriority.High,
+            null,
+            now.AddMinutes(-10),
+            StaffTaskType.Charging);
+        task.ChangeStatus(StaffTaskStatus.InProgress, now.AddMinutes(-3));
+        var session = ChargingSession.Start(vehicle, station, staff.Id, Guid.NewGuid(), task.Id, 100, now.AddMinutes(-10));
+        fixture.Tasks.Items.Add(task);
+        fixture.Sessions.Items.Add(session);
+
+        var result = await fixture.Service.UpdateStatusAsync(task.Id, new UpdateStaffTaskStatusRequest(StaffTaskStatus.Done));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("StaffTask.ChargingNotReady", result.Errors.Single().Code);
+        Assert.Equal(StaffTaskStatus.InProgress, task.Status);
+        Assert.Equal(0, session.CurrentBatteryPercent);
+    }
+
     private static Fixture CreateFixture(UserRole currentRole, User staff, Guid? currentUserId = null, params User[] additionalUsers)
     {
         var tasks = new TaskRepo();
+        var sessions = new ChargingSessionRepo();
         var users = new UserRepo([staff, .. additionalUsers]);
         var service = new StaffTaskService(
             tasks,
             new StaffKpiEventRepo(),
-            new ChargingSessionRepo(),
+            sessions,
             users,
             new CurrentUser(currentUserId ?? Guid.NewGuid(), currentRole),
             new UnitOfWork(),
             new CreateStaffTaskRequestValidator());
 
-        return new Fixture(service, tasks);
+        return new Fixture(service, tasks, sessions);
     }
 
-    private sealed record Fixture(StaffTaskService Service, TaskRepo Tasks);
+    private static Vehicle CreateVehicle(int batteryPercent)
+    {
+        return Vehicle.Create(
+            "Hyundai",
+            "Sonata",
+            2021,
+            $"10-CH-{batteryPercent:000}",
+            1000,
+            batteryPercent,
+            batteryPercent * 4,
+            0.45m,
+            "AZN",
+            5,
+            "White",
+            "CCS2",
+            null,
+            "Baku",
+            "Center",
+            40.4,
+            49.8);
+    }
+
+    private static ChargingStation CreateStation()
+    {
+        return ChargingStation.Create(
+            "Charge Hub",
+            ChargingStationStatus.Online,
+            "Baku",
+            "Center",
+            40.4,
+            49.8,
+            120,
+            2,
+            2,
+            ["CCS2"]);
+    }
+
+    private sealed record Fixture(StaffTaskService Service, TaskRepo Tasks, ChargingSessionRepo Sessions);
 
     private sealed class TaskRepo : IStaffTaskRepository
     {
@@ -156,23 +253,31 @@ public sealed class StaffTaskManagementTests
 
     private sealed class ChargingSessionRepo : IChargingSessionRepository
     {
+        public List<ChargingSession> Items { get; } = [];
+
         public Task<IReadOnlyList<ChargingSession>> GetActiveAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ChargingSession>>([]);
+            Task.FromResult<IReadOnlyList<ChargingSession>>(Items.Where(session => session.Status == ChargingSessionStatus.Active).ToList());
 
         public Task<ChargingSession?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<ChargingSession?>(null);
+            Task.FromResult(Items.FirstOrDefault(session => session.Id == id));
 
         public Task<ChargingSession?> GetActiveByVehicleIdAsync(Guid vehicleId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<ChargingSession?>(null);
+            Task.FromResult(Items.FirstOrDefault(session => session.VehicleId == vehicleId && session.Status == ChargingSessionStatus.Active));
 
         public Task<ChargingSession?> GetActiveByStaffTaskIdAsync(Guid staffTaskId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<ChargingSession?>(null);
+            Task.FromResult(Items.FirstOrDefault(session => session.StaffTaskId == staffTaskId && session.Status == ChargingSessionStatus.Active));
 
-        public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task AddAsync(ChargingSession session, CancellationToken cancellationToken = default)
+        {
+            Items.Add(session);
+            return Task.CompletedTask;
+        }
 
-        public Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task RemoveByStationIdAsync(Guid stationId, CancellationToken cancellationToken = default)
+        {
+            Items.RemoveAll(session => session.ChargingStationId == stationId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StaffKpiEventRepo : IStaffKpiEventRepository

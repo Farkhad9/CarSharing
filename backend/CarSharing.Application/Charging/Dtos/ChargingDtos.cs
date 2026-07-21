@@ -29,6 +29,8 @@ public sealed record ChargingSessionDto(
     int StartBatteryPercent,
     int TargetBatteryPercent,
     int CurrentBatteryPercent,
+    int CurrentRangeKm,
+    int MinutesRemaining,
     string? Notes);
 
 public sealed record StaffTaskDto(

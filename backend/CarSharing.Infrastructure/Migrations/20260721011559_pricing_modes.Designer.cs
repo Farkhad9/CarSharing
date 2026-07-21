@@ -4,6 +4,7 @@ using CarSharing.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CarSharing.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260721011559_pricing_modes")]
+    partial class pricing_modes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -438,17 +441,6 @@ namespace CarSharing.Infrastructure.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("nvarchar(3)");
 
-                    b.Property<string>("DestinationLabel")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<double>("DestinationLatitude")
-                        .HasColumnType("float");
-
-                    b.Property<double>("DestinationLongitude")
-                        .HasColumnType("float");
-
                     b.Property<DateTime?>("ExpiredAt")
                         .HasColumnType("datetime2");
 
@@ -716,17 +708,6 @@ namespace CarSharing.Infrastructure.Migrations
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
 
-                    b.Property<string>("DestinationLabel")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<double>("DestinationLatitude")
-                        .HasColumnType("float");
-
-                    b.Property<double>("DestinationLongitude")
-                        .HasColumnType("float");
-
                     b.Property<decimal>("DiscountAmount")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -766,9 +747,6 @@ namespace CarSharing.Infrastructure.Migrations
 
                     b.Property<Guid?>("ReservationId")
                         .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("StartBatteryPercent")
-                        .HasColumnType("int");
 
                     b.Property<double>("StartLatitude")
                         .HasColumnType("float");

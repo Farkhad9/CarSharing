@@ -22,6 +22,13 @@ public class TripConfiguration : IEntityTypeConfiguration<Trip>
         builder.Property(trip => trip.EndLocationLabel)
             .HasMaxLength(200);
 
+        builder.Property(trip => trip.DestinationLabel)
+            .IsRequired()
+            .HasMaxLength(200);
+
+        builder.Property(trip => trip.StartBatteryPercent)
+            .IsRequired();
+
         builder.Property(trip => trip.PricePerMinute)
             .HasPrecision(18, 2);
 

@@ -20,6 +20,7 @@ public sealed class InvoiceService : IInvoiceService
     private readonly IEventPublisher _eventPublisher;
     private readonly IUserRepository _userRepository;
     private readonly ITripRepository _tripRepository;
+    private readonly IPaymentTransactionRepository _paymentTransactionRepository;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
 
@@ -29,6 +30,7 @@ public sealed class InvoiceService : IInvoiceService
         IEventPublisher eventPublisher,
         IUserRepository userRepository,
         ITripRepository tripRepository,
+        IPaymentTransactionRepository paymentTransactionRepository,
         ICurrentUserService currentUser,
         IUnitOfWork unitOfWork)
     {
@@ -37,6 +39,7 @@ public sealed class InvoiceService : IInvoiceService
         _eventPublisher = eventPublisher;
         _userRepository = userRepository;
         _tripRepository = tripRepository;
+        _paymentTransactionRepository = paymentTransactionRepository;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
     }
@@ -173,6 +176,7 @@ public sealed class InvoiceService : IInvoiceService
     private async Task<InvoiceDto> MapAsync(Invoice invoice, CancellationToken cancellationToken)
     {
         var user = await _userRepository.GetByIdAsync(invoice.UserId, cancellationToken);
+        var transaction = await _paymentTransactionRepository.GetByIdAsync(invoice.PaymentTransactionId, cancellationToken);
         return new InvoiceDto(
             invoice.Id,
             invoice.InvoiceNumber,
@@ -183,6 +187,7 @@ public sealed class InvoiceService : IInvoiceService
             invoice.Type,
             invoice.Status,
             invoice.DeliveryStatus,
+            FormatPaymentMethod(transaction),
             invoice.Amount,
             invoice.Currency,
             invoice.PdfUrl,
@@ -194,8 +199,13 @@ public sealed class InvoiceService : IInvoiceService
     private static string CreateInvoiceNumber(DateTime now, Guid transactionId)
         => $"INV-{now:yyyyMMdd}-{transactionId.ToString("N")[..8].ToUpperInvariant()}";
 
-    private static string FormatPaymentMethod(PaymentTransaction transaction)
+    private static string FormatPaymentMethod(PaymentTransaction? transaction)
     {
+        if (transaction is null)
+        {
+            return "Payment";
+        }
+
         if (!string.IsNullOrWhiteSpace(transaction.CardBrand) && !string.IsNullOrWhiteSpace(transaction.CardLast4))
         {
             return $"{transaction.CardBrand} **** {transaction.CardLast4}";

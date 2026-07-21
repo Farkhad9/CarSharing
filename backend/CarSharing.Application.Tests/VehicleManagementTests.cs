@@ -1,5 +1,6 @@
 using AutoMapper;
 using CarSharing.Application.Common.Interfaces;
+using CarSharing.Application.Pricing.Services;
 using CarSharing.Application.Vehicles.Dtos;
 using CarSharing.Application.Vehicles.Mapping;
 using CarSharing.Application.Vehicles.Services;
@@ -53,6 +54,39 @@ public sealed class VehicleManagementTests
         Assert.Equal(VehicleStatus.Maintenance, fixture.Vehicle.Status);
     }
 
+    [Fact]
+    public async Task GetAllAsync_DoesNotDrainAvailableVehicleFromStaleOpenTrip()
+    {
+        var fixture = CreateFixture(UserRole.Admin);
+        fixture.Vehicle.UpdateBattery(100);
+        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, DateTime.UtcNow.AddMinutes(-90)));
+
+        var result = await fixture.Service.GetAllAsync();
+
+        Assert.True(result.IsSuccess);
+        var vehicle = Assert.Single(result.Value!);
+        Assert.Equal(VehicleStatus.Available, vehicle.Status);
+        Assert.Equal(100, vehicle.BatteryPercent);
+        Assert.Equal(400, vehicle.RangeKm);
+    }
+
+    [Fact]
+    public async Task GetAllAsync_DrainsInUseVehicleFromOpenTrip()
+    {
+        var fixture = CreateFixture(UserRole.Admin);
+        fixture.Vehicle.UpdateBattery(80);
+        fixture.Vehicle.ChangeStatus(VehicleStatus.InUse);
+        fixture.Trips.Items.Add(CreateOpenTrip(fixture.Vehicle, DateTime.UtcNow.AddMinutes(-50)));
+
+        var result = await fixture.Service.GetAllAsync();
+
+        Assert.True(result.IsSuccess);
+        var vehicle = Assert.Single(result.Value!);
+        Assert.Equal(VehicleStatus.InUse, vehicle.Status);
+        Assert.InRange(vehicle.BatteryPercent, 29, 30);
+        Assert.Equal(vehicle.BatteryPercent * 4, vehicle.RangeKm);
+    }
+
     private static Fixture CreateFixture(UserRole role)
     {
         var vehicle = Vehicle.Create(
@@ -77,21 +111,39 @@ public sealed class VehicleManagementTests
             config => config.AddProfile<VehicleMappingProfile>(),
             NullLoggerFactory.Instance)
             .CreateMapper();
+        var vehicleRepository = new VehicleRepo(vehicle);
+        var tripRepository = new TripRepo();
         var service = new VehicleService(
-            new VehicleRepo(vehicle),
+            vehicleRepository,
             new ChargingSessionRepo(),
             new StaffTaskRepo(),
+            tripRepository,
             new UnitOfWork(),
             new CurrentUser(role),
+            new DynamicPricingService(vehicleRepository),
             mapper,
             new CreateVehicleRequestValidator(),
             new UpdateVehicleRequestValidator(),
             new UpdateVehicleStatusRequestValidator());
 
-        return new Fixture(service, vehicle);
+        return new Fixture(service, vehicle, tripRepository);
     }
 
-    private sealed record Fixture(VehicleService Service, Vehicle Vehicle);
+    private static Trip CreateOpenTrip(Vehicle vehicle, DateTime startedAt)
+    {
+        var reservation = Reservation.Create(
+            Guid.NewGuid(),
+            vehicle.Id,
+            startedAt.AddMinutes(-5),
+            startedAt.AddMinutes(10),
+            "Baku Boulevard",
+            vehicle.Latitude + 0.01,
+            vehicle.Longitude + 0.01);
+
+        return Trip.StartFromReservation(reservation, vehicle, startedAt);
+    }
+
+    private sealed record Fixture(VehicleService Service, Vehicle Vehicle, TripRepo Trips);
 
     private sealed class VehicleRepo(Vehicle vehicle) : IVehicleRepository
     {
@@ -151,6 +203,32 @@ public sealed class VehicleManagementTests
 
         public Task AddAsync(StaffTask task, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class TripRepo : ITripRepository
+    {
+        public List<Trip> Items { get; } = [];
+
+        public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.FirstOrDefault(trip => trip.Id == id));
+
+        public Task<IReadOnlyList<Trip>> GetOpenTripsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(Items);
+
+        public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.FirstOrDefault(trip => trip.UserId == userId));
+
+        public Task<IReadOnlyList<Trip>> GetActiveTripsByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>(Items.Where(trip => trip.UserId == userId).ToList());
+
+        public Task<Trip?> GetByReservationIdAsync(Guid reservationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.FirstOrDefault(trip => trip.ReservationId == reservationId));
+
+        public Task AddAsync(Trip trip, CancellationToken cancellationToken = default)
+        {
+            Items.Add(trip);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class UnitOfWork : IUnitOfWork

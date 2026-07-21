@@ -61,6 +61,17 @@ public class ChargingSession : BaseEntity
         Status = ChargingSessionStatus.Completed;
     }
 
+    public void UpdateCurrentBattery(int currentBatteryPercent)
+    {
+        if (Status != ChargingSessionStatus.Active)
+        {
+            throw new InvalidOperationException("Only an active charging session can update charging progress.");
+        }
+
+        var normalizedBatteryPercent = Math.Max(0, Math.Min(TargetBatteryPercent, currentBatteryPercent));
+        CurrentBatteryPercent = Math.Max(CurrentBatteryPercent, normalizedBatteryPercent);
+    }
+
     public void ReassignStaff(Guid assignedStaffId)
     {
         if (Status != ChargingSessionStatus.Active)

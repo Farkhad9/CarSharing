@@ -244,7 +244,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { errors });
         }
 
-        if (errors.Any(error => error.Code == "User.EmailNotUnique"))
+        if (errors.Any(error => error.Code is "User.EmailNotUnique" or "User.PhoneNotUnique" or "User.DriverLicenseNotUnique"))
         {
             return Conflict(new { errors });
         }

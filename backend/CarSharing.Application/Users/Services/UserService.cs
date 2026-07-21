@@ -92,20 +92,26 @@ public class UserService : IUserService
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
         var normalizedPhone = NormalizeAzerbaijanPhone(request.Phone);
+        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
+        var uniquenessErrors = new List<Error>();
         if (await _userRepository.ExistsByEmailAsync(normalizedEmail, cancellationToken))
         {
-            return Result<UserDto>.Failure(EmailNotUnique);
+            uniquenessErrors.Add(EmailNotUnique);
         }
 
         if (await _userRepository.ExistsByPhoneAsync(normalizedPhone, cancellationToken))
         {
-            return Result<UserDto>.Failure(PhoneNotUnique);
+            uniquenessErrors.Add(PhoneNotUnique);
         }
 
-        var normalizedDriverLicenseNumber = NormalizeDriverLicenseNumber(request.DriverLicenseNumber);
         if (await _userRepository.ExistsByDriverLicenseNumberAsync(normalizedDriverLicenseNumber, cancellationToken))
         {
-            return Result<UserDto>.Failure(DriverLicenseNotUnique);
+            uniquenessErrors.Add(DriverLicenseNotUnique);
+        }
+
+        if (uniquenessErrors.Count > 0)
+        {
+            return Result<UserDto>.Failure(uniquenessErrors);
         }
 
         var user = User.CreateRider(

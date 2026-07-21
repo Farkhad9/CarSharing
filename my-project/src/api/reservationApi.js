@@ -1,9 +1,21 @@
 import { apiRequest } from "./apiClient";
 
 export const reservationApi = {
-  create: ({ vehicleId, passengerCount = 1 }) => apiRequest("/api/reservations", {
+  create: ({
+    vehicleId,
+    passengerCount = 1,
+    destinationLabel,
+    destinationLatitude,
+    destinationLongitude,
+  }) => apiRequest("/api/reservations", {
     method: "POST",
-    body: JSON.stringify({ vehicleId, passengerCount }),
+    body: JSON.stringify({
+      vehicleId,
+      passengerCount,
+      destinationLabel,
+      destinationLatitude,
+      destinationLongitude,
+    }),
   }),
   getMyActive: () => apiRequest("/api/reservations/my"),
   getById: (id) => apiRequest(`/api/reservations/${id}`),

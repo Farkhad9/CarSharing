@@ -284,6 +284,9 @@ public sealed class AdminStatisticsTests
         public Task<Trip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult<Trip?>(null);
 
+        public Task<IReadOnlyList<Trip>> GetOpenTripsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Trip>>([]);
+
         public Task<Trip?> GetActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult<Trip?>(null);
 

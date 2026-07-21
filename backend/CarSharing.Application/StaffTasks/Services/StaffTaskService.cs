@@ -9,6 +9,9 @@ namespace CarSharing.Application.StaffTasks.Services;
 
 public sealed class StaffTaskService : IStaffTaskService
 {
+    private const int MinimumChargingCompletionBatteryPercent = 80;
+    private const int ChargingPercentPerMinute = 10;
+
     private static readonly Error Unauthenticated = new("StaffTask.Unauthenticated", "User must be authenticated.");
     private static readonly Error StaffRequired = new("StaffTask.StaffRequired", "Only staff, admin, or super admin can manage staff tasks.");
     private static readonly Error AdminRequired = new("StaffTask.AdminRequired", "Only admin or super admin can manage all staff tasks.");
@@ -16,6 +19,7 @@ public sealed class StaffTaskService : IStaffTaskService
     private static readonly Error Forbidden = new("StaffTask.Forbidden", "User is not allowed to update this task.");
     private static readonly Error AssigneeNotFound = new("StaffTask.AssigneeNotFound", "Staff assignee was not found.");
     private static readonly Error AssigneeMustBeStaff = new("StaffTask.AssigneeMustBeStaff", "Task assignee must be an active staff user.");
+    private static readonly Error ChargingTaskNotReady = new("StaffTask.ChargingNotReady", "Charging task can be done only from 80% battery.");
 
     private readonly IStaffTaskRepository _staffTaskRepository;
     private readonly IStaffKpiEventRepository _staffKpiEventRepository;
@@ -155,6 +159,23 @@ public sealed class StaffTaskService : IStaffTaskService
 
         var previousStatus = task.Status;
         var now = DateTime.UtcNow;
+        if (previousStatus != StaffTaskStatus.Done &&
+            request.Status == StaffTaskStatus.Done &&
+            task.Type == StaffTaskType.Charging)
+        {
+            var activeChargingSession = await _chargingSessionRepository.GetActiveByStaffTaskIdAsync(task.Id, cancellationToken);
+            if (activeChargingSession is not null)
+            {
+                var currentBatteryPercent = CalculateChargingBatteryPercent(activeChargingSession, task, now);
+                if (currentBatteryPercent < MinimumChargingCompletionBatteryPercent)
+                {
+                    return Result<StaffTaskDto>.Failure(ChargingTaskNotReady);
+                }
+
+                activeChargingSession.UpdateCurrentBattery(currentBatteryPercent);
+            }
+        }
+
         task.ChangeStatus(request.Status, now);
         if (previousStatus != StaffTaskStatus.Done && request.Status == StaffTaskStatus.Done)
         {
@@ -197,6 +218,21 @@ public sealed class StaffTaskService : IStaffTaskService
         return validationResult.Errors
             .Select(error => new Error($"Validation.{error.PropertyName}", error.ErrorMessage))
             .ToList();
+    }
+
+    private static int CalculateChargingBatteryPercent(ChargingSession session, StaffTask task, DateTime now)
+    {
+        if (task.Status != StaffTaskStatus.InProgress)
+        {
+            return session.CurrentBatteryPercent;
+        }
+
+        var elapsedMinutes = Math.Max(0, (now - task.UpdatedAt).TotalMinutes);
+        return Math.Min(
+            session.TargetBatteryPercent,
+            Math.Max(
+                session.CurrentBatteryPercent,
+                (int)Math.Round(session.StartBatteryPercent + elapsedMinutes * ChargingPercentPerMinute)));
     }
 
     private static StaffTaskDto Map(StaffTask task) => new(

@@ -4,7 +4,7 @@ import { authApi } from "../../api/authApi";
 import { API_URL } from "../../api/apiClient";
 import { createOperationsConnection, REALTIME_EVENTS, startConnection, stopConnection } from "../../api/realtimeClient";
 import { chargingApi } from "../../api/chargingApi";
-import { STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
+import { normalizeStaffTask, STAFF_TASK_STATUSES, staffTasksApi } from "../../api/staffTasksApi";
 import {
   SUPPORT_MESSAGE_SENDER_TYPES,
   SUPPORT_REALTIME_EVENTS,
@@ -21,6 +21,7 @@ import { useConfirmDialog } from "../ui/useConfirmDialog";
 const SESSION_STORAGE_KEY = "electroStreetStaffSession";
 const MIN_CHARGING_COMPLETION_PERCENT = 80;
 const CHARGING_PERCENT_PER_MINUTE = 10;
+const RANGE_KM_PER_BATTERY_PERCENT = 4;
 const BAKU_TIME_ZONE = "Asia/Baku";
 const BAKU_UTC_OFFSET = "+04:00";
 
@@ -106,10 +107,13 @@ const readSession = () => {
 };
 
 const upsertTask = (items, nextTask) => {
-  const exists = items.some((task) => task.id === nextTask.id);
+  const normalizedTask = normalizeStaffTask(nextTask);
+  if (!normalizedTask) return items;
+
+  const exists = items.some((task) => task.id === normalizedTask.id);
   return exists
-    ? items.map((task) => (task.id === nextTask.id ? nextTask : task))
-    : [nextTask, ...items];
+    ? items.map((task) => (task.id === normalizedTask.id ? normalizedTask : task))
+    : [normalizedTask, ...items];
 };
 
 const areListsEqual = (first, second) => JSON.stringify(first) === JSON.stringify(second);
@@ -228,12 +232,28 @@ const parseApiDateMs = (value) => {
 
 const getChargingSessionProgress = (session, task, now) => {
   if (!session) return null;
-  const startBattery = Number(session.startBatteryPercent || session.currentBatteryPercent || 0);
-  const targetBattery = Number(session.targetBatteryPercent || 100);
-  if (task?.status !== STAFF_TASK_STATUSES.InProgress) {
+  const startBattery = Number(session.startBatteryPercent ?? session.currentBatteryPercent ?? 0);
+  const targetBattery = Number(session.targetBatteryPercent ?? 100);
+  const apiCurrentBattery = Number(session.currentBatteryPercent ?? 0);
+  if (Number(task?.status) === STAFF_TASK_STATUSES.Done) {
+    const currentBatteryPercent = apiCurrentBattery >= MIN_CHARGING_COMPLETION_PERCENT
+      ? apiCurrentBattery
+      : targetBattery;
+    const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
     return {
-      currentBatteryPercent: startBattery,
-      minutesRemaining: Math.max(0, Math.ceil((targetBattery - startBattery) / CHARGING_PERCENT_PER_MINUTE)),
+      currentBatteryPercent,
+      currentRangeKm,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)),
+    };
+  }
+
+  if (Number(task?.status) !== STAFF_TASK_STATUSES.InProgress) {
+    const currentBatteryPercent = Math.max(apiCurrentBattery, startBattery);
+    const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
+    return {
+      currentBatteryPercent,
+      currentRangeKm,
+      minutesRemaining: Math.max(0, Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)),
     };
   }
 
@@ -243,14 +263,15 @@ const getChargingSessionProgress = (session, task, now) => {
     : 0;
   const currentBatteryPercent = Math.min(
     targetBattery,
-    Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE)
+    Math.max(apiCurrentBattery, Math.round(startBattery + elapsedMinutes * CHARGING_PERCENT_PER_MINUTE))
   );
   const minutesRemaining = Math.max(
     0,
     Math.ceil((targetBattery - currentBatteryPercent) / CHARGING_PERCENT_PER_MINUTE)
   );
+  const currentRangeKm = Math.round(currentBatteryPercent * RANGE_KM_PER_BATTERY_PERCENT);
 
-  return { currentBatteryPercent, minutesRemaining };
+  return { currentBatteryPercent, currentRangeKm, minutesRemaining };
 };
 
 const formatCountdown = (task, now) => {
@@ -419,7 +440,7 @@ const StaffDashboard = () => {
   }, [loadSupportTickets, loadTasks, session]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    const timer = window.setInterval(() => setNow(Date.now()), 5000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -640,7 +661,8 @@ const StaffDashboard = () => {
           notes: "Charging completed by staff.",
         });
         if (details?.staffTask) {
-          setTasks((items) => items.map((task) => (task.id === taskId ? details.staffTask : task)));
+          const completedTask = normalizeStaffTask(details.staffTask);
+          setTasks((items) => items.map((task) => (task.id === taskId ? completedTask : task)));
         }
         setActiveChargingSessions((items) => items.filter((session) => session.id !== chargingSession.id));
         await loadTasks({ silent: true });
@@ -1240,7 +1262,7 @@ const StaffDashboard = () => {
                           )}
                           {chargingProgress && (
                             <span className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700">
-                              Charging: {chargingProgress.currentBatteryPercent}% - {chargingProgress.minutesRemaining > 0 ? `${chargingProgress.minutesRemaining} min to full` : "ready"}
+                              Charging: {chargingProgress.currentBatteryPercent}% · {chargingProgress.currentRangeKm} km - {chargingProgress.minutesRemaining > 0 ? `${chargingProgress.minutesRemaining} min to full` : "ready"}
                             </span>
                           )}
                         </div>

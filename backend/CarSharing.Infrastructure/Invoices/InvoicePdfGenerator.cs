@@ -129,7 +129,7 @@ public sealed class InvoicePdfGenerator : IInvoicePdfGenerator
                             AddRow(table, "Payment method", model.PaymentMethod);
                             AddRow(table, "Status", model.Status);
                             if (model.FinalRate is not null) AddRow(table, "Final rate", $"{model.FinalRate:F2} {model.Currency}/min");
-                            if (model.DurationSeconds is not null) AddRow(table, "Duration", FormatDuration(model.DurationSeconds.Value));
+                            if (model.DurationSeconds is not null) AddRow(table, "Duration", FormatBillingDuration(model.DurationMinutes, model.DurationSeconds.Value));
                             else if (model.DurationMinutes is not null) AddRow(table, "Duration", $"{model.DurationMinutes} min");
                             if (!string.IsNullOrWhiteSpace(model.PromoCode)) AddRow(table, "Promo code", model.PromoCode.ToUpperInvariant());
                             if (model.DiscountPercent is not null && model.DiscountAmount is not null)
@@ -194,6 +194,23 @@ public sealed class InvoicePdfGenerator : IInvoicePdfGenerator
         if (minutes <= 0) return $"{seconds} sec";
         if (seconds == 0) return $"{minutes} min";
         return $"{minutes} min {seconds} sec";
+    }
+
+    private static string FormatBillingDuration(int? billingMinutes, int actualSeconds)
+    {
+        var actualDuration = FormatDuration(actualSeconds);
+        if (billingMinutes is null)
+        {
+            return actualDuration;
+        }
+
+        var roundedActualMinutes = Math.Max(1, (int)Math.Ceiling(actualSeconds / 60m));
+        if (roundedActualMinutes == billingMinutes.Value)
+        {
+            return $"{billingMinutes} billing min ({actualDuration})";
+        }
+
+        return $"{billingMinutes} billing min";
     }
 
     private static string AuthenticityStampSvg(string invoiceNumber)

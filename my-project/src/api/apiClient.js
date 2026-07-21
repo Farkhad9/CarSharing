@@ -120,23 +120,34 @@ const notifyBlockedSession = (error) => {
 
 export const apiRequest = async (path, options = {}) => {
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const { timeoutMs, ...fetchOptions } = options;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeoutId = timeoutMs
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
   let response;
 
   try {
     response = await fetch(`${API_URL}${path}`, {
-      ...options,
+      ...fetchOptions,
       credentials: "include",
+      signal: controller?.signal || fetchOptions.signal,
       headers: {
-        ...(options.body && !isFormData ? { "Content-Type": "application/json" } : {}),
+        ...(fetchOptions.body && !isFormData ? { "Content-Type": "application/json" } : {}),
         ...getAuthHeaders(),
-        ...options.headers,
+        ...fetchOptions.headers,
       },
     });
   } catch (networkError) {
-    const error = new Error("Backend is offline. Start the API server and refresh the page.");
-    error.code = "Network.BackendOffline";
+    const isTimeout = networkError?.name === "AbortError";
+    const error = new Error(isTimeout
+      ? "The payment gateway is taking too long to respond. Please try again."
+      : "Backend is offline. Start the API server and refresh the page.");
+    error.code = isTimeout ? "Network.Timeout" : "Network.BackendOffline";
     error.cause = networkError;
     throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
   }
 
   if (response.status === 204) return null;

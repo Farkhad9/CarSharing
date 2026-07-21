@@ -13,6 +13,7 @@ namespace CarSharing.Application.Trips.Services;
 public class TripService : ITripService
 {
     private const long MaxPhotoSizeBytes = 15 * 1024 * 1024;
+    private const int RangeKmPerBatteryPercent = 4;
 
     private static readonly TripPhotoAngle[] RequiredPhotoAngles =
     [
@@ -153,7 +154,7 @@ public class TripService : ITripService
         await _tripRepository.AddAsync(trip, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Result<TripDto>.Success(MapTrip(trip));
+        return Result<TripDto>.Success(await MapTripAsync(trip, cancellationToken: cancellationToken));
     }
 
     public async Task<Result<IReadOnlyList<TripDto>>> GetMyActiveAsync(CancellationToken cancellationToken = default)
@@ -169,7 +170,7 @@ public class TripService : ITripService
         foreach (var trip in trips)
         {
             var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-            items.Add(MapTrip(trip, latestRequest));
+            items.Add(await MapTripAsync(trip, latestRequest, cancellationToken));
         }
 
         return Result<IReadOnlyList<TripDto>>.Success(items);
@@ -189,7 +190,7 @@ public class TripService : ITripService
         }
 
         var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-        return Result<TripDto>.Success(MapTrip(trip, latestRequest));
+        return Result<TripDto>.Success(await MapTripAsync(trip, latestRequest, cancellationToken));
     }
 
     public async Task<Result<TripDto>> ApplyPromoCodeAsync(
@@ -248,7 +249,7 @@ public class TripService : ITripService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var latestRequest = await _completionRequestRepository.GetLatestByTripIdAsync(trip.Id, cancellationToken);
-        return Result<TripDto>.Success(MapTrip(trip, latestRequest));
+        return Result<TripDto>.Success(await MapTripAsync(trip, latestRequest, cancellationToken));
     }
 
     public async Task<Result<TripCompletionRequestDto>> SubmitCompletionAsync(
@@ -566,9 +567,26 @@ public class TripService : ITripService
         return errors;
     }
 
-    private TripDto MapTrip(Trip trip, TripCompletionRequest? latestCompletionRequest = null)
+    private async Task<TripDto> MapTripAsync(
+        Trip trip,
+        TripCompletionRequest? latestCompletionRequest = null,
+        CancellationToken cancellationToken = default)
     {
         var dto = _mapper.Map<TripDto>(trip);
+        dto.CurrentBatteryPercent = trip.CalculateBatteryPercentAfterRide(trip.StartBatteryPercent, DateTime.UtcNow);
+        dto.CurrentRangeKm = dto.CurrentBatteryPercent * RangeKmPerBatteryPercent;
+        var vehicle = await _vehicleRepository.GetByIdAsync(trip.VehicleId, cancellationToken);
+        if (vehicle is not null)
+        {
+            dto.Brand = vehicle.Brand;
+            dto.Model = vehicle.Model;
+            dto.PlateNumber = vehicle.PlateNumber;
+            dto.MainImageUrl = vehicle.MainImageUrl;
+            dto.GalleryImageUrl1 = vehicle.GalleryImageUrl1;
+            dto.GalleryImageUrl2 = vehicle.GalleryImageUrl2;
+            dto.GalleryImageUrl3 = vehicle.GalleryImageUrl3;
+        }
+
         dto.LatestCompletionRequest = latestCompletionRequest is null
             ? null
             : _mapper.Map<TripCompletionRequestDto>(latestCompletionRequest);

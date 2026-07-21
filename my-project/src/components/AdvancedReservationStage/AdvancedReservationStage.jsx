@@ -16,7 +16,7 @@ import {
     FiX,
     FiZap,
 } from "react-icons/fi";
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { RESERVATIONS_UPDATED_EVENT } from "../../utils/reservations";
@@ -28,6 +28,7 @@ import {
     getWalkMinutes,
 } from "../../utils/pickupMetrics";
 import { reservationApi } from "../../api/reservationApi";
+import { parkingZoneApi } from "../../api/parkingZoneApi";
 
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
@@ -76,6 +77,16 @@ const RouteBounds = ({ userLocation, carLocation, routePositions, isRouteVisible
     return null;
 };
 
+const DestinationMapPicker = ({ onPick }) => {
+    useMapEvents({
+        click: (event) => {
+            onPick([event.latlng.lat, event.latlng.lng]);
+        },
+    });
+
+    return null;
+};
+
 const LocationWatcher = ({ isEnabled = true, onLocationChange, onLocationError }) => {
     useEffect(() => {
         if (!isEnabled || !("geolocation" in navigator)) {
@@ -106,6 +117,24 @@ const getVehiclePosition = (vehicle) => [
     vehicle.location?.lat || DEFAULT_PICKUP_USER_LOCATION[0],
     vehicle.location?.lng || DEFAULT_PICKUP_USER_LOCATION[1],
 ];
+
+const getDrivingRouteUrl = ([fromLat, fromLng], [toLat, toLng]) =>
+    `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=false`;
+
+const isPointInsidePolygon = ([lat, lng], polygon) => {
+    let inside = false;
+    for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index++) {
+        const [currentLat, currentLng] = polygon[index];
+        const [previousLat, previousLng] = polygon[previousIndex];
+        const intersects =
+            currentLng > lng !== previousLng > lng &&
+            lat < ((previousLat - currentLat) * (lng - currentLng)) / (previousLng - currentLng) + currentLat;
+
+        if (intersects) inside = !inside;
+    }
+
+    return inside;
+};
 
 const getStoredUser = () => {
     try {
@@ -214,6 +243,17 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
     const [currentUserLocation, setCurrentUserLocation] = useState(userLocation);
     const [hasResolvedUserLocation, setHasResolvedUserLocation] = useState(false);
     const [locationMessage, setLocationMessage] = useState("");
+    const [destinationLabel, setDestinationLabel] = useState("");
+    const [destinationPoint, setDestinationPoint] = useState(null);
+    const [parkingZones, setParkingZones] = useState([]);
+    const [hasLoadedParkingZones, setHasLoadedParkingZones] = useState(false);
+    const [parkingZonesError, setParkingZonesError] = useState("");
+    const [destinationRouteState, setDestinationRouteState] = useState({
+        positions: [],
+        distanceMeters: null,
+        status: "idle",
+        error: "",
+    });
     const [routeState, setRouteState] = useState({
         positions: [],
         distanceMeters: null,
@@ -240,6 +280,85 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
         () => (routeState.positions.length > 1 ? routeState.positions : [currentUserLocation, carLocation]),
         [carLocation, currentUserLocation, routeState.positions]
     );
+    const destinationRoutePositions = useMemo(
+        () => (
+            destinationRouteState.positions.length > 1
+                ? destinationRouteState.positions
+                : destinationPoint
+                    ? [carLocation, destinationPoint]
+                    : []
+        ),
+        [carLocation, destinationPoint, destinationRouteState.positions]
+    );
+    const mapRoutePositions = useMemo(
+        () => {
+            const positions = [...routePositions];
+            destinationRoutePositions.forEach((position) => {
+                const last = positions[positions.length - 1];
+                if (!last || last[0] !== position[0] || last[1] !== position[1]) {
+                    positions.push(position);
+                }
+            });
+            return positions;
+        },
+        [destinationRoutePositions, routePositions]
+    );
+    const parkingDecision = useMemo(() => {
+        if (!destinationPoint) {
+            return {
+                canPark: false,
+                status: "missing",
+                message: "Pick your destination on the map before reserving.",
+                zone: null,
+            };
+        }
+
+        const activeZones = parkingZones.filter((zone) => zone.isActive !== false);
+        const restrictedZone = activeZones.find((zone) =>
+            zone.type === "restricted" && isPointInsidePolygon(destinationPoint, zone.positions)
+        );
+        if (restrictedZone) {
+            return {
+                canPark: false,
+                status: "restricted",
+                message: `Destination is inside ${restrictedZone.name}. Parking is not allowed there.`,
+                zone: restrictedZone,
+            };
+        }
+
+        const allowedZones = activeZones.filter((zone) => zone.type !== "restricted" && zone.allowsTripEnd !== false);
+        if (!allowedZones.length && hasLoadedParkingZones) {
+            return {
+                canPark: true,
+                status: "unmanaged",
+                message: "No managed parking zones are active. Destination can be used for this demo.",
+                zone: null,
+            };
+        }
+
+        const allowedZone = allowedZones.find((zone) => isPointInsidePolygon(destinationPoint, zone.positions));
+        if (allowedZone) {
+            return {
+                canPark: true,
+                status: "allowed",
+                message: `Parking allowed in ${allowedZone.name}.`,
+                zone: allowedZone,
+            };
+        }
+
+        return {
+            canPark: false,
+            status: "outside",
+            message: hasLoadedParkingZones
+                ? "Destination is outside available parking zones."
+                : "Loading parking zones before reservation.",
+            zone: null,
+        };
+    }, [destinationPoint, hasLoadedParkingZones, parkingZones]);
+    const hasValidDestination = Boolean(destinationLabel.trim() && destinationPoint && parkingDecision.canPark);
+    const destinationDistanceLabel = destinationPoint
+        ? formatPickupDistance(destinationRouteState.distanceMeters ?? getDistanceMeters(carLocation, destinationPoint))
+        : "Pick on map";
     const pickupRouteLabel = !hasResolvedUserLocation
         ? "Detecting your location..."
         : routeState.status === "loading" || routeState.status === "idle"
@@ -271,6 +390,31 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
 
         return () => window.clearTimeout(timer);
     }, [vehicle.id]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadParkingZones = async () => {
+            setParkingZonesError("");
+            try {
+                const zones = await parkingZoneApi.getZones();
+                if (!isMounted) return;
+                setParkingZones(zones);
+            } catch (error) {
+                if (!isMounted) return;
+                setParkingZones([]);
+                setParkingZonesError(error.message || "Parking zones could not be loaded.");
+            } finally {
+                if (isMounted) setHasLoadedParkingZones(true);
+            }
+        };
+
+        loadParkingZones();
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
 
     useEffect(() => {
         let animationFrame;
@@ -316,6 +460,21 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
             return;
         }
 
+        if (!destinationLabel.trim()) {
+            setReservationError("Enter your destination before confirming the reservation.");
+            return;
+        }
+
+        if (!destinationPoint) {
+            setReservationError("Pick your destination on the map before confirming the reservation.");
+            return;
+        }
+
+        if (!parkingDecision.canPark) {
+            setReservationError(parkingDecision.message);
+            return;
+        }
+
         setIsCreatingReservation(true);
         setReservationError("");
 
@@ -323,6 +482,9 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
             await reservationApi.create({
                 vehicleId: vehicle.id,
                 passengerCount,
+                destinationLabel: destinationLabel.trim(),
+                destinationLatitude: destinationPoint[0],
+                destinationLongitude: destinationPoint[1],
             });
             localStorage.removeItem("reservedVehicle");
             localStorage.removeItem("reservedVehicles");
@@ -349,6 +511,11 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
     const handleLocationError = useCallback((message) => {
         setHasResolvedUserLocation(true);
         setLocationMessage(message);
+    }, []);
+
+    const handleDestinationPick = useCallback((point) => {
+        setDestinationPoint(point);
+        setReservationError("");
     }, []);
 
     useEffect(() => {
@@ -427,6 +594,62 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
 
         return () => controller.abort();
     }, [carLocation, currentUserLocation, hasResolvedUserLocation]);
+
+    useEffect(() => {
+        if (!destinationPoint) {
+            return undefined;
+        }
+
+        const controller = new AbortController();
+
+        const loadDestinationRoute = async () => {
+            setDestinationRouteState((currentRoute) => ({
+                ...currentRoute,
+                status: "loading",
+                error: "",
+            }));
+
+            try {
+                const response = await fetch(getDrivingRouteUrl(carLocation, destinationPoint), {
+                    signal: controller.signal,
+                });
+
+                if (!response.ok) {
+                    throw new Error("Destination route service is unavailable.");
+                }
+
+                const data = await response.json();
+                const route = data.routes?.[0];
+                const coordinates = route?.geometry?.coordinates;
+
+                if (!coordinates?.length) {
+                    throw new Error("Destination route was not found.");
+                }
+
+                setDestinationRouteState({
+                    positions: coordinates.map(([lng, lat]) => [lat, lng]),
+                    distanceMeters: route.distance,
+                    status: "ready",
+                    error: "",
+                });
+            } catch (error) {
+                if (error.name === "AbortError") {
+                    return;
+                }
+
+                setDestinationRouteState({
+                    positions: [carLocation, destinationPoint],
+                    distanceMeters: getDistanceMeters(carLocation, destinationPoint),
+                    status: "error",
+                    error: "Destination route is shown as a direct line.",
+                });
+            }
+        };
+
+        loadDestinationRoute();
+
+        return () => controller.abort();
+    }, [carLocation, destinationPoint]);
 
     const specCards = [
         { icon: FiZap, label: "0-100 km/h", value: specs.acceleration || "3.8 sec" },
@@ -1111,10 +1334,37 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
                                             <RouteBounds
                                                 userLocation={currentUserLocation}
                                                 carLocation={carLocation}
-                                                routePositions={routePositions}
+                                                routePositions={mapRoutePositions}
                                                 isRouteVisible={isRouteVisible}
                                             />
+                                            <DestinationMapPicker onPick={handleDestinationPick} />
                                             <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
+                                            {parkingZones.map((zone) => {
+                                                const restricted = zone.type === "restricted";
+                                                const color = restricted ? "#dc2626" : "#16a34a";
+
+                                                return (
+                                                    <Polygon
+                                                        key={zone.id}
+                                                        positions={zone.positions}
+                                                        eventHandlers={{
+                                                            click: (event) => {
+                                                                L.DomEvent.stopPropagation(event);
+                                                                handleDestinationPick([event.latlng.lat, event.latlng.lng]);
+                                                            },
+                                                        }}
+                                                        pathOptions={{
+                                                            color,
+                                                            fillColor: color,
+                                                            fillOpacity: restricted ? 0.18 : 0.14,
+                                                            weight: restricted ? 2 : 1.5,
+                                                            dashArray: restricted ? "7 7" : "0",
+                                                        }}
+                                                    >
+                                                        <Popup>{zone.name}</Popup>
+                                                    </Polygon>
+                                                );
+                                            })}
                                             {hasResolvedUserLocation && (
                                                 <Marker position={currentUserLocation} icon={userIcon}>
                                                     <Popup>Your location</Popup>
@@ -1125,8 +1375,18 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
                                                     {vehicle.brand} {vehicle.model}
                                                 </Popup>
                                             </Marker>
+                                            {destinationPoint && (
+                                                <Marker position={destinationPoint}>
+                                                    <Popup>{destinationLabel || "Destination"}</Popup>
+                                                </Marker>
+                                            )}
                                             {isRouteVisible && (
-                                                <Polyline positions={routePositions} color="#E53E3E" weight={5} opacity={0.9} />
+                                                <>
+                                                    <Polyline positions={routePositions} color="#E53E3E" weight={5} opacity={0.9} />
+                                                    {destinationRoutePositions.length > 1 && (
+                                                        <Polyline positions={destinationRoutePositions} color="#16a34a" weight={5} opacity={0.85} />
+                                                    )}
+                                                </>
                                             )}
                                         </MapContainer>
                                     ) : (
@@ -1152,6 +1412,73 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
                                             </p>
                                         )}
                                     </div>
+                                </div>
+                            </motion.div>
+
+                            <motion.div
+                                className="reservation-panel-card"
+                                variants={cardReveal}
+                                transition={{ duration: 0.38, ease: "easeOut" }}
+                            >
+                                <div className="mb-4 flex items-start justify-between gap-4">
+                                    <div>
+                                        <p className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">
+                                            Destination and parking
+                                        </p>
+                                        <p className="mt-1 text-xs font-bold text-gray-500">
+                                            Enter your destination, then click the finish point on the map.
+                                        </p>
+                                    </div>
+                                    <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wide ${
+                                        parkingDecision.canPark
+                                            ? "bg-emerald-50 text-emerald-700"
+                                            : "bg-amber-50 text-amber-700"
+                                    }`}>
+                                        {parkingDecision.canPark ? "Allowed" : "Required"}
+                                    </span>
+                                </div>
+
+                                <label className="block">
+                                    <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                                        Destination label
+                                    </span>
+                                    <input
+                                        value={destinationLabel}
+                                        onChange={(event) => {
+                                            setDestinationLabel(event.target.value);
+                                            setReservationError("");
+                                        }}
+                                        maxLength={200}
+                                        placeholder="Example: Fountain Square parking"
+                                        className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold text-gray-950 outline-none transition focus:border-red-300 focus:bg-white"
+                                    />
+                                </label>
+
+                                <div className="mt-4 grid grid-cols-2 gap-3">
+                                    <div className="rounded-2xl bg-gray-50 p-4">
+                                        <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                                            Car to destination
+                                        </p>
+                                        <p className="mt-2 text-sm font-black text-gray-950">
+                                            {destinationDistanceLabel}
+                                        </p>
+                                    </div>
+                                    <div className="rounded-2xl bg-gray-50 p-4">
+                                        <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                                            Parking zone
+                                        </p>
+                                        <p className="mt-2 truncate text-sm font-black text-gray-950">
+                                            {parkingDecision.zone?.name || parkingDecision.status}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs font-bold leading-5 ${
+                                    parkingDecision.canPark
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                        : "border-amber-200 bg-amber-50 text-amber-800"
+                                }`}>
+                                    {parkingZonesError || (destinationPoint ? destinationRouteState.error : "") || parkingDecision.message}
                                 </div>
                             </motion.div>
 
@@ -1249,7 +1576,7 @@ const AdvancedReservationStage = ({ vehicle, onClose, userLocation = DEFAULT_PIC
 
                             <button
                                 type="button"
-                                disabled={isOverCapacity || isCreatingReservation}
+                                disabled={isOverCapacity || isCreatingReservation || !hasValidDestination}
                                 onClick={handleConfirmReservation}
                                 className="btn-12 w-full shadow-xl shadow-red-200 disabled:opacity-50 disabled:shadow-none"
                             >

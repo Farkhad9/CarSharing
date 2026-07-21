@@ -34,6 +34,10 @@ public class ReservationConfiguration : IEntityTypeConfiguration<Reservation>
         builder.Property(reservation => reservation.CancelReason)
             .HasMaxLength(500);
 
+        builder.Property(reservation => reservation.DestinationLabel)
+            .IsRequired()
+            .HasMaxLength(200);
+
         builder.Property(reservation => reservation.Status)
             .IsRequired();
 
